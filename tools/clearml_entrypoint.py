@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import importlib.util
 from pathlib import Path
 from typing import Any
 
@@ -253,7 +254,7 @@ def _maybe_install_apt_packages(argv: list[str]) -> None:
 
 
 def _ensure_uv_available() -> None:
-    if shutil.which("uv"):
+    if importlib.util.find_spec("uv") is not None:
         return
     subprocess.run([sys.executable, "-m", "pip", "install", "uv"], check=True)
 
