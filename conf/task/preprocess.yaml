@@ -1,0 +1,19 @@
+# @package _global_
+task:
+  name: preprocess
+  stage: "02_preprocess"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.preprocess}"
+
+preprocess:
+  variant: ${preprocess_variant.name}
+  numeric_impute: mean
+  categorical_impute: most_frequent
+
+  categorical:
+    encoding: onehot
+    auto_onehot_max_categories: 50
+    hashing:
+      n_features: 128
+    target_mean_oof:
+      folds: 5
+      smoothing: 10.0

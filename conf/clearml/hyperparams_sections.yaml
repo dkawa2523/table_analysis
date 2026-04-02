@@ -1,0 +1,43 @@
+# @package run.clearml.hyperparams
+sections:
+  inputs:
+    - run.usecase_id
+    - run.output_dir
+    - data.dataset_path
+    - data.target_column
+    - infer.mode
+    - infer.input_path
+    - infer.input_json
+    - infer.batch.inputs_path
+    - infer.batch.inputs_json
+    - infer.batch.execution
+    - infer.validation.mode
+    - infer.validation.inputs_path
+    - infer.validation.inputs_json
+  dataset:
+    - data.raw_dataset_id
+    - data.processed_dataset_id
+    - infer.train_task_id
+  preprocess:
+    - preprocess.*
+    - data.split.*
+    - ops.processed_dataset.*
+  model:
+    - train.model
+    - train.params
+    - model_variant.*
+    - ensemble.*
+  eval:
+    - eval.*
+    - leaderboard.*
+  pipeline:
+    - pipeline.*
+  clearml:
+    - run.clearml.enabled
+    - run.clearml.execution
+    - run.clearml.project_root
+    - run.clearml.project_name
+    - run.clearml.queue_name
+    - run.clearml.template_usecase_id
+    - run.clearml.template_set_id
+    - run.clearml.code_ref.*

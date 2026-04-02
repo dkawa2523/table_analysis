@@ -1,0 +1,23 @@
+# @package _global_
+defaults:
+  - /leaderboard/scoring
+  - _self_
+task:
+  name: leaderboard
+  stage: "05_leaderboard"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.leaderboard}"
+
+leaderboard:
+  train_task_ids: []
+  train_run_dirs: []
+  require_comparable: true
+
+  top_k: ${exec_policy.limits.max_models}
+  dry_run: false
+
+  recommend:
+    top_k: 1
+    metric_source_priority: ["test", "valid", "meta_cv_on_valid"]
+    allow_cross_metric_source: false
+    allow_ensemble: false
+    tie_breaker: prefer_simple

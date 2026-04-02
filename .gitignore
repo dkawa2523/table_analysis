@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.dist/
+build/
+
+# macOS / Finder
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Virtual env
+.venv/
+
+# Hydra
+.outputs/
+.multirun/
+outputs/
+
+# ClearML
+clearml.conf
+
+# Smoke / verify outputs
+work/_smoke/
+work/_smoke_*/
+work/_platform_adapter*/
+work/_verify_outputs/
+
+# Generated template plans
+artifacts/template_plan.json
+artifacts/template_plan.md
+
+# Data (keep repo clean)
+*.csv
+*.parquet
+*.pkl
+*.joblib
+
+# Local runtime artifacts
+catboost_info/
+work/cache/
+work/_runs/
+work/clearml-agent*.log
+work/rehearsal/out*/
+work/rehearsal/out_runner/
+work/rehearsal/tmp/
+work/rehearsal/rehearsal_log.md
+work/_alerting/
+work/_env_snapshot/
+work/_exec_policy/
+work/_quality_gate/
+work/_test_*/
+work/_tmp_*/

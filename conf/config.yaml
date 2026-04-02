@@ -1,0 +1,37 @@
+# Hydra default configuration for ml-solution-tabular-analysis
+#
+# タスク単位で config を分離し、ClearML の HyperParameters 汚染を防ぐ（plan2 方針）。
+# task=preprocess など CLI で上書きして個別タスク実行も可能。
+
+defaults:
+  - _self_
+  - run: base
+  - run/alerts: base
+  - clearml/project_layout
+  - ops/usecase_id_policy: test_dataset_timestamp
+  - ops/clearml_policy: test_minimal
+  - ops/processed_dataset: base
+  - exec_policy: base
+  - monitor: base
+  - data: base
+  - eval: base
+  - ensemble: base
+  - viz: base
+
+  # バリアント（Hydra config group）
+  # 例: group/model=lgbm group/preprocess=stdscaler_ohe group/split=random
+  - group/preprocess: stdscaler_ohe
+  - group/model: ridge
+  - group/split: random
+  - group/infer_mode: single
+
+  # デフォルトは pipeline を実行（ただし pipeline は「接着剤」であり重い処理は各独立タスクで行う）
+  - task: pipeline/base
+
+  # 追加のバリアントは必要に応じて CLI から指定（上書き）
+
+hydra:
+  run:
+    # hydra の作業ディレクトリ。
+    # NOTE: run.output_root は廃止し、run.output_dir を単一の基準出力として扱う。
+    dir: ${run.output_dir}/hydra

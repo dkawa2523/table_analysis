@@ -1,0 +1,9 @@
+# @package _global_
+task:
+  name: retrain
+  stage: "08_retrain"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.misc_group}"
+
+retrain:
+  dataset_path: ${data.dataset_path}
+  dataset_id: ${data.raw_dataset_id}

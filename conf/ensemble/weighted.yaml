@@ -1,0 +1,7 @@
+# @package ensemble
+method: weighted
+weighted:
+  search: random_simplex
+  n_samples: 1500
+  seed: 42
+  top_k_max: 5

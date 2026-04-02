@@ -1,0 +1,61 @@
+# Shared runtime metadata used across Hydra tasks.
+usecase_id: null
+output_dir: outputs/${now:%Y%m%d_%H%M%S}
+schema_version: v1
+grid_run_id: null
+retrain_run_id: null
+
+clearml:
+  enabled: false
+
+  # local | logging | agent | clone | pipeline_controller
+  execution: local
+
+  code_ref:
+    # branch | commit | none
+    mode: "branch"
+    repository: "auto"
+    branch: "auto"
+    # Used only when mode=commit. "auto" resolves HEAD.
+    commit: "auto"
+
+  # Project root for solution tasks, e.g. MFG/<UseCase>/<Stage>.
+  project_root: "MFG"
+
+  # Template tasks use a stable usecase id and template set.
+  template_usecase_id: "TabularAnalysis"
+  template_set_id: "default"
+
+  queue_name: null
+  clone_from_task_id: null
+  pipeline_task_id: null
+  task_name: null
+
+  pipeline:
+    # subproject | visible
+    project_mode: "subproject"
+    project_name: null
+    project_tag_pipeline: true
+    project_unhide: true
+
+  extra_tags: []
+
+  reporting:
+    enable_scalars: true
+    enable_plots: true
+    enable_tables: true
+
+  # Environment bootstrap handled by tools/clearml_entrypoint.py.
+  env:
+    # none | uv | auto (auto uses uv only when CLEARML_TASK_ID is present)
+    bootstrap: "none"
+    apt_packages: []
+    apt_update: true
+    apt_allow_local: false
+    uv:
+      venv_dir: ".venv"
+      extras: []
+      all_extras: true
+      frozen: true
+
+# Monitoring defaults are defined in conf/monitor/base.yaml.

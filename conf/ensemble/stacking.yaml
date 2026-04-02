@@ -1,0 +1,7 @@
+# @package ensemble
+method: stacking
+stacking:
+  meta_model: ridge
+  cv_folds: 5
+  seed: 42
+  require_test_split: false

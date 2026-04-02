@@ -1,0 +1,17 @@
+# @package _global_
+task:
+  name: train_model
+  stage: "03_train_model"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.train_model}"
+
+train:
+  # モデルバリアント（conf/group/model/*.yaml で定義）
+  model: ${model_variant.name}
+
+  # 追加のモデルハイパーパラメータ（バリアント側で上書き／追加）
+  params: {}
+
+  # preprocess の出力ディレクトリ（out.json/processed_dataset.parquet 等）
+  inputs:
+    preprocess_run_dir: null
+    preprocess_task_id: null

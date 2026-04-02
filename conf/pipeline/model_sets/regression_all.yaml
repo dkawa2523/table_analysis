@@ -1,0 +1,6 @@
+# Model set: regression_all
+task_type: regression
+auto: true
+variants: []
+exclude:
+  - tabpfn

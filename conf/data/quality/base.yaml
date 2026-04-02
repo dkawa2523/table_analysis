@@ -1,0 +1,35 @@
+# Data quality gate settings (T048).
+mode: warn  # warn | fail | off
+enabled: true
+max_rows_scan: 50000
+
+thresholds:
+  missing_rate_warn: 0.2
+  missing_rate_fail: 0.5
+  duplicates_rate_warn: 0.01
+  duplicates_rate_fail: 0.05
+  constant_columns_warn: 1
+  constant_columns_fail: 5
+  mixed_type_columns_warn: 1
+  mixed_type_columns_fail: 5
+  high_cardinality_ratio_warn: 0.8
+  high_cardinality_ratio_fail: 1.01
+  high_cardinality_min_unique: 20
+  high_cardinality_count_fail: 9999
+  id_like_ratio_warn: 0.98
+  id_like_ratio_fail: 1.01
+  id_like_min_unique: 20
+  leak_near_match_warn: 0.98
+  leak_correlation_warn: 0.98
+  leak_mapping_accuracy_warn: 0.98
+
+name_patterns:
+  leak_suspect:
+    - target
+    - label
+    - outcome
+    - response
+  id_suspect:
+    - id
+    - uuid
+    - guid

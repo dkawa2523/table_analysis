@@ -1,0 +1,4 @@
+# split strategy: stratified (classification only)
+split_variant:
+  name: stratified
+  strategy: stratified

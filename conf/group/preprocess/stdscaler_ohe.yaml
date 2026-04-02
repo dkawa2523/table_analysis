@@ -1,0 +1,6 @@
+# 前処理バリアント: 標準化 + OneHot
+preprocess_variant:
+  name: stdscaler_ohe
+  numeric_scaler: standard
+  categorical_encoder: onehot
+  handle_unknown: ignore

@@ -1,0 +1,12 @@
+# モデルバリアント: SVC/SVR（scikit-learn）
+model_variant:
+  name: svc
+  framework: sklearn
+  class_path:
+    regression: sklearn.svm.SVR
+    classification: sklearn.svm.SVC
+  params:
+    kernel: rbf
+    C: 1.0
+    gamma: scale
+    max_iter: 1000

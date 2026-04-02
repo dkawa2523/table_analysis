@@ -1,0 +1,24 @@
+# @package _global_
+task:
+  name: preprocess
+  stage: "02_preprocess"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.preprocess}"
+
+preprocess:
+  # 前処理バリアント（conf/group/preprocess/*.yaml で定義）
+  variant: ${preprocess_variant.name}
+
+  # 欠損値処理（バリアントで上書き可）
+  numeric_impute: mean
+  categorical_impute: most_frequent
+
+  # 高カーディナリティカテゴリのエンコーディング
+  categorical:
+    # onehot | frequency | hashing | target_mean_oof | auto
+    encoding: onehot
+    auto_onehot_max_categories: 50
+    hashing:
+      n_features: 128
+    target_mean_oof:
+      folds: 5
+      smoothing: 10.0

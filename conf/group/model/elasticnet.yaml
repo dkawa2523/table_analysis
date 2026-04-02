@@ -1,0 +1,10 @@
+# モデルバリアント: ElasticNet（scikit-learn）
+model_variant:
+  name: elasticnet
+  framework: sklearn
+  class_path: sklearn.linear_model.ElasticNet
+  params:
+    alpha: 1.0
+    l1_ratio: 0.5
+    max_iter: 5000
+    random_state: ${eval.seed}

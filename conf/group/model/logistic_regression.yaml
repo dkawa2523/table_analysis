@@ -1,0 +1,8 @@
+# Model variant: LogisticRegression (scikit-learn)
+model_variant:
+  name: logistic_regression
+  framework: sklearn
+  class_path: sklearn.linear_model.LogisticRegression
+  params:
+    max_iter: 1000
+    random_state: ${eval.seed}

@@ -1,0 +1,6 @@
+# モデルバリアント: LinearRegression（scikit-learn）
+model_variant:
+  name: linear_regression
+  framework: sklearn
+  class_path: sklearn.linear_model.LinearRegression
+  params: {}

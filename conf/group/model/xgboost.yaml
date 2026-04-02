@@ -1,0 +1,14 @@
+# Model variant: XGBoost (optional dependency: uv sync --extra models)
+model_variant:
+  name: xgboost
+  framework: xgboost
+  class_path:
+    regression: xgboost.XGBRegressor
+    classification: xgboost.XGBClassifier
+  params:
+    n_estimators: 500
+    learning_rate: 0.05
+    max_depth: 6
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: ${eval.seed}

@@ -1,0 +1,13 @@
+# @package run.usecase_id_policy
+name: test_dataset_timestamp
+strategy: dataset_timestamp
+prefix: test
+# timestamp is generated in UTC (see clearml_identity.py)
+timestamp_format: "%Y%m%d_%H%M%S"
+dataset_id_paths:
+  - retrain.dataset_id
+  - retrain.dataset_path
+  - data.raw_dataset_id
+  - data.processed_dataset_id
+  - data.dataset_path
+fallback: unknown

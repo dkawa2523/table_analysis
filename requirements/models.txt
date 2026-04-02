@@ -1,0 +1,5 @@
+# Optional model dependencies for full model coverage
+catboost>=1.2.0
+lightgbm>=4.0.0
+xgboost>=2.0.0
+tabpfn>=0.1.0

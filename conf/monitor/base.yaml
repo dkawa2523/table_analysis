@@ -1,0 +1,8 @@
+# @package _global_
+monitor:
+  drift:
+    enabled: false
+    sample_n: 5000
+    metrics: [psi, ks]
+    alert_thresholds:
+      psi: 0.2

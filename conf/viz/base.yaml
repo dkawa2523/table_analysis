@@ -1,0 +1,8 @@
+enabled: true
+max_features: 20
+max_points: 1000
+confusion_normalize: true
+roc_curve: true
+
+heavy:
+  enabled: false

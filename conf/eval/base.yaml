@@ -1,0 +1,63 @@
+# task type
+task_type: regression  # regression | classification
+
+# primary metric（leaderboard はこれで順位付け）
+primary_metric: rmse  # rmse | mae | r2 | mse
+
+# minimize / maximize / auto
+direction: auto
+
+# cross-validation の folds（train_model で利用。0 の場合は holdout のみ）
+cv_folds: 5
+
+# seed（再現性）
+seed: 42
+
+# metric confidence intervals (bootstrap)
+ci:
+  enabled: false
+  n_boot: 200
+  alpha: 0.05
+  seed: 0
+
+# threshold optimization（binary classification only）
+thresholding:
+  enabled: false
+  metric: f1
+  grid: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
+
+# probability calibration（classification only）
+calibration:
+  enabled: false
+  method: sigmoid  # sigmoid | isotonic
+  mode: prefit  # prefit
+
+# regression uncertainty (split conformal prediction intervals)
+uncertainty:
+  enabled: false
+  method: conformal_split
+  alpha: 0.1
+  use_abs_residual: true
+
+# imbalance handling（classification only）
+imbalance:
+  enabled: false
+  strategy: class_weight  # class_weight | pos_weight | oversample | undersample
+  class_weight: balanced  # balanced | null
+
+# classification settings
+classification:
+  # auto | binary | multiclass
+  mode: auto
+  # top-k output for infer (classification)
+  top_k: 1
+
+metrics:
+  # metrics for regression
+  regression: [r2, mse, rmse, mae]
+  # metrics for multiclass classification
+  classification_multiclass: [accuracy, f1_macro, logloss]
+  # extra metrics when imbalance handling is enabled (binary classification)
+  classification_imbalance: [pr_auc, balanced_accuracy, fbeta]
+  # fbeta parameter
+  fbeta_beta: 1.0

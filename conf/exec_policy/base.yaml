@@ -1,0 +1,33 @@
+# @package exec_policy
+# Execution policy defaults (queues/limits/selection).
+limits:
+  # Maximum number of train jobs the pipeline may schedule.
+  max_jobs: 50
+  # Maximum number of models to surface in leaderboard/report.
+  max_models: 10
+  # Maximum HPO trials per model variant (0 = unlimited).
+  max_hpo_trials: 0
+
+queues:
+  # Default queue (falls back to run.clearml.queue_name).
+  default: ${run.clearml.queue_name}
+  pipeline: ${exec_policy.queues.default}
+  dataset_register: ${exec_policy.queues.default}
+  preprocess: ${exec_policy.queues.default}
+  train_model: ${exec_policy.queues.default}
+  train_ensemble: ${exec_policy.queues.default}
+  # Queue for heavy models when heavy_model_variants is set.
+  train_model_heavy: gpu
+  leaderboard: ${exec_policy.queues.default}
+  infer: ${exec_policy.queues.default}
+
+  # Per-model queue overrides, e.g. {lgbm: gpu_queue}.
+  model_variants: {}
+  # Model variants routed to train_model_heavy by default.
+  heavy_model_variants: []
+
+# Heavy features are opt-in; pipeline forces them off when false.
+selection:
+  calibration: false
+  uncertainty: false
+  ci: false

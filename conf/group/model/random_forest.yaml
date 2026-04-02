@@ -1,0 +1,12 @@
+# モデルバリアント: RandomForest（scikit-learn）
+model_variant:
+  name: random_forest
+  framework: sklearn
+  class_path:
+    regression: sklearn.ensemble.RandomForestRegressor
+    classification: sklearn.ensemble.RandomForestClassifier
+  params:
+    n_estimators: 100
+    max_depth: 8
+    min_samples_leaf: 2
+    random_state: ${eval.seed}

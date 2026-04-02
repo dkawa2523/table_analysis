@@ -1,0 +1,12 @@
+# @package _global_
+task:
+  name: train_ensemble
+  stage: "04_train_ensemble"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.train_ensemble}"
+
+train_ensemble:
+  registry:
+    tag_limits:
+      train_task_ids: 20
+    metadata:
+      full_train_task_ids: true

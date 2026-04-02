@@ -1,0 +1,10 @@
+# モデルバリアント: GaussianProcess（scikit-learn）
+model_variant:
+  name: gaussian_process
+  framework: sklearn
+  class_path:
+    regression: sklearn.gaussian_process.GaussianProcessRegressor
+    classification: sklearn.gaussian_process.GaussianProcessClassifier
+  params:
+    n_restarts_optimizer: 0
+    random_state: ${eval.seed}

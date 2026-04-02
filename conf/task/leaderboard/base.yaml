@@ -1,0 +1,23 @@
+# @package _global_
+defaults:
+  - /leaderboard/scoring
+  - _self_
+task:
+  name: leaderboard
+  stage: "05_leaderboard"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.leaderboard}"
+
+leaderboard:
+  # pipeline から train_task_ids を渡すのが基本。
+  train_task_ids: []
+  # local 実行時は run ディレクトリを直接渡す
+  train_run_dirs: []
+
+  # 同一 split_hash / processed_dataset_id のみ比較する（不一致は除外して警告）
+  require_comparable: true
+
+  top_k: ${exec_policy.limits.max_models}
+  dry_run: false
+  recommend:
+    # 推薦モデルの登録数（タグ付与対象）
+    top_k: 1

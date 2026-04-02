@@ -1,0 +1,29 @@
+# @package _global_
+task:
+  name: pipeline
+  stage: "99_pipeline"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.pipeline}"
+
+pipeline:
+  # どの工程を実行するか
+  run_dataset_register: false
+  run_preprocess: true
+  run_train: true
+  run_train_ensemble: ${ensemble.enabled}
+  run_leaderboard: true
+  run_infer: false
+  plan_only: false
+  dry_run: false
+
+  # grid 実行（前処理×モデルなど）
+  grid:
+    preprocess_variants: [stdscaler_ohe]
+    model_variants: [ridge]
+    max_jobs: ${exec_policy.limits.max_jobs}
+
+  # small HPO grid (model_variant params override)
+  hpo:
+    enabled: false
+    params:
+      ridge:
+        alpha: [0.1, 1.0, 10.0]

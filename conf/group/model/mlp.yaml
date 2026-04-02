@@ -1,0 +1,11 @@
+# モデルバリアント: MLP（scikit-learn）
+model_variant:
+  name: mlp
+  framework: sklearn
+  class_path:
+    regression: sklearn.neural_network.MLPRegressor
+    classification: sklearn.neural_network.MLPClassifier
+  params:
+    hidden_layer_sizes: [64]
+    max_iter: 200
+    random_state: ${eval.seed}

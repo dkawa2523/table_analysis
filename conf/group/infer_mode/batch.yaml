@@ -1,0 +1,4 @@
+# infer mode: batch（ファイル入力）
+infer_mode:
+  name: batch
+  input_format: file

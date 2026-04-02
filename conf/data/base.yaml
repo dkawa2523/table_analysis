@@ -1,0 +1,32 @@
+# データ品質チェック
+defaults:
+  - quality: base
+  - _self_
+
+# ローカル CSV/Parquet などのパス（dataset_register で利用）
+dataset_path: null
+
+# ClearML Dataset ID を直接使う場合（dataset_register をスキップする運用で利用）
+raw_dataset_id: null
+
+# preprocess の出力を直接指定して train に入力する場合。
+# - ClearML Dataset ID
+# - ローカルのファイルパス（run.clearml.enabled=false のとき）
+processed_dataset_id: null
+
+# 目的変数（ターゲット）列名
+target_column: target
+
+# ID列（リーク防止のため特徴量から除外したい列）
+id_columns: []
+
+# 明示的に落としたい列
+drop_columns: []
+
+# split を preprocess が生成し固定する（train は再分割禁止）
+split:
+  strategy: random  # random | group | time | stratified
+  test_size: 0.2
+  seed: 42
+  group_column: null
+  time_column: null

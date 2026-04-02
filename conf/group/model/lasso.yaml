@@ -1,0 +1,9 @@
+# モデルバリアント: Lasso（scikit-learn）
+model_variant:
+  name: lasso
+  framework: sklearn
+  class_path: sklearn.linear_model.Lasso
+  params:
+    alpha: 1.0
+    max_iter: 5000
+    random_state: ${eval.seed}

@@ -1,0 +1,248 @@
+version: 1
+
+templates:
+  dataset_register:
+    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[dataset_register]}"
+    task_name_template: "dataset_register"
+    entrypoint: "python tools/clearml_entrypoint.py task=dataset_register"
+    default_overrides:
+      - "run.clearml.enabled=true"
+      - "run.clearml.execution=logging"
+      - "run.clearml.env.bootstrap=uv"
+      - "run.clearml.env.apt_packages=[libgomp1]"
+      - "run.clearml.env.uv.all_extras=true"
+    requirements:
+      - "clearml>=1.15.0"
+      - "uv>=0.5.0"
+    tags:
+      - "template:true"
+      - "template_set:{template_set_id}"
+      - "usecase:{usecase_id}"
+      - "process:dataset_register"
+      - "schema:{schema_version}"
+      - "solution:tabular-analysis"
+    properties_minimal:
+      usecase_id: "{usecase_id}"
+      process: "dataset_register"
+      schema_version: "{schema_version}"
+
+  preprocess:
+    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[preprocess]}"
+    task_name_template: "preprocess"
+    entrypoint: "python tools/clearml_entrypoint.py task=preprocess"
+    default_overrides:
+      - "run.clearml.enabled=true"
+      - "run.clearml.execution=logging"
+      - "run.clearml.env.bootstrap=uv"
+      - "run.clearml.env.apt_packages=[libgomp1]"
+      - "run.clearml.env.uv.all_extras=true"
+    requirements:
+      - "clearml>=1.15.0"
+      - "uv>=0.5.0"
+    tags:
+      - "template:true"
+      - "template_set:{template_set_id}"
+      - "usecase:{usecase_id}"
+      - "process:preprocess"
+      - "schema:{schema_version}"
+      - "solution:tabular-analysis"
+    properties_minimal:
+      usecase_id: "{usecase_id}"
+      process: "preprocess"
+      schema_version: "{schema_version}"
+
+  train_model:
+    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[train_model]}"
+    task_name_template: "train_model"
+    entrypoint: "python tools/clearml_entrypoint.py task=train_model"
+    default_overrides:
+      - "run.clearml.enabled=true"
+      - "run.clearml.execution=logging"
+      - "run.clearml.env.bootstrap=uv"
+      - "run.clearml.env.apt_packages=[libgomp1]"
+      - "run.clearml.env.uv.all_extras=true"
+    requirements:
+      - "clearml>=1.15.0"
+      - "uv>=0.5.0"
+    tags:
+      - "template:true"
+      - "template_set:{template_set_id}"
+      - "usecase:{usecase_id}"
+      - "process:train_model"
+      - "schema:{schema_version}"
+      - "solution:tabular-analysis"
+    properties_minimal:
+      usecase_id: "{usecase_id}"
+      process: "train_model"
+      schema_version: "{schema_version}"
+
+  train_ensemble:
+    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[train_ensemble]}"
+    task_name_template: "train_ensemble"
+    entrypoint: "python tools/clearml_entrypoint.py task=train_ensemble"
+    default_overrides:
+      - "run.clearml.enabled=true"
+      - "run.clearml.execution=logging"
+      - "run.clearml.env.bootstrap=uv"
+      - "run.clearml.env.apt_packages=[libgomp1]"
+      - "run.clearml.env.uv.all_extras=true"
+    requirements:
+      - "clearml>=1.15.0"
+      - "uv>=0.5.0"
+    tags:
+      - "template:true"
+      - "template_set:{template_set_id}"
+      - "usecase:{usecase_id}"
+      - "process:train_ensemble"
+      - "schema:{schema_version}"
+      - "solution:tabular-analysis"
+    properties_minimal:
+      usecase_id: "{usecase_id}"
+      process: "train_ensemble"
+      schema_version: "{schema_version}"
+
+  train_model_full:
+    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[pipeline]}"
+    task_name_template: "train_model_full"
+    entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
+    default_overrides:
+      - "run.clearml.enabled=true"
+      - "run.clearml.execution=pipeline_controller"
+      - "run.clearml.env.bootstrap=uv"
+      - "run.clearml.env.apt_packages=[libgomp1]"
+      - "run.clearml.env.uv.all_extras=true"
+      - "+pipeline.model_set=regression_all"
+      - "pipeline.run_dataset_register=false"
+      - "pipeline.run_preprocess=true"
+      - "pipeline.run_train=true"
+      - "pipeline.run_train_ensemble=false"
+      - "pipeline.run_leaderboard=false"
+      - "pipeline.run_infer=false"
+      - "ensemble.enabled=false"
+    requirements:
+      - "clearml>=1.15.0"
+      - "uv>=0.5.0"
+    tags:
+      - "template:true"
+      - "template_set:{template_set_id}"
+      - "usecase:{usecase_id}"
+      - "process:train_model_full"
+      - "schema:{schema_version}"
+      - "solution:tabular-analysis"
+      - "profile:full"
+    properties_minimal:
+      usecase_id: "{usecase_id}"
+      process: "train_model_full"
+      schema_version: "{schema_version}"
+
+  train_ensemble_full:
+    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[pipeline]}"
+    task_name_template: "train_ensemble_full"
+    entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
+    default_overrides:
+      - "run.clearml.enabled=true"
+      - "run.clearml.execution=pipeline_controller"
+      - "run.clearml.env.bootstrap=uv"
+      - "run.clearml.env.apt_packages=[libgomp1]"
+      - "run.clearml.env.uv.all_extras=true"
+      - "+pipeline.model_set=regression_all"
+      - "pipeline.run_dataset_register=false"
+      - "pipeline.run_preprocess=true"
+      - "pipeline.run_train=true"
+      - "pipeline.run_train_ensemble=true"
+      - "pipeline.run_leaderboard=true"
+      - "pipeline.run_infer=false"
+      - "ensemble.enabled=true"
+      - "ensemble.top_k=0"
+      - "ensemble.methods=[mean_topk,weighted,stacking]"
+      - "ensemble.weighted.top_k_max=0"
+    requirements:
+      - "clearml>=1.15.0"
+      - "uv>=0.5.0"
+    tags:
+      - "template:true"
+      - "template_set:{template_set_id}"
+      - "usecase:{usecase_id}"
+      - "process:train_ensemble_full"
+      - "schema:{schema_version}"
+      - "solution:tabular-analysis"
+      - "profile:full"
+    properties_minimal:
+      usecase_id: "{usecase_id}"
+      process: "train_ensemble_full"
+      schema_version: "{schema_version}"
+
+  infer:
+    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[infer]}"
+    task_name_template: "infer"
+    entrypoint: "python tools/clearml_entrypoint.py task=infer"
+    default_overrides:
+      - "run.clearml.enabled=true"
+      - "run.clearml.execution=logging"
+      - "run.clearml.env.bootstrap=uv"
+      - "run.clearml.env.apt_packages=[libgomp1]"
+      - "run.clearml.env.uv.all_extras=true"
+    requirements:
+      - "clearml>=1.15.0"
+      - "uv>=0.5.0"
+    tags:
+      - "template:true"
+      - "template_set:{template_set_id}"
+      - "usecase:{usecase_id}"
+      - "process:infer"
+      - "schema:{schema_version}"
+      - "solution:tabular-analysis"
+    properties_minimal:
+      usecase_id: "{usecase_id}"
+      process: "infer"
+      schema_version: "{schema_version}"
+
+  leaderboard:
+    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[leaderboard]}"
+    task_name_template: "leaderboard"
+    entrypoint: "python tools/clearml_entrypoint.py task=leaderboard"
+    default_overrides:
+      - "run.clearml.enabled=true"
+      - "run.clearml.execution=logging"
+      - "run.clearml.env.bootstrap=uv"
+      - "run.clearml.env.apt_packages=[libgomp1]"
+      - "run.clearml.env.uv.all_extras=true"
+    requirements:
+      - "clearml>=1.15.0"
+      - "uv>=0.5.0"
+    tags:
+      - "template:true"
+      - "template_set:{template_set_id}"
+      - "usecase:{usecase_id}"
+      - "process:leaderboard"
+      - "schema:{schema_version}"
+      - "solution:tabular-analysis"
+    properties_minimal:
+      usecase_id: "{usecase_id}"
+      process: "leaderboard"
+      schema_version: "{schema_version}"
+
+  pipeline:
+    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[pipeline]}"
+    task_name_template: "pipeline"
+    entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
+    default_overrides:
+      - "run.clearml.enabled=true"
+      - "run.clearml.execution=logging"
+      - "run.clearml.env.bootstrap=uv"
+      - "run.clearml.env.apt_packages=[libgomp1]"
+      - "run.clearml.env.uv.all_extras=true"
+    requirements:
+      - "clearml>=1.15.0"
+      - "uv>=0.5.0"
+    tags:
+      - "template:true"
+      - "template_set:{template_set_id}"
+      - "usecase:{usecase_id}"
+      - "process:pipeline"
+      - "schema:{schema_version}"
+      - "solution:tabular-analysis"
+    properties_minimal:
+      usecase_id: "{usecase_id}"
+      process: "pipeline"
+      schema_version: "{schema_version}"

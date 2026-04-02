@@ -1,0 +1,4 @@
+# infer mode: optimize（入力最適化。重いのでデフォルトOFF）
+infer_mode:
+  name: optimize
+  input_format: search_space

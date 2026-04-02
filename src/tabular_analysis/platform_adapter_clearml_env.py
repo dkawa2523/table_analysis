@@ -1,0 +1,31 @@
+from __future__ import annotations
+from .platform_adapter_core import (
+    ClearMLScriptSpec,
+    clearml_script_mismatches,
+    detect_git_branch,
+    detect_git_repository_url,
+    clearml_task_type_controller,
+    is_clearml_enabled,
+    normalize_clearml_branch,
+    normalize_clearml_entry_point,
+    normalize_clearml_repository,
+    normalize_clearml_version_num,
+    resolve_clearml_code_reference,
+    resolve_clearml_script_spec,
+    resolve_version_props,
+)
+__all__ = [
+    "ClearMLScriptSpec",
+    "detect_git_repository_url",
+    "detect_git_branch",
+    "normalize_clearml_repository",
+    "normalize_clearml_branch",
+    "normalize_clearml_entry_point",
+    "normalize_clearml_version_num",
+    "resolve_clearml_code_reference",
+    "resolve_clearml_script_spec",
+    "clearml_script_mismatches",
+    "is_clearml_enabled",
+    "resolve_version_props",
+    "clearml_task_type_controller",
+]

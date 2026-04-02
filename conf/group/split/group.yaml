@@ -1,0 +1,4 @@
+# split 戦略: group（同一 group は同じ側に）
+split_variant:
+  name: group
+  strategy: group

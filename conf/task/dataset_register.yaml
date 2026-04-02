@@ -1,0 +1,5 @@
+# @package _global_
+task:
+  name: dataset_register
+  stage: "01_dataset_register"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.dataset_register}"

@@ -1,0 +1,14 @@
+# @package run.clearml.policy
+name: test_richer
+tags:
+  - "solution:tabular-analysis"
+  - "task_type:${eval.task_type}"
+  - "preprocess:${preprocess_variant.name}"
+  - "model:${model_variant.name}"
+  - "split:${data.split.strategy}"
+properties:
+  task_type: ${eval.task_type}
+  preprocess_variant: ${preprocess_variant.name}
+  model_variant: ${model_variant.name}
+  split_strategy: ${data.split.strategy}
+  target_column: ${data.target_column}

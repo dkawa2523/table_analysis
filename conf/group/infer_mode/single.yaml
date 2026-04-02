@@ -1,0 +1,4 @@
+# infer mode: single（1件入力）
+infer_mode:
+  name: single
+  input_format: json

@@ -1,0 +1,9 @@
+# モデルバリアント: KNN（scikit-learn）
+model_variant:
+  name: knn
+  framework: sklearn
+  class_path:
+    regression: sklearn.neighbors.KNeighborsRegressor
+    classification: sklearn.neighbors.KNeighborsClassifier
+  params:
+    n_neighbors: 5

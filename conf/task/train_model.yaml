@@ -1,0 +1,12 @@
+# @package _global_
+task:
+  name: train_model
+  stage: "03_train_model"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.train_model}"
+
+train:
+  model: ${model_variant.name}
+  params: {}
+  inputs:
+    preprocess_run_dir: null
+    preprocess_task_id: null

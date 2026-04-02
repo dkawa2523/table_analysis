@@ -1,0 +1,13 @@
+# Model variant: CatBoost (optional dependency: uv sync --extra models)
+model_variant:
+  name: catboost
+  framework: catboost
+  class_path:
+    regression: catboost.CatBoostRegressor
+    classification: catboost.CatBoostClassifier
+  params:
+    iterations: 500
+    learning_rate: 0.05
+    depth: 6
+    random_seed: ${eval.seed}
+    verbose: false

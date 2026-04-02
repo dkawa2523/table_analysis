@@ -1,0 +1,69 @@
+# @package _global_
+task:
+  name: infer
+  stage: "04_infer"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.infer}"
+
+infer:
+  # 推論に使う model の指定方法：
+  # - model_id（ClearML Model ID）
+  # - train_task_id（train task から model を辿る）
+  model_id: null
+  train_task_id: null
+
+  # 推論モード（conf/group/infer_mode/*.yaml で定義）
+  mode: single
+  input_path: null
+  input_json: null
+  dry_run: false
+
+  validation:
+    # warn|strict|coerce
+    mode: warn
+
+  batch:
+    # batch execution mode: inline | clearml_children
+    execution: inline
+    # batch summary inputs
+    inputs_path: null
+    inputs_json: null
+    max_children: null
+    wait_timeout_sec: 3600
+    poll_interval_sec: 10
+    # Chunked batch infer settings
+    chunk_size: 50000
+    output_format: csv
+    write_mode: overwrite
+    max_rows: null
+    # internal flag (set by summary)
+    child_task: false
+
+  optimize:
+    # Optuna-driven input optimization
+    n_trials: 20
+    direction: maximize
+    sampler: tpe
+    seed: 0
+    top_k: 5
+    wait_timeout_sec: 3600
+    poll_interval_sec: 10
+    objective:
+      key: prediction
+    # define search space entries (list of dicts or mapping)
+    search_space: []
+    plots:
+      history_log_scale: false
+      contour_params: null
+    # internal flag (set by summary)
+    child_task: false
+
+  plots:
+    # input -> output table settings (Plotly Table)
+    max_rows: 5
+    max_input_columns: 20
+    max_output_columns: 12
+
+  drift:
+    enabled: false
+    psi_warn_threshold: 0.2
+    psi_fail_threshold: 0.4

@@ -1,0 +1,13 @@
+# @package run.alerts
+enabled: false
+
+sinks:
+  file:
+    enabled: true
+    path: null
+  stdout:
+    enabled: false
+  webhook:
+    enabled: false
+    url: null
+    timeout_sec: 5

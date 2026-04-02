@@ -1,0 +1,10 @@
+# Leaderboard composite scoring configuration.
+
+scoring:
+  metrics: [r2, rmse, mae, mse]
+  weights:
+    r2: 1.0
+    rmse: -1.0
+    mae: -0.5
+    mse: -0.2
+  normalization: minmax

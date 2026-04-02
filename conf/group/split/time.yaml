@@ -1,0 +1,4 @@
+# split 戦略: time（時系列）
+split_variant:
+  name: time
+  strategy: time
