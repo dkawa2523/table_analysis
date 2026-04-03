@@ -281,6 +281,10 @@ def _resolve_uv_command() -> list[str]:
     )
 
 
+def _ensure_uv_available() -> None:
+    _resolve_uv_command()
+
+
 def _apply_uv_runtime_env(env: dict[str, str], *, venv_path: Path | None = None) -> dict[str, str]:
     patched = dict(env)
     if venv_path is not None:
