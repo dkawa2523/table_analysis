@@ -41,6 +41,7 @@ from tabular_analysis.platform_adapter_task import (
     clearml_task_tags,
     create_clearml_task,
     clearml_task_type_from_obj,
+    ensure_clearml_task_requirements,
     ensure_clearml_task_properties,
     reset_clearml_task_args,
     ensure_clearml_task_script,
@@ -57,6 +58,7 @@ class TemplateSpec:
     task_name_template: str
     entrypoint: str
     default_overrides: list[str]
+    requirements: list[str]
     tags: list[str]
     properties_minimal: dict[str, Any]
 
@@ -78,6 +80,7 @@ class ResolvedTemplateSpec:
     script: str | None
     entry_args: list[str]
     overrides: list[str]
+    expected_requirements: list[str]
     expected_tags: list[str]
     expected_properties: dict[str, Any]
     script_spec: Any
@@ -187,6 +190,7 @@ def _load_templates(spec_path: Path, ctx: PlanContext) -> list[TemplateSpec]:
                 task_name_template=str(rendered.get("task_name_template", "")),
                 entrypoint=str(rendered.get("entrypoint", "")),
                 default_overrides=[str(item) for item in (rendered.get("default_overrides") or [])],
+                requirements=[str(item) for item in (rendered.get("requirements") or [])],
                 tags=[str(item) for item in (rendered.get("tags") or [])],
                 properties_minimal=dict(rendered.get("properties_minimal") or {}),
             )
@@ -463,6 +467,7 @@ def _resolve_template_spec(
         script=script,
         entry_args=entry_args,
         overrides=_normalized_args([*entry_args, *spec.default_overrides]),
+        expected_requirements=list(spec.requirements),
         expected_tags=expected_tags,
         expected_properties=expected_properties,
         script_spec=script_spec,
@@ -500,6 +505,8 @@ def _upsert_standard_template(
                 diff="",
             ):
                 changes.append("script")
+            if ensure_clearml_task_requirements(str(existing_id), resolved.expected_requirements):
+                changes.append("requirements")
             if ensure_clearml_task_tags(str(existing_id), resolved.expected_tags):
                 changes.append("tags")
             if ensure_clearml_task_properties(str(existing_id), resolved.expected_properties):
@@ -532,6 +539,7 @@ def _upsert_standard_template(
             version_num=resolved.script_spec.version_num,
             diff="",
         )
+        ensure_clearml_task_requirements(task_id, resolved.expected_requirements)
         print(f"Created template {spec.name}: {task_id}")
     lock_templates[spec.name] = {
         "task_id": task_id,
@@ -601,6 +609,7 @@ def _upsert_pipeline_template(
         version_num=resolved.script_spec.version_num,
         diff="",
     )
+    ensure_clearml_task_requirements(task_id, resolved.expected_requirements)
     ensure_clearml_task_tags(task_id, resolved.expected_tags)
     ensure_clearml_task_properties(task_id, resolved.expected_properties)
     build_pipeline_template_draft(cfg=cfg, controller=controller, pipeline_profile=spec.name)
