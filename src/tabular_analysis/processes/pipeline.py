@@ -1344,10 +1344,10 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
             'Current ClearML task does not contain a serialized pipeline graph. '
             'Clone a visible pipeline template task from the Pipelines tab or run manage_templates.py --apply.'
         )
-    starter = getattr(controller, 'start', None)
+    starter = getattr(controller, 'start_locally', None)
     if not callable(starter):
-        raise AttributeError('Pipeline controller does not support start().')
-    starter()
+        raise AttributeError('Pipeline controller does not support start_locally().')
+    starter(run_pipeline_steps_locally=False)
     step_task_ids = _collect_step_task_ids(controller)
     executed_jobs = len(contract.plan['steps']['train'])
     (dataset_register_ref, preprocess_refs, train_refs, train_ensemble_refs, leaderboard_ref, infer_ref) = _build_clearml_pipeline_refs(plan_only=contract.plan['plan_only'], steps=contract.plan['steps'], step_task_ids=step_task_ids)
