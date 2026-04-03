@@ -192,6 +192,30 @@ def _build_template_step_overrides(step_overrides: Mapping[str, Any], shared_def
     return overrides
 
 
+def _normalize_pipeline_step_parameter_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return tuple(_normalize_pipeline_step_parameter_value(item) for item in value)
+    if isinstance(value, list):
+        return [_normalize_pipeline_step_parameter_value(item) for item in value]
+    if isinstance(value, set):
+        return [_normalize_pipeline_step_parameter_value(item) for item in value]
+    return value
+
+
+def _build_pipeline_step_parameter_override_payload(overrides: Mapping[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for (key, value) in overrides.items():
+        normalized = _normalize_pipeline_step_parameter_value(value)
+        if normalized is None:
+            continue
+        payload[f'Args/{key}'] = normalized
+    return payload
+
+
 def _detect_pipeline_template_profile(plan: Mapping[str, Any]) -> str | None:
     plan_signature = {
         'run_dataset_register': bool(plan.get('run_dataset_register')),
@@ -1113,7 +1137,7 @@ def _add_clearml_pipeline_steps(*, cfg: Any, plan: Mapping[str, Any], steps: Map
         controller=controller,
         use_templates=use_templates,
         step_requests=step_requests,
-        parameter_override_builder=lambda overrides: {f'Args/{k}': v for (k, v) in _overrides_to_params(overrides).items()},
+        parameter_override_builder=_build_pipeline_step_parameter_override_payload,
     )
 def _reset_pipeline_controller_definition(controller: Any) -> None:
     # Controllers reconstructed from Task objects only deserialize the DAG payload.
@@ -1201,7 +1225,7 @@ def _add_clearml_pipeline_template_steps(*, cfg: Any, plan: Mapping[str, Any], s
         controller=controller,
         use_templates=use_templates,
         step_requests=step_requests,
-        parameter_override_builder=lambda overrides: {f'Args/{k}': v for (k, v) in _overrides_to_params(_build_template_step_overrides(overrides, shared_defaults)).items()},
+        parameter_override_builder=lambda overrides: _build_pipeline_step_parameter_override_payload(_build_template_step_overrides(overrides, shared_defaults)),
     )
 
 

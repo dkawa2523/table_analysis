@@ -307,6 +307,22 @@ def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
             os.environ["CLEARML_TASK_ID"] = original_task_id
 
 
+def _assert_pipeline_step_references_are_not_quoted() -> None:
+    payload = pipeline_module._build_pipeline_step_parameter_override_payload(
+        {
+            "data.raw_dataset_id": "${pipeline.data/raw_dataset_id}",
+            "leaderboard.train_task_ids": ["${train__a.id}", "${train__b.id}"],
+            "group/preprocess": "stdscaler_ohe",
+        }
+    )
+    if payload.get("Args/data.raw_dataset_id") != "${pipeline.data/raw_dataset_id}":
+        raise AssertionError(f"pipeline parameter reference must remain raw: {payload}")
+    if payload.get("Args/leaderboard.train_task_ids") != ["${train__a.id}", "${train__b.id}"]:
+        raise AssertionError(f"step reference lists must remain raw: {payload}")
+    if payload.get("Args/group/preprocess") != "stdscaler_ohe":
+        raise AssertionError(f"plain scalar overrides must remain unchanged: {payload}")
+
+
 def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
     class _FakeTask:
         pass
@@ -390,6 +406,7 @@ def main() -> int:
     _assert_entrypoint_reads_clearml_slash_overrides()
     _assert_regression_model_set_contract()
     _assert_pipeline_controller_context_attaches_by_task_id()
+    _assert_pipeline_step_references_are_not_quoted()
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
     print("OK: clearml runtime contracts")
     return 0
