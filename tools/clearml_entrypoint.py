@@ -93,10 +93,17 @@ _SKIPPED_LOADED_OVERRIDE_KEYS = {
     "default_queue",
 }
 
+_SLASH_OVERRIDE_PREFIXES = (
+    "group/",
+    "ops/",
+)
+
 
 def _normalize_loaded_override_key(key: str) -> str:
     prefix = "+" if key.startswith("+") else ""
-    body = key.lstrip("+").replace("/", ".").strip()
+    body = key.lstrip("+").strip()
+    if not any(body.startswith(candidate) for candidate in _SLASH_OVERRIDE_PREFIXES):
+        body = body.replace("/", ".")
     return f"{prefix}{body}" if body else ""
 
 

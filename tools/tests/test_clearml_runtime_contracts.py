@@ -201,6 +201,8 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
         raise AssertionError("slash-form frozen should resolve to true")
     if _normalize_loaded_override_key("data/raw_dataset_id") != "data.raw_dataset_id":
         raise AssertionError("slash-form ClearML args must normalize to Hydra dot overrides")
+    if _normalize_loaded_override_key("ops/clearml_policy") != "ops/clearml_policy":
+        raise AssertionError("config-group style ops overrides must preserve slash form")
     loaded: dict[str, str] = {}
     _store_loaded_override(loaded, "data/raw_dataset_id", "template_raw_dataset")
     _store_loaded_override(loaded, "data.raw_dataset_id", "runtime_dataset")
