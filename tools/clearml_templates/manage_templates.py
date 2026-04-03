@@ -28,7 +28,7 @@ from tabular_analysis.clearml.pipeline_templates import (
     is_pipeline_template_name,
 )
 from tabular_analysis.common.hydra_config import compose_config
-from tabular_analysis.platform_adapter_clearml_env import resolve_clearml_script_spec
+from tabular_analysis.platform_adapter_clearml_env import clearml_script_mismatches, resolve_clearml_script_spec
 from tabular_analysis.platform_adapter_pipeline import (
     create_pipeline_draft_controller,
     load_pipeline_controller_from_task,
@@ -37,6 +37,8 @@ from tabular_analysis.platform_adapter_task import (
     clearml_task_exists,
     clearml_task_id,
     clearml_task_project_name,
+    clearml_task_script,
+    clearml_task_tags,
     create_clearml_task,
     clearml_task_type_from_obj,
     ensure_clearml_task_properties,
@@ -382,8 +384,10 @@ def _compose_pipeline_template_cfg(repo_root: Path, spec: TemplateSpec, ctx: Pla
         f"run.clearml.template_set_id={ctx.template_set_id}",
         f"run.schema_version={ctx.schema_version}",
         f"run.usecase_id={ctx.usecase_id}",
-        f"run.clearml.project_name={spec.project_name}",
+        f"run.clearml.pipeline.project_name={spec.project_name}",
+        f"task.project_name={spec.project_name}",
         f"run.clearml.task_name={spec.task_name_template}",
+        "data.raw_dataset_id=template_raw_dataset",
     ]
     return compose_config(config_dir, "config", overrides)
 
@@ -582,9 +586,11 @@ def _upsert_pipeline_template(
         task_id = clearml_task_id(controller)
         if not task_id:
             raise RuntimeError(f"Failed to create pipeline template draft for {spec.name}.")
+        controller = load_pipeline_controller_from_task(source_task_id=task_id)
         print(f"Created pipeline template {spec.name}: {task_id}")
     else:
         reset_clearml_task_args(task_id, resolved.overrides)
+        controller = load_pipeline_controller_from_task(source_task_id=task_id)
         print(f"Update pipeline template {spec.name}: {task_id}")
     ensure_clearml_task_script(
         task_id,

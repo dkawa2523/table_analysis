@@ -14,6 +14,8 @@ from itertools import product
 import json
 import os
 from pathlib import Path
+import re
+from threading import RLock
 from typing import Any, Mapping
 import uuid
 from ..clearml.hparams import connect_pipeline
@@ -137,8 +139,20 @@ def _normalize_template_arg_value(value: Any) -> Any:
     return value
 
 
+def _template_pipeline_param_name(name: str) -> str:
+    return str(name).replace('.', '/')
+
+
+def _template_pipeline_params(values: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        _template_pipeline_param_name(key): _normalize_template_arg_value(value)
+        for (key, value) in values.items()
+        if value is not None
+    }
+
+
 def _pipeline_param_ref(name: str) -> str:
-    return f'${{pipeline.{name}}}'
+    return f'${{pipeline.{_template_pipeline_param_name(name)}}}'
 
 
 def _strip_local_only_overrides(overrides: Mapping[str, Any]) -> dict[str, Any]:
@@ -170,7 +184,7 @@ def _build_template_step_overrides(step_overrides: Mapping[str, Any], shared_def
     overrides: dict[str, Any] = {}
     for (key, value) in _strip_local_only_overrides(step_overrides).items():
         key_text = str(key)
-        if key_text in shared_defaults or key_text in _PIPELINE_TEMPLATE_DYNAMIC_KEYS:
+        if key_text in shared_defaults:
             overrides[key_text] = _pipeline_param_ref(key_text)
         else:
             overrides[key_text] = value
@@ -1101,16 +1115,60 @@ def _add_clearml_pipeline_steps(*, cfg: Any, plan: Mapping[str, Any], steps: Map
         parameter_override_builder=lambda overrides: {f'Args/{k}': v for (k, v) in _overrides_to_params(overrides).items()},
     )
 def _reset_pipeline_controller_definition(controller: Any) -> None:
-    for attr in ('_nodes', '_pipeline_args', '_pipeline_args_desc', '_pipeline_args_type', '_args_map'):
-        if hasattr(controller, attr):
-            setattr(controller, attr, {})
+    # Controllers reconstructed from Task objects only deserialize the DAG payload.
+    # Re-seed the runtime defaults that ClearML's draft serialization expects.
+    class_defaults = {
+        '_nodes': {},
+        '_running_nodes': [],
+        '_start_time': None,
+        '_pipeline_time_limit': None,
+        '_default_execution_queue': None,
+        '_always_create_from_code': True,
+        '_version': getattr(controller, '_version', None) or getattr(type(controller), '_default_pipeline_version', '1.0.0'),
+        '_pool_frequency': 12.0,
+        '_thread': None,
+        '_pipeline_args': {},
+        '_pipeline_args_desc': {},
+        '_pipeline_args_type': {},
+        '_args_map': {},
+        '_stop_event': None,
+        '_experiment_created_cb': None,
+        '_experiment_completed_cb': None,
+        '_pre_step_callbacks': {},
+        '_post_step_callbacks': {},
+        '_target_project': True,
+        '_add_pipeline_tags': False,
+        '_reporting_lock': RLock(),
+        '_pipeline_task_status_failed': None,
+        '_mock_execution': False,
+        '_last_progress_update_time': 0,
+        '_artifact_serialization_function': None,
+        '_artifact_deserialization_function': None,
+        '_skip_global_imports': False,
+        '_enable_local_imports': True,
+        '_monitored_nodes': {},
+        '_abort_running_steps_on_failure': False,
+        '_def_max_retry_on_failure': 0,
+        '_output_uri': None,
+    }
+    for (attr, default) in class_defaults.items():
+        if attr == '_version' and getattr(controller, attr, None):
+            continue
+        setattr(controller, attr, default)
+    setattr(controller, '_step_ref_pattern', re.compile(getattr(type(controller), '_step_pattern', r'\${[^}]*}')))
+    setattr(controller, '_auto_connect_task', bool(getattr(controller, '_task', None)))
+    setattr(
+        controller,
+        '_retry_on_failure_callback',
+        getattr(type(controller), '_default_retry_on_failure_callback', None),
+    )
 
 
 def _seed_pipeline_template_parameters(controller: Any, defaults: Mapping[str, Any]) -> None:
     adder = getattr(controller, 'add_parameter', None)
     if not callable(adder):
         raise AttributeError('Pipeline controller does not support add_parameter.')
-    for (key, value) in sorted(defaults.items()):
+    for (key, value) in sorted(_template_pipeline_params(defaults).items()):
         adder(str(key), default=_normalize_template_arg_value(value))
 
 
@@ -1130,6 +1188,13 @@ def build_pipeline_template_draft(*, cfg: Any, controller: Any, pipeline_profile
     plan = _build_pipeline_plan(cfg, template_grid_run_id, child_execution='logging')
     shared_defaults = _build_pipeline_template_runtime_defaults(cfg=cfg, plan=plan, grid_run_id=template_grid_run_id, pipeline_profile=pipeline_profile)
     _reset_pipeline_controller_definition(controller)
+    setattr(
+        controller,
+        '_default_execution_queue',
+        _normalize_str(plan.get('queues', {}).get('default'))
+        or _resolve_pipeline_queue_name(plan.get('queues', {}))
+        or 'default',
+    )
     _seed_pipeline_template_parameters(controller, shared_defaults)
     _add_clearml_pipeline_template_steps(cfg=cfg, plan=plan, steps=plan['steps'], controller=controller, use_templates=True, shared_defaults=shared_defaults)
     create_draft = getattr(controller, 'create_draft', None)
@@ -1197,7 +1262,7 @@ def _apply_visible_pipeline_run_defaults(*, target: Any, task_id: str, cfg: Any,
         pipeline_task_id=task_id,
     )
     apply_clearml_task_overrides(target, _overrides_to_args(runtime_defaults))
-    set_clearml_task_parameters(task_id, runtime_defaults, section='pipeline')
+    set_clearml_task_parameters(task_id, _template_pipeline_params(runtime_defaults), section='pipeline')
     _apply_pipeline_run_task_identity(
         task_id=task_id,
         cfg=cfg,
