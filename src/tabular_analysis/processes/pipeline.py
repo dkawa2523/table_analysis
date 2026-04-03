@@ -1389,6 +1389,13 @@ def _create_pipeline_controller_runtime_context(cfg: Any) -> TaskContext:
         raise RuntimeError('clearml is required to attach to the current pipeline controller task.') from exc
     task = ClearMLTask.current_task()
     if task is None:
+        task_id = os.getenv('CLEARML_TASK_ID') or os.getenv('TRAINS_TASK_ID')
+        if task_id:
+            try:
+                task = ClearMLTask.get_task(task_id=task_id)
+            except Exception:
+                task = None
+    if task is None:
         return _create_local_task_context(cfg, stage=stage, task_name='pipeline')
     output_dir = Path(getattr(cfg.run, 'output_dir', 'outputs')) / stage
     output_dir.mkdir(parents=True, exist_ok=True)

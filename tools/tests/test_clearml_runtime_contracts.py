@@ -19,6 +19,7 @@ from tabular_analysis.clearml import pipeline_templates as pipeline_template_mod
 from tabular_analysis.clearml import templates as template_module
 from tabular_analysis.common.clearml_bootstrap import resolve_required_uv_extras
 from tabular_analysis.common.clearml_config import read_clearml_api_section
+from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
 from tabular_analysis.registry.models import list_model_variants
 from tools.clearml_entrypoint import (
@@ -257,6 +258,55 @@ def _assert_regression_model_set_contract() -> None:
         raise AssertionError(f"svr must not be selectable for classification: {classification_variants}")
 
 
+def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
+    class _FakeTaskObject:
+        name = "pipeline"
+
+        def get_project_name(self) -> str:
+            return "LOCAL/TabularAnalysis/Test/00_Pipelines"
+
+    class _FakeTaskApi:
+        @staticmethod
+        def current_task() -> None:
+            return None
+
+        @staticmethod
+        def get_task(task_id: str | None = None) -> _FakeTaskObject | None:
+            if task_id != "fake-controller-task":
+                raise AssertionError(f"unexpected task lookup: {task_id}")
+            return fake_task
+
+    fake_task = _FakeTaskObject()
+    original_module = sys.modules.get("clearml")
+    original_task_id = os.environ.get("CLEARML_TASK_ID")
+    sys.modules["clearml"] = type("_FakeClearMLModule", (), {"Task": _FakeTaskApi})()
+    os.environ["CLEARML_TASK_ID"] = "fake-controller-task"
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = OmegaConf.create(
+                {
+                    "task": {"stage": "99_pipeline"},
+                    "run": {
+                        "output_dir": tmpdir,
+                        "usecase_id": "fake-usecase",
+                        "clearml": {"project_name": "LOCAL/TabularAnalysis/Test/00_Pipelines"},
+                    },
+                }
+            )
+            ctx = pipeline_module._create_pipeline_controller_runtime_context(cfg)
+            if ctx.task is not fake_task:
+                raise AssertionError("pipeline controller runtime context must attach to CLEARML_TASK_ID when current_task() is None")
+    finally:
+        if original_module is None:
+            sys.modules.pop("clearml", None)
+        else:
+            sys.modules["clearml"] = original_module
+        if original_task_id is None:
+            os.environ.pop("CLEARML_TASK_ID", None)
+        else:
+            os.environ["CLEARML_TASK_ID"] = original_task_id
+
+
 def main() -> int:
     _assert_clearml_hocon_reader()
     _assert_batch_execution_mode()
@@ -265,6 +315,7 @@ def main() -> int:
     _assert_task_time_extras()
     _assert_entrypoint_reads_clearml_slash_overrides()
     _assert_regression_model_set_contract()
+    _assert_pipeline_controller_context_attaches_by_task_id()
     print("OK: clearml runtime contracts")
     return 0
 
