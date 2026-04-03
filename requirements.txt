@@ -1,2 +1,7 @@
--r requirements/base.txt
--e .
+# Minimal agent bootstrap requirements.
+# Full local/runtime dependencies are managed via:
+# - requirements/base.txt
+# - uv sync --frozen
+# - task-time uv bootstrap in tools/clearml_entrypoint.py
+clearml>=1.15.0
+uv>=0.5.0
