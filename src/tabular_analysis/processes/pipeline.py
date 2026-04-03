@@ -1347,7 +1347,7 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
     starter = getattr(controller, 'start', None)
     if not callable(starter):
         raise AttributeError('Pipeline controller does not support start().')
-    starter(queue=contract.queue_name)
+    starter()
     step_task_ids = _collect_step_task_ids(controller)
     executed_jobs = len(contract.plan['steps']['train'])
     (dataset_register_ref, preprocess_refs, train_refs, train_ensemble_refs, leaderboard_ref, infer_ref) = _build_clearml_pipeline_refs(plan_only=contract.plan['plan_only'], steps=contract.plan['steps'], step_task_ids=step_task_ids)

@@ -314,7 +314,7 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
     class _FakeController:
         def __init__(self) -> None:
             self._nodes = {"preprocess": object()}
-            self.started_with: str | None = None
+            self.started_with: str | None = "unset"
 
         def start(self, *, queue: str | None = None) -> None:
             self.started_with = queue
@@ -362,8 +362,8 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
         cfg = OmegaConf.create({"run": {"clearml": {"queue_name": "default"}}})
         ctx = pipeline_module.TaskContext(task=fake_task, project_name="LOCAL/TabularAnalysis/Test/00_Pipelines", task_name="pipeline", output_dir=Path.cwd())
         summary = pipeline_module._execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id="grid-001")
-        if fake_controller.started_with != "services":
-            raise AssertionError(f"controller should start on pipeline queue: {fake_controller.started_with}")
+        if fake_controller.started_with is not None:
+            raise AssertionError(f"remote controller should start in-place without re-enqueueing itself: {fake_controller.started_with}")
         if getattr(fake_controller, "_default_execution_queue", None) != "default":
             raise AssertionError(f"loaded controller should reseed default execution queue: {getattr(fake_controller, '_default_execution_queue', None)}")
         pipeline_args = getattr(fake_controller, "_pipeline_args", {})
