@@ -72,6 +72,23 @@ def _parse_cli_overrides(argv: list[str]) -> dict[str, str]:
     return overrides
 
 
+def _override_key_candidates(key: str) -> list[str]:
+    candidates: list[str] = []
+    for candidate in (key, key.replace(".", "/"), key.replace("/", ".")):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def _get_override(overrides: dict[str, str], *keys: str) -> str | None:
+    for key in keys:
+        for candidate in _override_key_candidates(key):
+            value = overrides.get(candidate)
+            if value is not None:
+                return value
+    return None
+
+
 def _parse_bool(value: str | None, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -173,10 +190,9 @@ def _maybe_patch_clearml_files_host() -> None:
 
 
 def _resolve_bootstrap_mode(overrides: dict[str, str]) -> str:
-    for key in ("run.clearml.env.bootstrap", "run.clearml.bootstrap"):
-        value = overrides.get(key)
-        if value:
-            return value.strip().lower()
+    value = _get_override(overrides, "run.clearml.env.bootstrap", "run.clearml.bootstrap")
+    if value:
+        return value.strip().lower()
     for key in ("TABULAR_ANALYSIS_CLEARML_BOOTSTRAP", "TABULAR_ANALYSIS_BOOTSTRAP"):
         value = os.getenv(key)
         if value:
@@ -185,28 +201,26 @@ def _resolve_bootstrap_mode(overrides: dict[str, str]) -> str:
 
 
 def _resolve_task_name(overrides: dict[str, str]) -> str | None:
-    for key in ("task", "task.name"):
-        value = overrides.get(key)
-        if value:
-            name = value.split("/")[-1].strip()
-            return name or None
+    value = _get_override(overrides, "task", "task.name")
+    if value:
+        name = value.split("/")[-1].strip()
+        return name or None
     return None
 
 
 def _infer_optimize_enabled(overrides: dict[str, str]) -> bool:
-    for key in ("infer.mode", "infer/mode"):
-        value = overrides.get(key)
-        if value and value.strip().lower() == "optimize":
-            return True
+    value = _get_override(overrides, "infer.mode", "infer/mode")
+    if value and value.strip().lower() == "optimize":
+        return True
     return False
 
 
 def _resolve_uv_extras(overrides: dict[str, str]) -> list[str]:
-    explicit_raw = overrides.get("run.clearml.env.uv.extras")
+    explicit_raw = _get_override(overrides, "run.clearml.env.uv.extras")
     explicit_extras = _parse_list(explicit_raw) if explicit_raw is not None else None
     task_name = _resolve_task_name(overrides)
     model_variant_name = resolve_model_variant_name_from_overrides(overrides)
-    infer_mode = "optimize" if _infer_optimize_enabled(overrides) else overrides.get("infer.mode")
+    infer_mode = "optimize" if _infer_optimize_enabled(overrides) else _get_override(overrides, "infer.mode")
     return resolve_required_uv_extras(
         task_name=task_name,
         model_variant_name=model_variant_name,
@@ -217,19 +231,19 @@ def _resolve_uv_extras(overrides: dict[str, str]) -> list[str]:
 
 
 def _resolve_uv_settings(overrides: dict[str, str]) -> tuple[str, list[str], bool, bool]:
-    venv_dir = overrides.get("run.clearml.env.uv.venv_dir") or ".venv"
+    venv_dir = _get_override(overrides, "run.clearml.env.uv.venv_dir") or ".venv"
     extras = _resolve_uv_extras(overrides)
-    all_extras = _parse_bool(overrides.get("run.clearml.env.uv.all_extras"), default=False)
-    frozen = _parse_bool(overrides.get("run.clearml.env.uv.frozen"), default=True)
+    all_extras = _parse_bool(_get_override(overrides, "run.clearml.env.uv.all_extras"), default=False)
+    frozen = _parse_bool(_get_override(overrides, "run.clearml.env.uv.frozen"), default=True)
     return (venv_dir, extras, all_extras, frozen)
 
 
 def _resolve_apt_settings(overrides: dict[str, str]) -> tuple[list[str], bool, bool]:
-    packages = _parse_list(overrides.get("run.clearml.env.apt_packages"))
+    packages = _parse_list(_get_override(overrides, "run.clearml.env.apt_packages"))
     if not packages:
         packages = _parse_list(os.getenv("TABULAR_ANALYSIS_APT_PACKAGES"))
-    update = _parse_bool(overrides.get("run.clearml.env.apt_update"), default=True)
-    allow_local = _parse_bool(overrides.get("run.clearml.env.apt_allow_local"), default=False)
+    update = _parse_bool(_get_override(overrides, "run.clearml.env.apt_update"), default=True)
+    allow_local = _parse_bool(_get_override(overrides, "run.clearml.env.apt_allow_local"), default=False)
     return packages, update, allow_local
 
 

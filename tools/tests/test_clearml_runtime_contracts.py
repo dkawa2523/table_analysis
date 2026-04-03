@@ -11,7 +11,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[2]
 _SRC = _REPO / "src"
 _PLATFORM_SRC = _REPO.parent / "ml_platform_v1-master" / "src"
-for candidate in (_SRC, _PLATFORM_SRC):
+for candidate in (_REPO, _SRC, _PLATFORM_SRC):
     if candidate.exists() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
@@ -21,6 +21,7 @@ from tabular_analysis.common.clearml_bootstrap import resolve_required_uv_extras
 from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
 from tabular_analysis.registry.models import list_model_variants
+from tools.clearml_entrypoint import _resolve_bootstrap_mode, _resolve_uv_settings
 from omegaconf import OmegaConf
 
 
@@ -175,6 +176,26 @@ def _assert_task_time_extras() -> None:
         raise AssertionError("optimize infer should add optuna on top of the infer fallback")
 
 
+def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
+    overrides = {
+        "run/clearml/env/bootstrap": "uv",
+        "run/clearml/env/uv/venv_dir": ".venv-test",
+        "run/clearml/env/uv/frozen": "true",
+        "task": "pipeline",
+    }
+    if _resolve_bootstrap_mode(overrides) != "uv":
+        raise AssertionError("entrypoint must honor slash-form bootstrap overrides from ClearML task params")
+    venv_dir, extras, all_extras, frozen = _resolve_uv_settings(overrides)
+    if venv_dir != ".venv-test":
+        raise AssertionError(f"unexpected slash-form venv_dir: {venv_dir}")
+    if extras != []:
+        raise AssertionError(f"pipeline task should not request optional extras: {extras}")
+    if all_extras:
+        raise AssertionError("slash-form all_extras should default to false")
+    if not frozen:
+        raise AssertionError("slash-form frozen should resolve to true")
+
+
 def _assert_regression_model_set_contract() -> None:
     payload = OmegaConf.to_container(
         OmegaConf.load(_REPO / "conf" / "pipeline" / "model_sets" / "regression_all.yaml"),
@@ -219,6 +240,7 @@ def main() -> int:
     _assert_strict_template_lookup()
     _assert_visible_pipeline_template_lookup()
     _assert_task_time_extras()
+    _assert_entrypoint_reads_clearml_slash_overrides()
     _assert_regression_model_set_contract()
     print("OK: clearml runtime contracts")
     return 0
