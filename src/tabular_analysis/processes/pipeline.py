@@ -163,6 +163,7 @@ def _build_pipeline_template_runtime_defaults(*, cfg: Any, plan: Mapping[str, An
     defaults = _merge_overrides(plan['run_overrides'], plan['data_overrides'], plan['downstream_data_overrides'], plan['eval_overrides'])
     defaults = _strip_local_only_overrides(defaults)
     defaults['task'] = 'pipeline'
+    defaults['default_queue'] = _normalize_str(plan.get('queues', {}).get('default')) or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name')) or 'default'
     defaults['run.grid_run_id'] = grid_run_id
     defaults['run.clearml.execution'] = 'pipeline_controller'
     defaults['run.clearml.pipeline.template_task_id'] = _normalize_str(_cfg_value(cfg, 'run.clearml.pipeline.template_task_id'))
@@ -1191,9 +1192,7 @@ def build_pipeline_template_draft(*, cfg: Any, controller: Any, pipeline_profile
     setattr(
         controller,
         '_default_execution_queue',
-        _normalize_str(plan.get('queues', {}).get('default'))
-        or _resolve_pipeline_queue_name(plan.get('queues', {}))
-        or 'default',
+        _normalize_str(plan.get('queues', {}).get('default')) or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name')) or 'default',
     )
     _seed_pipeline_template_parameters(controller, shared_defaults)
     _add_clearml_pipeline_template_steps(cfg=cfg, plan=plan, steps=plan['steps'], controller=controller, use_templates=True, shared_defaults=shared_defaults)
