@@ -22,6 +22,7 @@ from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
 from tabular_analysis.registry.models import list_model_variants
 from tools.clearml_entrypoint import (
+    _extract_cli_keys,
     _normalize_loaded_override_key,
     _resolve_bootstrap_mode,
     _resolve_uv_settings,
@@ -207,10 +208,15 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
     _store_loaded_override(loaded, "data/raw_dataset_id", "template_raw_dataset")
     _store_loaded_override(loaded, "data.raw_dataset_id", "runtime_dataset")
     _store_loaded_override(loaded, "default_queue", "default")
+    _store_loaded_override(loaded, "pipeline/profile", "train_ensemble_full")
     if loaded.get("data.raw_dataset_id") != "runtime_dataset":
         raise AssertionError(f"dotted override must win over slash placeholder: {loaded}")
     if "default_queue" in loaded:
         raise AssertionError(f"controller-only default_queue should not be forwarded to Hydra: {loaded}")
+    if loaded.get("+pipeline.profile") != "train_ensemble_full":
+        raise AssertionError(f"runtime-only pipeline profile should be appended, not overridden: {loaded}")
+    if _extract_cli_keys(["+pipeline.model_set=regression_all", "task=pipeline"]) != {"pipeline.model_set", "task"}:
+        raise AssertionError("CLI key extraction must treat +override and plain override as the same key")
 
 
 def _assert_regression_model_set_contract() -> None:

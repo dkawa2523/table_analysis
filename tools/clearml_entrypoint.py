@@ -45,7 +45,7 @@ def _extract_cli_keys(argv: list[str]) -> set[str]:
     for item in argv:
         if not item or item.startswith("-") or "=" not in item:
             continue
-        key = item.split("=", 1)[0].strip()
+        key = item.split("=", 1)[0].strip().lstrip("+")
         if key:
             keys.add(key)
     return keys
@@ -93,6 +93,11 @@ _SKIPPED_LOADED_OVERRIDE_KEYS = {
     "default_queue",
 }
 
+_APPENDED_LOADED_OVERRIDE_KEYS = {
+    "pipeline.model_set",
+    "pipeline.profile",
+}
+
 _SLASH_OVERRIDE_PREFIXES = (
     "group/",
     "ops/",
@@ -111,8 +116,11 @@ def _store_loaded_override(overrides: dict[str, Any], key: str, value: Any) -> N
     normalized = _normalize_loaded_override_key(str(key))
     if not normalized:
         return
-    if normalized.lstrip("+") in _SKIPPED_LOADED_OVERRIDE_KEYS:
+    bare_key = normalized.lstrip("+")
+    if bare_key in _SKIPPED_LOADED_OVERRIDE_KEYS:
         return
+    if bare_key in _APPENDED_LOADED_OVERRIDE_KEYS and not normalized.startswith("+"):
+        normalized = f"+{normalized}"
     raw = str(key).strip()
     if "/" in raw and "." not in raw and normalized in overrides:
         return
