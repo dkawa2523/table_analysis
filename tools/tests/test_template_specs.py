@@ -74,6 +74,15 @@ def _load_group_map(repo: Path) -> dict[str, str]:
     return {str(key): str(value) for key, value in group_map.items()}
 
 
+def _load_pipeline_root_group(repo: Path) -> str:
+    layout_path = repo / "conf" / "clearml" / "project_layout.yaml"
+    if not layout_path.exists():
+        return "Pipelines"
+    payload = _load_yaml(layout_path)
+    value = payload.get("pipeline_root_group")
+    return str(value) if value else "Pipelines"
+
+
 def _assert_contains(items: list[str], prefix: str) -> None:
     for item in items:
         if item.startswith(prefix):
@@ -106,6 +115,7 @@ def _validate_spec(repo: Path) -> None:
 
     stage_map = _load_stage_map(repo)
     group_map = _load_group_map(repo)
+    pipeline_root_group = _load_pipeline_root_group(repo)
     for name, spec in templates.items():
         if not isinstance(spec, dict):
             raise AssertionError(f"template {name} must be a mapping")
@@ -155,9 +165,12 @@ def _validate_spec(repo: Path) -> None:
                 raise AssertionError(f"pipeline template {name} missing properties_minimal.pipeline_profile={name}")
 
         project_key = "pipeline" if name in PIPELINE_TEMPLATE_NAMES else name
-        stage = stage_map.get(project_key)
-        project_group = group_map.get(project_key)
-        expected_tokens = [token for token in (project_group, stage, f"{{group_map[{project_key}]}}") if token]
+        if name in PIPELINE_TEMPLATE_NAMES:
+            expected_tokens = [pipeline_root_group, "{pipeline_root_group}"]
+        else:
+            stage = stage_map.get(project_key)
+            project_group = group_map.get(project_key)
+            expected_tokens = [token for token in (project_group, stage, f"{{group_map[{project_key}]}}") if token]
         if expected_tokens and not any(token in project_name for token in expected_tokens) and "{group_map[" not in project_name:
             raise AssertionError(f"template {name} project_name should include one of {expected_tokens}")
 

@@ -1,4 +1,4 @@
-# 82 ClearML Project Layout
+﻿# 82 ClearML Project Layout
 
 ## Purpose
 ClearML project naming is config-driven so every task lands in a predictable
@@ -6,6 +6,9 @@ location in the UI.
 
 ## Canonical shape
 `<ROOT>/<solution_root>/<usecase_id>/<process_group>`
+
+Visible pipeline controllers use a dedicated root:
+`<ROOT>/<solution_root>/Pipelines`
 
 - `ROOT`: `run.clearml.project_root`
 - `solution_root`: `run.clearml.project_layout.solution_root`
@@ -19,7 +22,7 @@ location in the UI.
 - `04_Ensembles`
 - `05_Infer`
 - `05_Infer_Children`
-- `00_Pipelines`
+- `Pipelines`
 
 ## Source of truth
 - `conf/run/base.yaml`
@@ -30,3 +33,4 @@ location in the UI.
 - Compare actual UI placement against `docs/03_CLEARML_UI_CONTRACT.md`.
 - Use `docs/43_CLEARML_UI_LAYOUT_EXAMPLES.md` as a lightweight visual reference.
 - Record differences in the PR description, an operations note, or your team's issue tracker.
+

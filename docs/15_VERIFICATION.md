@@ -1,140 +1,144 @@
-# 15 Verification（検証コマンド集）
+﻿# 15 Verification
 
-このドキュメントは、`ml-solution-tabular-analysis` を **ローカルモード（ClearML無効）** で検証するためのコマンド集です。
+## 目的
 
-- 基本的に `requirements/base.txt` をインストール済みであることを前提とします。
-- ここでの検証は「最低限の契約（config_resolved.yaml / out.json / manifest.json）」が保たれているかを中心に確認します。
+このドキュメントは、`ml-solution-tabular-analysis` の検証手順をまとめたものです。  
+ローカルだけの確認、ClearML logging の確認、release 前の包括確認を分けて考えます。
 
----
+## 推奨の確認順
 
-## A) 統合コマンド（推奨）
+1. docs / static check
+2. quick verify
+3. task 単体 smoke
+4. local pipeline smoke
+5. ClearML logging / template contract
 
-日常開発や CI では quick を使います（主要スモーク + 多クラス + 高カーディナリティ）。
+## 1. 最低限の quick verify
 
 ```bash
 python tools/tests/verify_all.py --quick
 ```
 
-リリース前の手動確認では full を使います（quick + 追加スモーク: 不確かさ / 指標CI / 監視 / ガバナンス / スケール / Serving など）。
+これで主に次を確認します。
+
+- 主要 smoke
+- docs path
+- contract test
+- optional model の存在確認
+- serving import の基本確認
+
+## 2. docs / static check
+
+```bash
+python tools/tests/check_docs_paths.py --repo .
+python -m compileall -q src
+```
+
+## 3. task 単体 smoke
+
+### local pipeline まで
+
+```bash
+python tools/tests/smoke_local.py --until pipeline
+```
+
+### 分類 smoke
+
+```bash
+python tools/tests/smoke_classification.py --until leaderboard
+```
+
+### 回帰モデル単体
+
+```bash
+python tools/tests/smoke_train_regression_model.py --model random_forest --expect-feature-importance
+```
+
+### build-only
+
+```bash
+python tools/tests/smoke_model_build_only.py --task-type regression --models knn,gaussian_process,mlp
+python tools/tests/smoke_model_build_only.py --task-type classification --models svc,knn,gaussian_process,mlp
+```
+
+## 4. optional model 確認
+
+```bash
+python tools/tests/check_optional_models.py --models lgbm,xgboost,catboost,tabpfn
+```
+
+optional dependency を入れて検証したい場合:
+
+```bash
+uv sync --frozen --extra lightgbm --extra xgboost --extra catboost
+uv sync --frozen --extra tabpfn
+```
+
+## 5. report / plot / HPO 関連
+
+```bash
+python tools/tests/smoke_report.py
+python tools/tests/smoke_plots.py
+python tools/tests/smoke_hpo.py
+```
+
+## 6. ClearML 契約確認
+
+### template / runtime contract
+
+```bash
+python tools/tests/test_template_specs.py
+python tools/tests/test_clearml_runtime_contracts.py
+```
+
+### UI 監査
+
+```bash
+python tools/tests/rehearsal_verify_clearml_ui.py --usecase-id <USECASE_ID> --project-root LOCAL
+```
+
+## 7. full verify
 
 ```bash
 python tools/tests/verify_all.py --full
 ```
 
-full では `tools/tests/smoke_train_regression_model.py` が存在する場合のみ実行します。fastapi など optional dependency が無いテストは自動 skip されます。
+使いどころ:
 
----
+- release 前
+- 大きな refactor 後
+- ClearML 運用契約を変えた後
 
-## B) ローカル必須チェック（個別実行）
-
-### 1) 構文チェック
-```bash
-python -m compileall -q src
-```
-
-### 2) 回帰E2Eスモーク（pipeline まで）
-```bash
-python tools/tests/smoke_local.py --until pipeline
-```
-
-### 3) 分類E2Eスモーク（leaderboard まで）
-```bash
-python tools/tests/smoke_classification.py --until leaderboard
-```
-
-### 4) 代表モデルのスモーク（回帰）
-```bash
-python tools/tests/smoke_train_regression_model.py --model random_forest --expect-feature-importance
-```
-
-### 5) build-only チェック（重いモデルは学習せず構築のみ）
-```bash
-python tools/tests/smoke_model_build_only.py --task-type regression --models knn,svr,gaussian_process,mlp
-python tools/tests/smoke_model_build_only.py --task-type classification --models svc,knn,gaussian_process,mlp
-```
-
-### 6) optional model の健全性（依存が無い場合は graceful error を確認）
-```bash
-python tools/tests/check_optional_models.py --models lgbm,xgboost,catboost,tabpfn
-```
-
-### 7) HPO / report / plots
-```bash
-python tools/tests/smoke_hpo.py
-python tools/tests/smoke_report.py
-python tools/tests/smoke_plots.py
-```
-
-### 8) CI workflow 設定のスモーク
-```bash
-python tools/tests/smoke_ci_config.py
-```
-
----
-
-## C) optional deps を入れて「実際に学習」まで確認したい場合
-
-外部モデル（LightGBM/XGBoost/CatBoost/TabPFN）を実際に動かす場合は extras を入れます。
+## 8. release 前の推奨セット
 
 ```bash
-pip install -e ".[models]"
-# TabPFN も試す場合
-pip install -e ".[tabpfn]"
+python tools/tests/check_docs_paths.py --repo .
+python tools/tests/test_template_specs.py
+python tools/tests/test_clearml_runtime_contracts.py
+python tools/tests/verify_all.py --quick
 ```
 
-その後、モデル実在チェックを再実行します。
-```bash
-python tools/tests/check_optional_models.py --models lgbm,xgboost,catboost,tabpfn
-```
-
----
-
-## D) ClearML 有効での確認（環境が整っている場合のみ）
-
-ClearML の設定（`clearml.conf` / 環境変数 / API key 等）が完了している場合、pipeline を ClearML 有効で実行できます。
+必要に応じて:
 
 ```bash
-python -m tabular_analysis.cli task=pipeline \
-  run.clearml.enabled=true run.clearml.execution=logging \
-  data.raw_dataset_id=<RAW_DATASET_ID>
+python tools/tests/verify_all.py --full
 ```
 
----
+## 9. 失敗時の見方
 
-## E) T029〜T039 追加機能のスモーク（verify_all --full で実行）
+- import failure
+  - dependency か `PYTHONPATH`
+- optional model missing
+  - extras 未導入
+- ClearML contract failure
+  - template / project / tags / queue の不整合
+- smoke failure
+  - `out.json` と artifact を確認
 
-個別に確認したい場合は以下を実行します（repo 直下で実行する想定）。
+## 関連ドキュメント
 
-### 1) 多クラス / 不均衡 / 高カーディナリティ
-```bash
-python tools/tests/smoke_multiclass.py
-python tools/tests/smoke_imbalance.py
-python tools/tests/smoke_high_card_cat.py
-```
+- [16_OPERATIONS_RUNBOOK.md](16_OPERATIONS_RUNBOOK.md)
+- [67_REHEARSAL_COMMANDS.md](67_REHEARSAL_COMMANDS.md)
+- [69_CLEARML_TROUBLESHOOTING.md](69_CLEARML_TROUBLESHOOTING.md)
 
-### 2) 不確かさ / 指標CI
-```bash
-python tools/tests/smoke_uncertainty.py
-python tools/tests/smoke_metric_ci.py
-```
 
-### 3) 校正 / Decision Summary
-```bash
-python tools/tests/smoke_calibration.py
-python tools/tests/smoke_decision_summary.py
-```
-
-### 4) 監視 / スケール / Serving
-```bash
-python tools/tests/smoke_drift_enhanced.py
-python tools/tests/smoke_batch_chunked.py
-python tools/tests/smoke_serve_import.py
-```
-
-Serving は fastapi が入っていない場合に自動 skip されます。
-
----
-
-## F) まとめ
-
-基本は `verify_all.py` を使い、必要に応じて個別スモークを追加実行してください。

@@ -608,6 +608,79 @@ def _apply_clearml_system_tags(task: Any, system_tags: Iterable[str] | None) -> 
         setter(merged)
     except _RECOVERABLE_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to set ClearML system tags: {exc}') from exc
+
+
+def _load_clearml_project_record(project_name: str | None) -> tuple[str | None, Mapping[str, Any] | None]:
+    if not project_name:
+        return (None, None)
+    try:
+        from clearml.backend_api.session.client import APIClient
+    except _RECOVERABLE_ERRORS:
+        APIClient = None
+    if APIClient is not None:
+        try:
+            client = APIClient()
+            projects = client.projects.get_all(name=str(project_name))
+        except _RECOVERABLE_ERRORS as exc:
+            raise PlatformAdapterError(f'ClearML project lookup failed: {exc}') from exc
+        for candidate in list(projects or []):
+            name = getattr(candidate, 'name', None)
+            if str(name or '') == str(project_name):
+                project_id = getattr(candidate, 'id', None)
+                return (str(project_id) if project_id else None, candidate)
+        if projects:
+            candidate = projects[0]
+            project_id = getattr(candidate, 'id', None)
+            return (str(project_id) if project_id else None, candidate)
+    try:
+        from clearml.backend_api.session import Session
+    except _RECOVERABLE_ERRORS as exc:
+        raise PlatformAdapterError(f'ClearML Session is not available: {exc}') from exc
+    try:
+        session = Session()
+        response = session.send_request(service='projects', action='get_all', json={'name': project_name, 'search_hidden': True, 'size': 10})
+    except _RECOVERABLE_ERRORS as exc:
+        raise PlatformAdapterError(f'ClearML project lookup failed: {exc}') from exc
+    if not getattr(response, 'ok', False):
+        raise PlatformAdapterError(f'ClearML project lookup returned non-ok response for {project_name!r}.')
+    try:
+        payload = response.json() or {}
+    except _RECOVERABLE_ERRORS as exc:
+        raise PlatformAdapterError(f'Failed to parse ClearML project lookup payload: {exc}') from exc
+    projects = []
+    if isinstance(payload, Mapping) and isinstance(payload.get('projects'), list):
+        projects = [proj for proj in payload.get('projects', []) if isinstance(proj, Mapping)]
+    elif isinstance(payload, Mapping) and isinstance(payload.get('data'), Mapping):
+        candidates = payload.get('data', {}).get('projects')
+        if isinstance(candidates, list):
+            projects = [proj for proj in candidates if isinstance(proj, Mapping)]
+    for candidate in projects:
+        name = candidate.get('name') or candidate.get('full_name') or candidate.get('path')
+        if name == project_name:
+            project_id = candidate.get('id') or candidate.get('project') or candidate.get('project_id')
+            return (str(project_id) if project_id else None, candidate)
+    if projects:
+        candidate = projects[0]
+        project_id = candidate.get('id') or candidate.get('project') or candidate.get('project_id')
+        return (str(project_id) if project_id else None, candidate)
+    return (None, None)
+
+
+def _get_clearml_project_system_tags(project_name: str | None) -> list[str]:
+    (_, project) = _load_clearml_project_record(project_name)
+    if project is None:
+        return []
+    system_tags = getattr(project, 'system_tags', None)
+    if system_tags is None and isinstance(project, Mapping):
+        system_tags = project.get('system_tags')
+    if isinstance(system_tags, list):
+        return _dedupe_tags(system_tags)
+    try:
+        return _dedupe_tags(list(system_tags or []))
+    except _RECOVERABLE_ERRORS:
+        return []
+
+
 def _ensure_clearml_project_system_tags(project_name: str | None, add_tags: Iterable[str] | None=None, *, remove_tags: Iterable[str] | None=None) -> None:
     if not project_name:
         return
@@ -615,86 +688,26 @@ def _ensure_clearml_project_system_tags(project_name: str | None, add_tags: Iter
     remove_set = {tag for tag in _dedupe_tags(remove_tags or []) if tag}
     if not add_list and (not remove_set):
         return
-    try:
-        from clearml.backend_api.session import Session
-    except _RECOVERABLE_ERRORS:
-        return
-    try:
-        session = Session()
-    except _RECOVERABLE_ERRORS as exc:
-        print(f'[warn] ClearML Session init failed for project tags: {exc}', file=sys.stderr)
-        return
-    project: Mapping[str, Any] | None = None
-    project_id: str | None = None
-    looks_like_id = '/' not in project_name and len(project_name) in {24, 32}
-    if looks_like_id:
-        project_id = project_name
-    if project_id is None:
-        try:
-            response = session.send_request(service='projects', action='get_all', json={'name': project_name, 'search_hidden': True, 'size': 10})
-        except _RECOVERABLE_ERRORS as exc:
-            print(f'[warn] ClearML project lookup failed: {exc}', file=sys.stderr)
-            return
-        if not getattr(response, 'ok', False):
-            return
-        try:
-            payload = response.json() or {}
-        except _RECOVERABLE_ERRORS:
-            payload = {}
-        projects: list[Mapping[str, Any]] = []
-        if isinstance(payload, Mapping) and isinstance(payload.get('projects'), list):
-            projects = [proj for proj in payload.get('projects', []) if isinstance(proj, Mapping)]
-        elif isinstance(payload, Mapping) and isinstance(payload.get('data'), Mapping):
-            candidates = payload.get('data', {}).get('projects')
-            if isinstance(candidates, list):
-                projects = [proj for proj in candidates if isinstance(proj, Mapping)]
-        if projects:
-            for candidate in projects:
-                name = candidate.get('name') or candidate.get('full_name') or candidate.get('path')
-                if name == project_name:
-                    project = candidate
-                    break
-            if project is None:
-                project = projects[0]
-            project_id = project.get('id') or project.get('project') or project.get('project_id')
-    if project_id and project is None:
-        try:
-            response = session.send_request(service='projects', action='get_by_id', json={'project': project_id})
-        except _RECOVERABLE_ERRORS as exc:
-            print(f'[warn] ClearML project lookup by id failed: {exc}', file=sys.stderr)
-            return
-        if not getattr(response, 'ok', False):
-            return
-        try:
-            payload = response.json() or {}
-        except _RECOVERABLE_ERRORS:
-            payload = {}
-        if isinstance(payload, Mapping) and isinstance(payload.get('project'), Mapping):
-            project = payload.get('project')
-        elif isinstance(payload, Mapping) and isinstance(payload.get('data'), Mapping):
-            project = payload.get('data', {}).get('project')
+    (project_id, project) = _load_clearml_project_record(project_name)
     if not project_id:
-        project_id = project.get('id') if project else None
-    if not project_id:
-        return
-    system_tags = project.get('system_tags') or []
-    if not isinstance(system_tags, list):
-        try:
-            system_tags = list(system_tags)
-        except _RECOVERABLE_ERRORS:
-            system_tags = []
+        raise PlatformAdapterError(f"ClearML project not found: {project_name!r}")
+    system_tags = _get_clearml_project_system_tags(project_name)
     merged = _dedupe_tags([*system_tags, *add_list])
     if remove_set:
         merged = [tag for tag in merged if tag not in remove_set]
     if merged == system_tags:
         return
     try:
+        from clearml.backend_api.session import Session
+        session = Session()
         update = session.send_request(service='projects', action='update', json={'project': project_id, 'system_tags': merged})
     except _RECOVERABLE_ERRORS as exc:
-        print(f'[warn] ClearML project update failed: {exc}', file=sys.stderr)
-        return
+        raise PlatformAdapterError(f'ClearML project update failed: {exc}') from exc
     if not getattr(update, 'ok', False):
-        print('[warn] ClearML project update returned non-ok response', file=sys.stderr)
+        raise PlatformAdapterError(f'ClearML project update returned non-ok response for {project_name!r}.')
+    if _get_clearml_project_system_tags(project_name) != merged:
+        raise PlatformAdapterError(f'ClearML project system tags did not persist for {project_name!r}.')
+
 def _apply_clearml_tags(task: Any, tags: Iterable[str] | None) -> None:
     tag_list = _dedupe_tags(tags or [])
     if not tag_list:

@@ -1,4 +1,4 @@
-# ClearML Agent Troubleshooting
+﻿# ClearML Agent Troubleshooting
 
 ## Quick triage order
 1. Check the pipeline task script.
@@ -32,6 +32,10 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 - Canonical container assets live under `tools/clearml_agent/`.
 - Use shared cache by mounting `/root/.clearml` and setting `UV_CACHE_DIR=/root/.clearml/uv-cache`.
 - Start agents with `--init` (or Docker `init: true`) so zombie processes do not accumulate.
+- Canonical queue split is:
+  - `services`: pipeline controllers only
+  - `default`: preprocess, light train models, leaderboard, ensembles
+  - `heavy-model`: `catboost` and `xgboost`
 
 ## 3) Dependency and bootstrap errors
 - `ModuleNotFoundError` usually means the repo bootstrap or optional dependency set is incomplete.
@@ -41,6 +45,9 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 - Current bootstrap policy is task-specific:
   - `dataset_register`, `preprocess`, `leaderboard`, `pipeline`: base dependencies only
   - `train_model`: only the optional extra needed by the selected model
+  - `lgbm`: `lightgbm` only
+  - `xgboost`: `xgboost` only
+  - `catboost`: `catboost` only
   - `infer`: model-specific extra when known, otherwise `models` fallback
   - `infer.mode=optimize`: add `optuna`
 
@@ -56,3 +63,4 @@ Use the same Hydra list style for preprocess variants and other list overrides.
 ## Project override rule
 - Prefer task-level `task.project_name`.
 - Avoid ad hoc `run.clearml.project_name` overrides in child tasks unless the config explicitly allows them.
+

@@ -10,6 +10,9 @@ from typing import List
 
 DEFAULT_INSTALL_HINT = "uv sync --extra models"
 MODEL_INSTALL_HINTS = {
+    "lgbm": "uv sync --extra lightgbm",
+    "xgboost": "uv sync --extra xgboost",
+    "catboost": "uv sync --extra catboost",
     "tabpfn": "uv sync --extra tabpfn",
 }
 TASK_TYPES = ("regression", "classification")

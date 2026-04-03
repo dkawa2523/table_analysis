@@ -180,6 +180,45 @@ def build_project_name(project_root: str, usecase_id: str, stage: str, *, proces
     return separator.join([root, solution_root, usecase_value, group])
 
 
+def build_pipeline_project_name(
+    project_root: str,
+    *,
+    layout: Mapping[str, Any] | None = None,
+    cfg: Any | None = None,
+) -> str:
+    layout_cfg = dict(layout or _resolve_project_layout(cfg))
+    solution_root = _normalize_str(layout_cfg.get('solution_root')) or 'TabularAnalysis'
+    pipeline_root_group = _normalize_str(layout_cfg.get('pipeline_root_group')) or 'Pipelines'
+    separator = _normalize_str(layout_cfg.get('separator')) or '/'
+    root = (_normalize_str(project_root) or 'MFG').rstrip(separator)
+    return separator.join([root, solution_root, pipeline_root_group])
+
+
+def build_pipeline_child_project_name(
+    project_root: str,
+    usecase_id: str,
+    stage: str,
+    *,
+    process: str | None = None,
+    layout: Mapping[str, Any] | None = None,
+    cfg: Any | None = None,
+) -> str:
+    layout_cfg = dict(layout or _resolve_project_layout(cfg))
+    separator = _normalize_str(layout_cfg.get('separator')) or '/'
+    pipeline_root = build_pipeline_project_name(project_root, layout=layout_cfg)
+    usecase_value = _normalize_str(usecase_id) or 'unknown'
+    process_name = _normalize_str(process) or _infer_process_from_stage(stage)
+    group_map = layout_cfg.get('group_map') if isinstance(layout_cfg.get('group_map'), Mapping) else {}
+    misc_group = _normalize_str(layout_cfg.get('misc_group')) or '99_Misc'
+    group = None
+    if process_name and isinstance(group_map, Mapping):
+        group = _normalize_str(group_map.get(process_name))
+    if not group and isinstance(group_map, Mapping):
+        group = _normalize_str(group_map.get(stage))
+    group = group or misc_group or _normalize_str(stage) or 'unknown'
+    return separator.join([pipeline_root.rstrip(separator), usecase_value, group])
+
+
 def resolve_template_context(
     cfg: Any | None=None,
     *,

@@ -1,23 +1,35 @@
-# 43 ClearML UI Layout Examples
+﻿# 43 ClearML UI Layout Examples
 
-This document provides lightweight examples for checking whether the current UI
-layout is still readable.
+## 目的
 
-## Example project grouping
+このファイルは、ClearML 上で task がどのように並ぶべきかを、軽量な例で確認するためのものです。
+
+## 代表的な project layout
+
 ```text
-<ROOT>/<solution_root>/<usecase_id>/01_Datasets
-<ROOT>/<solution_root>/<usecase_id>/02_Preprocess
-<ROOT>/<solution_root>/<usecase_id>/03_TrainModels
-<ROOT>/<solution_root>/<usecase_id>/00_Pipelines
-<ROOT>/<solution_root>/<usecase_id>/05_Infer
+LOCAL/TabularAnalysis/Pipelines
+LOCAL/TabularAnalysis/<usecase_id>/01_Datasets
+LOCAL/TabularAnalysis/<usecase_id>/02_Preprocess
+LOCAL/TabularAnalysis/<usecase_id>/03_TrainModels
+LOCAL/TabularAnalysis/<usecase_id>/04_Ensembles
+LOCAL/TabularAnalysis/<usecase_id>/05_Infer
+LOCAL/TabularAnalysis/<usecase_id>/05_Infer_Children
 ```
 
-## What to compare
-- Process groups are easy to scan.
-- Pipeline tasks are visually separate from train tasks.
-- Infer child tasks are isolated from the main infer group when present.
-- Dataset and preprocess tasks are not mixed into training groups.
+## 見え方の期待
 
-## Recording differences
-Capture the final decision in the PR description, an operations note, or your
-team's issue tracker.
+- pipeline template と run controller は `Pipelines` 配下に見える
+- child task は usecase ごとの project tree に整理される
+- preprocess と train が混ざらない
+- infer child は親 infer と別 group に分かれる
+
+## operator が見る順番
+
+1. `Pipelines`
+2. 対象 usecase の `01_Datasets`
+3. `02_Preprocess`
+4. `03_TrainModels`
+5. `04_Ensembles`
+6. `05_Infer`
+
+

@@ -4,7 +4,7 @@ from typing import Any
 
 from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _normalize_str
 from ..ops.clearml_identity import (
-    build_template_project_name,
+    build_pipeline_project_name,
     build_template_tags,
     resolve_template_context,
 )
@@ -39,7 +39,7 @@ def is_pipeline_template_name(value: Any) -> bool:
 
 def build_pipeline_template_project_name(cfg: Any) -> str:
     context = resolve_template_context(cfg)
-    return build_template_project_name(context, "pipeline", cfg=cfg)
+    return build_pipeline_project_name(context.project_root, layout=context.layout, cfg=cfg)
 
 
 def build_pipeline_template_tags(

@@ -2,7 +2,6 @@
 model_variant:
   name: svr
   framework: sklearn
-  task_type: regression
   class_path: sklearn.svm.SVR
   params:
     kernel: rbf

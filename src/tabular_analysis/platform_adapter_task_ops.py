@@ -385,6 +385,21 @@ def ensure_clearml_task_tags(task_id: str, tags: Iterable[str]) -> bool:
         raise PlatformAdapterError('ClearML Task.add_tags is not available.')
     adder(missing)
     return True
+
+
+def replace_clearml_task_tags(task_id: str, tags: Iterable[str]) -> bool:
+    normalized = _dedupe_tags(tags)
+    task = _get_clearml_task(task_id)
+    existing = _task_tags(task)
+    if existing == normalized:
+        return False
+    setter = getattr(task, 'set_tags', None)
+    if not callable(setter):
+        raise PlatformAdapterError('ClearML Task.set_tags is not available.')
+    setter(normalized)
+    return True
+
+
 def update_clearml_task_tags(task_id: str, *, add: Iterable[str] | None=None, remove: Iterable[str] | None=None) -> bool:
     add_list = _dedupe_tags(add or [])
     remove_set = set(_dedupe_tags(remove or []))
@@ -656,4 +671,4 @@ def resolve_clearml_task_url(cfg: Any, task_id: str) -> str | None:
     if url:
         return str(url)
     return None
-__all__ = ['clearml_task_exists', 'create_clearml_task', 'list_clearml_tasks_by_tags', 'clearml_task_id', 'clearml_task_tags', 'clearml_task_script', 'clearml_task_status_from_obj', 'clearml_task_type_from_obj', 'clearml_task_project_name', 'find_clearml_task_id_by_tags', 'get_clearml_task_tags', 'get_clearml_task_script', 'get_clearml_task_args', 'clone_clearml_task', 'set_clearml_task_entry_point', 'set_clearml_task_parameters', 'enqueue_clearml_task', 'get_clearml_task_status', 'ensure_clearml_task_tags', 'update_clearml_task_tags', 'ensure_clearml_task_requirements', 'ensure_clearml_task_properties', 'ensure_clearml_task_args', 'reset_clearml_task_args', 'apply_clearml_task_overrides', 'ensure_clearml_task_script', 'get_task_artifact_local_copy', 'resolve_clearml_task_url']
+__all__ = ['clearml_task_exists', 'create_clearml_task', 'list_clearml_tasks_by_tags', 'clearml_task_id', 'clearml_task_tags', 'clearml_task_script', 'clearml_task_status_from_obj', 'clearml_task_type_from_obj', 'clearml_task_project_name', 'find_clearml_task_id_by_tags', 'get_clearml_task_tags', 'get_clearml_task_script', 'get_clearml_task_args', 'clone_clearml_task', 'set_clearml_task_entry_point', 'set_clearml_task_parameters', 'enqueue_clearml_task', 'get_clearml_task_status', 'ensure_clearml_task_tags', 'replace_clearml_task_tags', 'update_clearml_task_tags', 'ensure_clearml_task_requirements', 'ensure_clearml_task_properties', 'ensure_clearml_task_args', 'reset_clearml_task_args', 'apply_clearml_task_overrides', 'ensure_clearml_task_script', 'get_task_artifact_local_copy', 'resolve_clearml_task_url']

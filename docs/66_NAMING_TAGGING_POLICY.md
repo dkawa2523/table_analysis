@@ -1,37 +1,58 @@
-# 66 Naming Tagging Policy
+﻿# 66 Naming Tagging Policy
 
-## Goal
-Task names, tags, and properties should be predictable enough for operators and
-automation to find the right ClearML objects quickly.
+## 目的
 
-## Task names
-- Respect the process name first: `dataset_register`, `preprocess`, `train_model`, `leaderboard`, `infer`, `pipeline`, `retrain`
-- Variant-specific naming is resolved in the shared naming helpers
-- `run.clearml.task_name` may override the visible task name, but should not replace process identity
+task name、tag、property を predictable にして、UI と自動化の両方から追いやすくするためのポリシーです。
 
-## Required tags
-Tags are built by the shared ClearML helpers:
+## task name の原則
+
+- process 名が先頭に来る
+- variant や preprocess は必要なときだけ suffix として足す
+
+例:
+
+- `dataset_register`
+- `preprocess__stdscaler_ohe`
+- `train__stdscaler_ohe__lgbm`
+- `ensemble__stdscaler_ohe__weighted`
+
+## 必須 tag
+
 - `usecase:<usecase_id>`
 - `process:<process>`
 - `schema:<schema_version>`
-- `grid:<grid_run_id>` when present
-- `retrain:<retrain_run_id>` when present
 
-## Optional tags
-- `run.clearml.policy.tags`
-- `run.clearml.policy.extra_tags`
-- `run.clearml.extra_tags`
-- process-specific tags such as `preprocess:<variant>`, `grid_cell:<preprocess>__<model>`, `hpo:<trial>`
+条件付き:
 
-## User properties
-Base properties are built by the shared ClearML helpers:
+- `grid:<grid_run_id>`
+- `retrain:<retrain_run_id>`
+- `preprocess:<variant>`
+- `model:<variant>`
+- `ensemble:<method>`
+
+## template 用 tag
+
+- `template:true`
+- `template_set:<id>`
+- `task_kind:template`
+
+これらは runtime task に残さないのが原則です。
+
+## property
+
+基本 property:
+
 - `usecase_id`
 - `process`
 - `schema_version`
 - `code_version`
 - `platform_version`
-- `grid_run_id`
-- `retrain_run_id` when present
 
-Process-specific properties may add task outputs such as `processed_dataset_id`,
-`split_hash`, `model_id`, `primary_metric`, or `decision`.
+追加例:
+
+- `processed_dataset_id`
+- `split_hash`
+- `model_id`
+- `primary_metric`
+
+

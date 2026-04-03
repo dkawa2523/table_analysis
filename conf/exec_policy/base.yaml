@@ -17,14 +17,14 @@ queues:
   train_model: ${exec_policy.queues.default}
   train_ensemble: ${exec_policy.queues.default}
   # Queue for heavy models when heavy_model_variants is set.
-  train_model_heavy: gpu
+  train_model_heavy: heavy-model
   leaderboard: ${exec_policy.queues.default}
   infer: ${exec_policy.queues.default}
 
   # Per-model queue overrides, e.g. {lgbm: gpu_queue}.
   model_variants: {}
   # Model variants routed to train_model_heavy by default.
-  heavy_model_variants: []
+  heavy_model_variants: [catboost, xgboost]
 
 # Heavy features are opt-in; pipeline forces them off when false.
 selection:

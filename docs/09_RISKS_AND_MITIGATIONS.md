@@ -1,4 +1,4 @@
-# 09 Risks And Mitigations
+﻿# 09 Risks And Mitigations
 
 This document tracks the main structural risks in the solution repository and
 the mitigation used to keep implementation and operations understandable.
@@ -34,3 +34,4 @@ the mitigation used to keep implementation and operations understandable.
 - Keep canonical operational entry points limited to the current CLI, template tool, and rehearsal runner.
 - Clean generated residue with `tools/cleanup_repo.py`.
 - Remove stale docs and wrappers in the same change instead of leaving historical alternatives behind.
+

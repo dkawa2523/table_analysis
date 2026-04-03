@@ -1,42 +1,82 @@
-# 24_REPORTING (Pipeline Summary Outputs)
+﻿# 24 Reporting
 
-This document describes the pipeline report artifacts produced at the end of a pipeline run.
+## 目的
 
-## Outputs
-- `report.md` (human readable, one-page summary for non-DS users)
-- `report.json` (machine readable summary)
-- `report_links.json` (run_dir and ClearML URLs for each task, when available)
+この repo の reporting は、operator と開発者が「何が起きたか」を task 出力だけで追えるようにすることを目的にしています。
 
-## report.md content (minimum)
-- Conclusion: `grid_run_id`, recommended model, primary metric, best score, status
-- Data overview: dataset/schema summary and dataset IDs
-- Comparability: split/recipe hashes, processed_dataset_id, primary metric, direction
-- Top models table (Top N)
-- Recommendation rationale + threshold (when available)
-- Notes: imbalance, calibration, uncertainty status
+## reporting の層
 
-## report.json structure (summary)
-`report.json` mirrors the same information in structured form:
-- `report_version`
+### task local output
+
+各 task は stage directory に report 相当の情報を出します。
+
+### ClearML UI
+
+必要な scalars、plots、tables、artifacts を UI から見られるようにします。
+
+### pipeline summary
+
+pipeline は複数 task の結果を `report.md` / `report.json` に集約します。
+
+## 代表的な report artifact
+
+### preprocess
+
+- `summary.md`
+- `data_quality.json`
+- `data_quality.md`
+
+### train_model
+
+- `metrics.json`
+- plots / scalars
+
+### leaderboard
+
+- `leaderboard.csv`
+- `recommendation.json`
+- `summary.md`
+
+### pipeline
+
+- `report.md`
+- `report.json`
+- `report_links.json`
+- `run_summary.json`
+
+## report.md と report.json の使い分け
+
+### `report.md`
+
+- 人が読む要約
+- operator 向け
+
+### `report.json`
+
+- 機械可読の summary
+- automation / regression check 向け
+
+## pipeline report で必ず見たい項目
+
 - `grid_run_id`
 - `status`
-- `summary` (recommended_model_id, primary_metric, best_score, models_tried, planned/executed jobs, rationale)
-- `dataset` (raw_dataset_id, processed_dataset_id, rows, feature_columns, target_column, id/drop columns)
-- `data_quality` (summary when available)
-- `split` (preprocess_variant, split_hash, recipe_hash, split settings)
-- `comparability` (require_comparable, split_hash, recipe_hash, direction, task_type)
-- `top_models` (rank, model_variant, preprocess_variant, best_score, metric)
-- `recommendation` (model_id, train_task_ref, primary_metric, direction, thresholding/calibration/imbalance/uncertainty)
-- `notes` (capabilities status)
-- `next_actions` (operator guidance)
+- `recommended_train_task_id`
+- `infer_model_id`
+- `primary_metric`
+- `best_score`
+- `planned_jobs`
+- `executed_jobs`
+- `skipped_due_to_policy`
 
-## report_links.json
-`report_links.json` provides a quick navigation index:
-- `pipeline`, `dataset_register` (optional), `preprocess` (list), `train` (list), `leaderboard`, `infer`
-- `dataset_register` は pipeline が dataset_register を含めないため null になる場合がある。
-- Each entry includes `run_dir`, optional `task_id`, and `clearml_url` when ClearML is enabled.
+## partial failure の扱い
 
-## ClearML integration (optional)
-When ClearML is enabled and reporting APIs are available, the pipeline report markdown is also published to
-ClearML (in addition to being uploaded as artifacts). If ClearML is disabled or reporting is unavailable, the
-behavior is a no-op and only local artifacts are produced.
+pipeline は stopped / skipped / partial failure の情報も `run_summary.json` と `report.json` に残します。  
+途中で止まっても「どこまで完了したか」が分かることを重視しています。
+
+## 関連ドキュメント
+
+- [24_REPORTING.md](24_REPORTING.md)
+- [51_CLEARML_PLOTS_SCALARS_DEBUGSAMPLES_CONTRACT.md](51_CLEARML_PLOTS_SCALARS_DEBUGSAMPLES_CONTRACT.md)
+- [60_PIPELINE_TRAIN_CONTRACT.md](60_PIPELINE_TRAIN_CONTRACT.md)
+
+

@@ -1,50 +1,71 @@
-# 25_ALERTING (Operational Notifications)
+﻿# 25 Alerting
 
-## Goals
-- Provide a reliable alert trail for operations (quality, drift, lifecycle events).
-- Keep dependencies minimal: file logger by default, optional stdout/webhook.
-- Surface alert state in ClearML tags/properties when ClearML is enabled.
+## 目的
 
-## Configuration (Hydra)
-Enable alerting explicitly:
+alerting は、運用上の重要イベントを見落としにくくするための補助層です。  
+重い監視基盤を前提にせず、まずは file / stdout / webhook を揃えています。
+
+## 何を alert にするか
+
+- data quality fail
+- drift warning / fail
+- retrain trigger
+- pipeline degraded result
+- recommendation の重要変更
+
+## 設定
+
 ```bash
 run.alerts.enabled=true
 ```
 
-Available settings (defaults in `conf/run/alerts/base.yaml`):
-- `run.alerts.enabled` (default: false)
-- `run.alerts.sinks.file.enabled` (default: true)
-- `run.alerts.sinks.file.path` (default: null)
-- `run.alerts.sinks.stdout.enabled` (default: false)
-- `run.alerts.sinks.webhook.enabled` (default: false)
-- `run.alerts.sinks.webhook.url` (default: null)
-- `run.alerts.sinks.webhook.timeout_sec` (default: 5)
+主な設定:
 
-## Sinks
-### File (default)
-- JSONL output
-- Default path: `<run.output_dir>/<stage>/alerts.jsonl`
-- Override with `run.alerts.sinks.file.path`
+- `run.alerts.sinks.file.enabled`
+- `run.alerts.sinks.file.path`
+- `run.alerts.sinks.stdout.enabled`
+- `run.alerts.sinks.webhook.enabled`
+- `run.alerts.sinks.webhook.url`
 
-### Stdout
-- Prints one JSON line per alert when enabled
+## sink の役割
 
-### Webhook
-- HTTP POST with JSON body
-- Only active when `url` is set and enabled
+### file
 
-## Severity Guidance
-- `info`: recommendation updates, routine operational events
-- `warning`: drift warnings, model underperforming, retrain triggered
-- `error`: data quality gate failures, drift fail threshold exceeded
+- JSONL で保存
+- 最小構成で必ず残したい場合に使う
 
-## ClearML Integration
-When ClearML is enabled, alerts add:
-- tags: `alert:<kind>`, `severity:<level>`
-- properties: `last_alert_kind`, `last_alert_severity`, `last_alert_title`, `last_alert_at`
+### stdout
 
-## Log Format (JSONL)
-Each line includes:
-- `timestamp`, `kind`, `severity`, `title`, `message`
-- Optional `usecase_id`, `process`, `stage`, `task_name`
-- `context` (alert-specific payload)
+- コンテナや CI で読みたいときに使う
+
+### webhook
+
+- 外部通知に流したいときに使う
+
+## alert payload
+
+各行は最低でも次を含みます。
+
+- `timestamp`
+- `kind`
+- `severity`
+- `title`
+- `message`
+- `usecase_id`
+- `process`
+- `context`
+
+## ClearML との関係
+
+ClearML 有効時は補助的に次も残します。
+
+- tags
+  - `alert:<kind>`
+  - `severity:<level>`
+- properties
+  - `last_alert_kind`
+  - `last_alert_severity`
+  - `last_alert_title`
+  - `last_alert_at`
+
+

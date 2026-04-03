@@ -1,44 +1,67 @@
-# 18 Contributing
+﻿# 18 Contributing
 
-## Scope
-This guide documents the minimum workflow for day-to-day development and PRs.
+## 目的
 
-## Setup
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements/base.txt
-pip install -e .
-```
+このガイドは、日常開発で迷わないための最小ルールをまとめたものです。
 
-`uv` alternative:
+## セットアップ
+
+### uv を使う標準手順
+
 ```bash
 uv sync --frozen
 ```
 
-Optional model extras:
+optional dependency:
+
 ```bash
-uv sync --extra models
-uv sync --extra tabpfn
+uv sync --frozen --extra lightgbm --extra xgboost --extra catboost
+uv sync --frozen --extra api
 ```
 
-## Pull Request Checklist
-- Explain the intent, scope, and verification status.
-- Update docs when changing UI contracts, config behavior, or operator workflows.
-- Do not commit generated files under `work/`, `artifacts/`, or local ClearML output directories.
+### pip fallback
 
-## Verification
 ```bash
+pip install -r requirements/base.txt
+pip install -e .
+```
+
+## 変更時の原則
+
+- process file は orchestration に寄せる
+- pure helper は `common/` や `registry/` に寄せる
+- ClearML API 呼び出しは adapter / clearml family に寄せる
+- config を変えたら `conf/` と `docs/` を同時に更新する
+
+## PR の最低条件
+
+- 目的と影響範囲を書く
+- 検証コマンドを書く
+- operator 向け挙動が変わるなら docs を更新する
+- generated files を不要に commit しない
+
+## よく使う確認
+
+```bash
+python tools/tests/check_docs_paths.py --repo .
+python tools/tests/test_template_specs.py
+python tools/tests/test_clearml_runtime_contracts.py
 python tools/tests/verify_all.py --quick
 ```
 
-Use the full suite when preparing a release or a larger refactor:
+## docs を更新すべきケース
 
-```bash
-python tools/tests/verify_all.py --full
-```
+- ClearML の見え方が変わる
+- queue / agent / template 運用が変わる
+- 新しい model variant を増やす
+- report / leaderboard の契約が変わる
 
-## Repository Constraints
-- Platform API dependencies stay behind the adapter family modules under `src/tabular_analysis/`.
-- Keep `conf/` and `docs/` in sync when behavior changes.
-- Update `docs/03_CLEARML_UI_CONTRACT.md` when changing visible ClearML behavior.
+## コミット前に見ておきたい場所
+
+- `README.md`
+- `docs/INDEX.md`
+- `docs/65_DEV_GUIDE_DIRECTORY_MAP.md`
+- `docs/81_CLEARML_TEMPLATE_POLICY.md`
+- `docs/82_CLEARML_PROJECT_LAYOUT.md`
+
+

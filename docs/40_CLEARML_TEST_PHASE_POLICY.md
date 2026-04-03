@@ -1,76 +1,94 @@
-# ClearML試験段階ポリシー（固定しない／後で変えやすくする）
+﻿# 40 ClearML Test Phase Policy
 
-このドキュメントは **試験段階**（ローカルClearMLで検証 → 社内ClearMLで微調整）において、
-運用ルールを“固定しない”代わりに、**後で設計判断しやすい**状態を作るための方針です。
+## 目的
 
-## 試験段階で「やらない」こと
+ClearML まわりの変更を、いきなり本番運用へ載せず、段階的に確認するためのテスト方針です。
 
-以下は本番運用で重要ですが、試験段階では **確定しません**。
+## 基本方針
 
-- ClearMLサーバー側の権限設計（RBAC）を固める
-- Queue名／Agent配置の最適化を固める
-- プロジェクト命名則・タグ・Properties を単一仕様に固定する
-- Template Task を組織標準として配布する（ただし作成手順は検討する）
+変更は次の順で確認します。
 
-## 試験段階で「やる」こと（必須）
+1. local
+2. logging
+3. visible template の apply / validate
+4. pipeline_controller
+5. operator UI 確認
 
-### 1) 仕様候補を“並走”できるようにする
+## Phase 1: local
 
-命名やタグの方針は複数案で試し、後で選ぶために、
-コードではなく **yamlのポリシー差し替え**で切り替えられる状態を目指します。
+目的:
 
-例：
-- `run.clearml.project_root`（上位階層の扱い。環境変数で上書き可）
-- `ops/usecase_id_policy`（usecase_idの自動生成ルール）
-- `ops/clearml_policy`（tags/propertiesの最小セット）
+- task ロジックそのものの確認
+- artifact / out.json / manifest の確認
 
-`ops/clearml_policy` で指定できるキー（例）：
-- `run.clearml.policy.tags`
-- `run.clearml.policy.properties`
-- 互換のため `extra_tags` / `extra_properties` も受け付ける
+代表コマンド:
 
-```yaml
-# conf/ops/clearml_policy/test_minimal.yaml
-name: test_minimal
-tags: []
-properties: {}
+```bash
+python tools/tests/smoke_local.py --until pipeline
 ```
 
-dry-run での確認：
-出力される tags/properties も `run.usecase_id_policy` の結果を反映する。
-- `python -m tabular_analysis.ops.print_clearml_identity task=pipeline ops/clearml_policy=test_richer`
-- `python -m tabular_analysis.ops.print_clearml_identity task=pipeline ops/clearml_policy=test_richer --now 20260101_120000`
-- `python -m tabular_analysis.ops.print_clearml_identity task=pipeline ops/clearml_policy=test_richer --json`
+## Phase 2: logging
 
-### 2) 推薦（recommend）と採用の決定は分離
+目的:
 
-試験段階でも、
-- recommendation は **自動**（leaderboardが出す）
-- 採用は **推論時にユーザーが選択**（retrainでは選ばない）
+- ClearML task と artifact が正しく見えるか
+- HyperParameters / tags / properties の確認
 
-を守ります。
+代表コマンド:
 
-### 3) ClearMLの情報量は増やしすぎない
+```bash
+python tools/rehearsal/run_pipeline_v2.py \
+  --execution logging \
+  --task-type regression \
+  --project-root LOCAL
+```
 
-- properties は **検索用の最小キー**だけ
-- 詳細な説明・根拠・図表は **artifact（report/decision_summary）**へ
+## Phase 3: template refresh
 
-## 試験段階の成果物（必ず残す）
+目的:
 
-試験が進むほど、あとから「どの仕様が良かったか」が重要になります。
-以下を docs/Issue 形式で残します。
+- template metadata drift の検出
+- visible pipeline template の存在確認
 
-- 命名則候補の比較（メリット/デメリット、UI見え方）
-- タグ/Properties候補の比較（検索性、ノイズ）
-- Template Task 運用案の比較（UI clone / pipeline clone / 手動実行）
-- ローカルClearML→社内ClearML差分（修正ポイント）
+代表コマンド:
 
-## 試験段階の“事前リハーサル”
+```bash
+python tools/clearml_templates/manage_templates.py --apply --project-root LOCAL
+python tools/clearml_templates/manage_templates.py --validate --project-root LOCAL
+```
 
-最低限、以下をローカルClearMLで1回通します。
+## Phase 4: pipeline_controller
 
-1. localモード（ClearML無効）で pipeline を完走
-2. loggingモード（ClearML有効・ローカル実行）で pipeline を完走
-3. leaderboard / report / decision_summary / infer で選択を確認
+目的:
 
-手順は `docs/84_REHEARSAL_GUIDE.md` に記載します。
+- controller queue / child queue の動作確認
+- visible template clone 実行の確認
+
+確認点:
+
+- controller は `services`
+- heavy model は `heavy-model`
+- light child は `default`
+
+## Phase 5: operator UI
+
+目的:
+
+- Pipelines タブで template が見える
+- clone / rerun ができる
+- project tree から child task を辿れる
+
+## 推奨 gate
+
+- docs path check
+- template spec test
+- clearml runtime contract test
+- quick verify
+- rehearsal UI verify
+
+## 非推奨
+
+- hidden fallback に頼る
+- template apply を省略して validate だけ回す
+- operator 運用前に logging を飛ばす
+

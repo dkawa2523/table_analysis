@@ -36,6 +36,15 @@ models = [
   "xgboost>=2.0",
   "catboost>=1.2",
 ]
+lightgbm = [
+  "lightgbm>=4.0",
+]
+xgboost = [
+  "xgboost>=2.0",
+]
+catboost = [
+  "catboost>=1.2",
+]
 tabpfn = [
   "tabpfn>=0.1",
 ]

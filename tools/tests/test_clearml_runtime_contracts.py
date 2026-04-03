@@ -173,12 +173,16 @@ def _assert_task_time_extras() -> None:
         raise AssertionError("dataset_register should not request optional extras")
     if resolve_required_uv_extras(task_name="preprocess") != []:
         raise AssertionError("preprocess should not request optional extras")
-    if resolve_required_uv_extras(task_name="train_model", model_variant_name="lgbm") != ["models"]:
-        raise AssertionError("lgbm train should use models extra only")
+    if resolve_required_uv_extras(task_name="train_model", model_variant_name="lgbm") != ["lightgbm"]:
+        raise AssertionError("lgbm train should use lightgbm extra only")
+    if resolve_required_uv_extras(task_name="train_model", model_variant_name="xgboost") != ["xgboost"]:
+        raise AssertionError("xgboost train should use xgboost extra only")
+    if resolve_required_uv_extras(task_name="train_model", model_variant_name="catboost") != ["catboost"]:
+        raise AssertionError("catboost train should use catboost extra only")
     if resolve_required_uv_extras(task_name="train_model", model_variant_name="ridge") != []:
         raise AssertionError("ridge train should not request optional extras")
-    if resolve_required_uv_extras(task_name="infer", model_variant_name="lgbm") != ["models"]:
-        raise AssertionError("lgbm infer should use models extra only")
+    if resolve_required_uv_extras(task_name="infer", model_variant_name="lgbm") != ["lightgbm"]:
+        raise AssertionError("lgbm infer should use lightgbm extra only")
     if resolve_required_uv_extras(task_name="infer", infer_mode="optimize") != ["models", "optuna"]:
         raise AssertionError("optimize infer should add optuna on top of the infer fallback")
 
@@ -241,7 +245,6 @@ def _assert_regression_model_set_contract() -> None:
         "mlp",
         "random_forest",
         "ridge",
-        "svr",
         "xgboost",
     ]
     if variants != expected:
@@ -250,8 +253,8 @@ def _assert_regression_model_set_contract() -> None:
     classification_variants = list_model_variants("classification")
     if "svc" in regression_variants:
         raise AssertionError(f"svc must not be selectable for regression: {regression_variants}")
-    if "svr" not in regression_variants:
-        raise AssertionError(f"svr must remain selectable for regression: {regression_variants}")
+    if "svr" in regression_variants:
+        raise AssertionError(f"svr must not be selectable for canonical regression lists: {regression_variants}")
     if "svc" not in classification_variants:
         raise AssertionError(f"svc must remain selectable for classification: {classification_variants}")
     if "svr" in classification_variants:
@@ -263,7 +266,7 @@ def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
         name = "pipeline"
 
         def get_project_name(self) -> str:
-            return "LOCAL/TabularAnalysis/Test/00_Pipelines"
+            return "LOCAL/TabularAnalysis/Pipelines"
 
     class _FakeTaskApi:
         @staticmethod
@@ -289,7 +292,7 @@ def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
                     "run": {
                         "output_dir": tmpdir,
                         "usecase_id": "fake-usecase",
-                        "clearml": {"project_name": "LOCAL/TabularAnalysis/Test/00_Pipelines"},
+                        "clearml": {"project_name": "LOCAL/TabularAnalysis/Pipelines"},
                     },
                 }
             )
@@ -376,7 +379,7 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
         pipeline_module._build_clearml_pipeline_refs = lambda **kwargs: (None, [], [], [], None, None)
         pipeline_module._build_local_pipeline_run_summary = lambda **kwargs: {"status": "stub"}
         cfg = OmegaConf.create({"run": {"clearml": {"queue_name": "default"}}})
-        ctx = pipeline_module.TaskContext(task=fake_task, project_name="LOCAL/TabularAnalysis/Test/00_Pipelines", task_name="pipeline", output_dir=Path.cwd())
+        ctx = pipeline_module.TaskContext(task=fake_task, project_name="LOCAL/TabularAnalysis/Pipelines", task_name="pipeline", output_dir=Path.cwd())
         summary = pipeline_module._execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id="grid-001")
         if fake_controller.started_with != "local":
             raise AssertionError(f"remote controller should run controller logic in-place: {fake_controller.started_with}")

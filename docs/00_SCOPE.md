@@ -1,21 +1,79 @@
-# 00_SCOPE（スコープ）
+﻿# 00 Scope
 
-この Solution（ml-solution-tabular-analysis）は **テーブル（tabular）データ**の
-学習・比較・推論を、ClearML 上で再利用可能な独立タスクとして提供することを目的とします。
+## この solution の対象
 
-## 対象（in-scope）
-- 入力：CSV/Parquet 等の 2次元テーブル
-- 目的変数：1列（回帰/分類に対応）
-- 基本フロー（個別実行時）：
-  - dataset_register → preprocess（split固定） → train_model（複数） → train_ensemble（任意） → leaderboard → infer
-  - pipeline は上記を一括実行する接着剤で、dataset_register は含めない（`raw_dataset_id` を入力にする）
+`ml-solution-tabular-analysis` は、tabular データを対象にした機械学習 solution repo です。  
+この repo は「表形式データの前処理、学習、比較、推論、ClearML 運用」を一貫して扱うことを目的にしています。
 
-## 重要な方針（不変）
-- **親子タスクを比較目的で作らない**：比較と判断は leaderboard、接着は pipeline（PipelineController の親子関係はこの用途に限定）
-- **比較可能性を壊さない**：split は preprocess の責務。train は再分割しない
-- **追跡性を必須化**：全タスクで config_resolved.yaml / out.json / manifest.json を保存
+## In Scope
 
-## 対象外（out-of-scope）
-- 画像/音声/NLP 等（別 Solution repo を作る）
-- 大規模分散学習
-- 例外的なドメイン固有処理を platform に入れること（禁止）
+この repo が責任を持つ範囲:
+
+- CSV / Parquet を入力にした tabular workflow
+- 回帰 / 二値分類の tabular モデル学習
+- 前処理 recipe と split の再現
+- 単体モデルと ensemble の比較評価
+- leaderboard による推奨モデル選定
+- ClearML による task / artifact / pipeline / model traceability
+- ClearML Pipelines タブを正本とした pipeline template 運用
+- task-time install 前提の再現可能 runtime
+
+## Out Of Scope
+
+この repo の責務ではないもの:
+
+- 画像、音声、NLP など tabular 以外の domain
+- platform 基盤そのものの設計変更
+- 大規模な feature store / online serving 基盤
+- notebook ベースの探索作業の管理
+
+## 重要な設計方針
+
+### 1. task ごとの独立実行
+
+各 task は単体でも実行できることを重視します。
+
+- `dataset_register`
+- `preprocess`
+- `train_model`
+- `train_ensemble`
+- `leaderboard`
+- `infer`
+- `pipeline`
+
+### 2. 一括実行と単体実行の両立
+
+- operator は `pipeline_controller` で一括実行できる
+- 開発者は individual task を単体で確認できる
+
+### 3. traceability を失わない
+
+各 task は少なくとも次を残します。
+
+- `config_resolved.yaml`
+- `out.json`
+- `manifest.json`
+
+ClearML を使う場合は、project、tags、properties、artifacts、HyperParameters でも追跡できることを重視します。
+
+### 4. comparability を明示する
+
+モデル比較は「同じ split、同じ recipe、同じ評価条件」で行う前提です。  
+`split_hash` と `recipe_hash` を比較可能性の中心に据えています。
+
+## この repo の主な利用者
+
+- operator
+  - ClearML UI から template を確認し、clone して pipeline を実行する
+- ML engineer
+  - 前処理、モデル、評価、report を実装・改善する
+- reviewer / newcomer
+  - docs と task 出力から current behavior を理解する
+
+## 関連ドキュメント
+
+- [01_POLYREPO_INTENT.md](01_POLYREPO_INTENT.md)
+- [02_ARCHITECTURE.md](02_ARCHITECTURE.md)
+- [05_PROCESS_CATALOG.md](05_PROCESS_CATALOG.md)
+- [10_OPERATION_MODES.md](10_OPERATION_MODES.md)
+

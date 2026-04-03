@@ -1,5 +1,6 @@
 from __future__ import annotations
 from collections import OrderedDict
+from copy import deepcopy
 from ..common.config_utils import cfg_value as _cfg_value, set_cfg_value as _set_cfg_value, normalize_str as _normalize_str, to_int as _to_int
 from ..common.collection_utils import to_list as _to_list, to_mapping as _to_mapping
 from ..common.dataset_utils import derive_local_raw_dataset_id
@@ -31,9 +32,9 @@ from ..clearml.ui_logger import log_scalar
 from ..platform_adapter_artifacts import upload_artifact
 from ..platform_adapter_clearml_env import clearml_task_type_controller, is_clearml_enabled
 from ..platform_adapter_pipeline import apply_clearml_task_overrides, clone_pipeline_controller, create_pipeline_controller, enqueue_pipeline_controller, load_pipeline_controller_from_task, pipeline_require_clearml_agent, pipeline_step_task_id_ref
-from ..platform_adapter_task import clearml_task_id, report_markdown, set_clearml_task_parameters, update_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
+from ..platform_adapter_task import clearml_task_id, report_markdown, set_clearml_task_parameters, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
-from ..ops.clearml_identity import apply_clearml_identity, build_project_name, build_template_tags, resolve_clearml_metadata, resolve_template_context
+from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_child_project_name, build_pipeline_project_name, build_project_name, resolve_clearml_metadata
 from ..reporting.pipeline_report import build_pipeline_report_bundle
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 _STAGE_BY_TASK = {'dataset_register': '01_dataset_register', 'preprocess': '02_preprocess', 'train_model': '03_train_model', 'train_ensemble': '04_train_ensemble', 'infer': '04_infer', 'leaderboard': '05_leaderboard'}
@@ -108,6 +109,28 @@ _PIPELINE_TEMPLATE_DYNAMIC_KEYS = {
     'infer.train_task_id',
     'infer.mode',
 }
+
+
+def _dedupe_tag_values(values: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _normalize_str(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        deduped.append(text)
+    return deduped
+
+
+def _clone_cfg_for_runtime_overrides(cfg: Any) -> Any:
+    try:
+        from omegaconf import OmegaConf
+    except ImportError:
+        return deepcopy(cfg)
+    if OmegaConf.is_config(cfg):
+        return OmegaConf.create(OmegaConf.to_container(cfg, resolve=False))
+    return deepcopy(cfg)
 
 
 @dataclass(frozen=True)
@@ -547,6 +570,27 @@ def _stage_dir(run_root: Path, task_name: str) -> Path:
     return run_root / _STAGE_BY_TASK[task_name]
 def _clearml_project(cfg: Any, stage: str) -> str:
     return build_project_name(_normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG', _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'unknown', stage, cfg=cfg)
+
+
+def _visible_pipeline_project(cfg: Any) -> str:
+    return build_pipeline_project_name(
+        _normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG',
+        layout=_cfg_value(cfg, 'run.clearml.project_layout'),
+        cfg=cfg,
+    )
+
+
+def _pipeline_child_project(cfg: Any, *, task_name: str, usecase_id: str | None = None) -> str:
+    return build_pipeline_child_project_name(
+        _normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG',
+        usecase_id or _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'unknown',
+        _STAGE_BY_TASK[task_name],
+        process=task_name,
+        layout=_cfg_value(cfg, 'run.clearml.project_layout'),
+        cfg=cfg,
+    )
+
+
 def _resolve_base_task_id(cfg: Any, task_name: str, *, use_templates: bool) -> str:
     if use_templates:
         return resolve_template_task_id(cfg, task_name)
@@ -559,7 +603,50 @@ def _resolve_base_task_id(cfg: Any, task_name: str, *, use_templates: bool) -> s
     if not task or not getattr(task, 'id', None):
         raise RuntimeError(f'Base task not found for {task_name} in {project}')
     return str(task.id)
-def _make_base_task_factory(base_task_id: str, *, project_name: str):
+
+
+def _build_pipeline_step_runtime_identity(*, cfg: Any, step: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    cfg_clone = _clone_cfg_for_runtime_overrides(cfg)
+    task_name = str(step['task_name'])
+    _set_cfg_value(cfg_clone, 'task.name', task_name)
+    for (key, value) in dict(overrides).items():
+        _set_cfg_value(cfg_clone, str(key), value)
+    stage = _STAGE_BY_TASK[task_name]
+    metadata = dict(
+        resolve_clearml_metadata(
+            cfg_clone,
+            stage=stage,
+            task_name=task_name,
+            clearml_enabled=True,
+        )
+    )
+    usecase_id = _normalize_str(metadata.get('usecase_id')) or _normalize_str(_cfg_value(cfg_clone, 'run.usecase_id')) or 'unknown'
+    project_name = _pipeline_child_project(cfg_clone, task_name=task_name, usecase_id=usecase_id)
+    tags = list(metadata.get('tags') or [])
+    preprocess_variant = _normalize_str(step.get('preprocess_variant'))
+    model_variant = _normalize_str(step.get('model_variant'))
+    ensemble_method = _normalize_str(step.get('ensemble_method'))
+    if preprocess_variant:
+        tags.append(f'preprocess:{preprocess_variant}')
+    if model_variant:
+        tags.append(f'model:{model_variant}')
+    if ensemble_method:
+        tags.append(f'ensemble:{ensemble_method}')
+    properties = dict(metadata.get('user_properties') or {})
+    if preprocess_variant:
+        properties['preprocess_variant'] = preprocess_variant
+    if model_variant:
+        properties['model_variant'] = model_variant
+    if ensemble_method:
+        properties['ensemble_method'] = ensemble_method
+    return {
+        'project_name': project_name,
+        'tags': _dedupe_tag_values(tags),
+        'user_properties': properties,
+    }
+
+
+def _make_base_task_factory(base_task_id: str, *, project_name: str, runtime_tags: list[str] | None=None, runtime_properties: Mapping[str, Any] | None=None):
     try:
         from clearml import Task as ClearMLTask
         from clearml.backend_interface.util import get_or_create_project
@@ -588,7 +675,9 @@ def _make_base_task_factory(base_task_id: str, *, project_name: str):
         try:
             task_id = getattr(task, 'id', None) or getattr(task, 'task_id', None)
             if task_id:
-                update_clearml_task_tags(str(task_id), remove=['template:true', 'template:deprecated'])
+                replace_clearml_task_tags(str(task_id), runtime_tags or [])
+                if runtime_properties:
+                    ensure_clearml_task_properties(str(task_id), dict(runtime_properties))
         except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
         return task
@@ -756,7 +845,7 @@ def _build_plan_steps(cfg: Any, *, base_output_dir: Path, grid_run_id: str, run_
                 overrides.update(ensemble_overrides)
                 overrides.update(_build_task_uv_overrides(cfg, task_name='train_ensemble'))
                 step_queue = _select_queue(queues, 'train_ensemble')
-                train_ensemble_steps.append(_step(step_name=step_name, task_name='train_ensemble', run_root=run_root, parents=[step['step_name'] for step in parent_steps], queue=step_queue, overrides=overrides, preprocess_variant=preprocess_variant))
+                train_ensemble_steps.append(_step(step_name=step_name, task_name='train_ensemble', run_root=run_root, parents=[step['step_name'] for step in parent_steps], queue=step_queue, overrides=overrides, preprocess_variant=preprocess_variant, ensemble_method=method))
     if run_leaderboard:
         run_root = _build_run_root(base_output_dir, grid_run_id, 'leaderboard')
         overrides = {'run.output_dir': str(run_root)}
@@ -1042,15 +1131,21 @@ def _configure_clearml_pipeline_controller(*, cfg: Any, plan: Mapping[str, Any],
 def _make_pipeline_controller_base_task_resolver(*, cfg: Any, use_templates: bool):
     template_task_ids: dict[str, str] = {}
 
-    def _base_task_kwargs(task_name: str) -> dict[str, Any]:
+    def _base_task_kwargs(step: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+        task_name = str(step['task_name'])
         task_id = template_task_ids.get(task_name)
         if not task_id:
             task_id = _resolve_base_task_id(cfg, task_name, use_templates=use_templates)
             template_task_ids[task_name] = task_id
-        project_name = _clearml_project(cfg, _STAGE_BY_TASK[task_name])
+        runtime_identity = _build_pipeline_step_runtime_identity(cfg=cfg, step=step, overrides=overrides)
         return {
             'base_task_id': task_id,
-            'base_task_factory': _make_base_task_factory(task_id, project_name=project_name),
+            'base_task_factory': _make_base_task_factory(
+                task_id,
+                project_name=str(runtime_identity['project_name']),
+                runtime_tags=list(runtime_identity.get('tags') or []),
+                runtime_properties=dict(runtime_identity.get('user_properties') or {}),
+            ),
         }
 
     return _base_task_kwargs
@@ -1126,7 +1221,7 @@ def _add_pipeline_controller_step_entries(
             clone_base_task=True,
             cache_executed_step=False,
             execution_queue=step['queue'],
-            **base_task_kwargs(step['task_name']),
+            **base_task_kwargs(step, overrides),
         )
 
 
@@ -1142,14 +1237,18 @@ def _add_clearml_pipeline_steps(*, cfg: Any, plan: Mapping[str, Any], steps: Map
     )
 
 
-def _apply_runtime_pipeline_step_overrides(*, cfg: Any, plan: Mapping[str, Any], controller: Any) -> None:
+def _apply_runtime_pipeline_step_overrides(*, cfg: Any, plan: Mapping[str, Any], controller: Any, use_templates: bool=True) -> None:
+    base_task_kwargs = _make_pipeline_controller_base_task_resolver(cfg=cfg, use_templates=use_templates)
     step_requests = list(_iter_pipeline_controller_step_requests(cfg=cfg, plan=plan, steps=plan['steps']))
     for (step, overrides) in step_requests:
         node = getattr(controller, '_nodes', {}).get(step['step_name'])
         if node is None:
             continue
+        task_kwargs = base_task_kwargs(step, overrides)
         setattr(node, 'parameters', OrderedDict(_build_pipeline_step_parameter_override_payload(overrides)))
         setattr(node, 'queue', step.get('queue'))
+        setattr(node, 'base_task_id', task_kwargs.get('base_task_id'))
+        setattr(node, 'task_factory_func', task_kwargs.get('base_task_factory'))
 def _reset_pipeline_controller_definition(controller: Any) -> None:
     # Controllers reconstructed from Task objects only deserialize the DAG payload.
     # Re-seed the runtime defaults that ClearML's draft serialization expects.
@@ -1271,10 +1370,8 @@ def _resolve_pipeline_template_profile(cfg: Any, plan: Mapping[str, Any]) -> str
 
 
 def _apply_pipeline_run_task_identity(*, task_id: str, cfg: Any, pipeline_profile: str, metadata: Mapping[str, Any]) -> None:
-    template_context = resolve_template_context(cfg)
-    remove_tags = [*build_template_tags('pipeline', context=template_context), 'task_kind:template']
     run_tags = _build_pipeline_template_tags(pipeline_profile, cfg=cfg, task_kind='run')
-    update_clearml_task_tags(task_id, add=[*(metadata.get('tags') or []), *run_tags], remove=remove_tags)
+    replace_clearml_task_tags(task_id, _dedupe_tag_values([*(metadata.get('tags') or []), *run_tags]))
     ensure_clearml_task_tags(task_id, ['pipeline'])
     ensure_clearml_task_properties(task_id, {**dict(metadata.get('user_properties') or {}), **_build_pipeline_template_properties(pipeline_profile, task_kind='run')})
 
@@ -1293,12 +1390,15 @@ def _build_pipeline_launch_summary(*, cfg: Any, plan: Mapping[str, Any], grid_ru
 def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str) -> _VisiblePipelineRunContract:
     plan = _build_pipeline_plan(cfg, grid_run_id, child_execution='logging')
     pipeline_profile = _resolve_pipeline_template_profile(cfg, plan)
-    metadata = resolve_clearml_metadata(
+    metadata = dict(
+        resolve_clearml_metadata(
         cfg,
         stage=getattr(getattr(cfg, 'task', None), 'stage', '99_pipeline'),
         task_name='pipeline',
         clearml_enabled=True,
+        )
     )
+    metadata['project_name'] = _visible_pipeline_project(cfg)
     queue_name = _select_queue(plan['queues'], 'pipeline') or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name')) or 'services'
     return _VisiblePipelineRunContract(
         plan=plan,
@@ -1467,7 +1567,7 @@ def _create_pipeline_controller_runtime_context(cfg: Any) -> TaskContext:
         if task_id:
             try:
                 task = ClearMLTask.get_task(task_id=task_id)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 task = None
     if task is None:
         return _create_local_task_context(cfg, stage=stage, task_name='pipeline')

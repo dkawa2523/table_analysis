@@ -1,45 +1,77 @@
-# 26_REPRODUCIBLE_RUNTIME (Env Snapshot and Lockfile Guide)
+﻿# 26 Reproducible Runtime
 
-This document describes the runtime snapshot artifacts and lockfile workflow used to
-improve reproducibility without changing existing dependency layouts.
+## 目的
 
-## Env snapshot outputs
-Each task captures a runtime snapshot during common initialization and writes:
-- `env.json`: python version, OS/platform details, and solution version (git hash when available)
-- `pip_freeze.txt`: `python -m pip freeze` output (fallbacks to `pip list --format=freeze` when needed)
+この repo では task-time install を維持しつつ、実行ごとの差分を追えるようにしています。  
+その中心は `uv.lock`、task-specific extras、env snapshot です。
 
-These files are written under each task's run directory (for example:
-`outputs/<stage>/env.json`, `outputs/<stage>/pip_freeze.txt`). When ClearML is enabled,
-both files are uploaded as artifacts for UI traceability. When ClearML is disabled,
-the upload step is a no-op but local files are still created.
+## 基本方針
 
-## Lockfile workflow (uv recommended)
-`uv.lock` is the primary lockfile. It is generated from `pyproject.toml` and used by
-ClearML entrypoint bootstrap (`uv sync --frozen` plus task-specific `--extra ...`) for
-stable, repo-side environments.
+- task ごとに独立実行
+- venv は再利用しない
+- `uv` cache は共有する
+- optional dependency は task / model 単位で最小化する
 
-Note: `run.clearml.env.apt_packages` installs **OS libraries** at task runtime via
-`apt-get`. This is **Linux-only** and requires root + apt-get in the agent image.
-Windows environments need a different OS package mechanism (e.g., winget/choco),
-so do not assume apt-based installs there.
+## ローカルの基準
 
-Canonical ClearML agents should preinstall `git`, `clearml-agent`, `uv`, and base OS
-libraries such as `libgomp1`. Task-time bootstrap remains enabled, but it now relies on
-shared `uv` cache rather than startup-time package installation inside each task.
+```bash
+uv sync --frozen
+```
 
-### Update steps
-1. Regenerate the lockfile after dependency changes:
-   ```bash
-   uv lock
-   ```
-2. Sync a reproducible environment locally:
-   ```bash
-   uv sync --frozen
-   ```
-   - For ClearML parity, add only the needed extras such as
-     `uv sync --extra models --frozen` or `uv sync --extra tabpfn --frozen`.
+optional dependency 例:
 
-### Legacy pip lock (optional)
-If you must use pip-only environments, you can still generate a `requirements/lock.txt`
-snapshot. It is not tracked by default and is not used by ClearML templates once uv
-bootstrap is enabled.
+```bash
+uv sync --frozen --extra lightgbm
+uv sync --frozen --extra xgboost
+uv sync --frozen --extra catboost
+```
+
+## ClearML task-time bootstrap
+
+ClearML 側では `tools/clearml_entrypoint.py` が task ごとの extra を解決して `uv sync` を行います。
+
+例:
+
+- `pipeline`, `preprocess`, `leaderboard`
+  - base only
+- `lgbm`
+  - `lightgbm`
+- `xgboost`
+  - `xgboost`
+- `catboost`
+  - `catboost`
+
+## Agent 側の前提
+
+- `uv` binary は agent image に入れておく
+- `UV_CACHE_DIR=/root/.clearml/uv-cache`
+- `/root/.clearml` は volume 共有
+- container は `init: true`
+
+## snapshot artifact
+
+各 task は runtime snapshot を残します。
+
+- `env.json`
+- `pip_freeze.txt`
+
+これらは local file にも ClearML artifact にも残ります。
+
+## lockfile 更新
+
+依存を変えたとき:
+
+```bash
+uv lock
+```
+
+## pip fallback
+
+pip-only 環境では次を使います。
+
+```bash
+pip install -r requirements/base.txt
+pip install -e .
+```
+
+

@@ -1,17 +1,38 @@
-# 54 ClearML Minimality Guide
+﻿# 54 ClearML Minimality Guide
 
-## Goal
-Keep ClearML behavior understandable by avoiding duplicated policy and scattered
-API calls.
+## 目的
 
-## Rules
-1. Keep ClearML API calls inside the adapter family modules and `src/tabular_analysis/clearml/`.
-2. Keep process files focused on orchestration and domain logic.
-3. Prefer one canonical config path over compatibility aliases.
-4. Prefer explicit task/artifact contracts over runtime fallback behavior.
+ClearML 対応コードが散らかるのを防ぐための設計ガイドです。
 
-## Main ownership
-- `platform_adapter_*`: task, artifact, model, pipeline, and environment helpers
-- `clearml/hparams.py`: HyperParameters sections
-- `clearml/templates.py`: template lookup
-- `clearml/ui_logger.py`: UI logging helpers
+## 原則
+
+1. ClearML API 呼び出しは adapter family か `src/tabular_analysis/clearml/` に寄せる
+2. process file は orchestration と domain logic に集中させる
+3. compatibility alias より canonical contract を優先する
+4. hidden fallback より fail-fast を優先する
+
+## どこに何を書くか
+
+### process file
+
+- task の流れ
+- domain の判断
+
+### adapter family
+
+- Task / artifact / project / queue / script / model / env の接続
+
+### clearml package
+
+- template
+- hparams
+- pipeline template
+- UI logger
+
+## やってはいけないこと
+
+- 同じ tag 生成を複数ファイルに書く
+- process 本体から ClearML SDK を直接散発的に呼ぶ
+- template lookup に曖昧な fallback を足す
+
+

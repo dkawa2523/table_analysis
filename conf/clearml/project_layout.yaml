@@ -1,5 +1,6 @@
 # @package run.clearml.project_layout
 solution_root: "TabularAnalysis"
+pipeline_root_group: "Pipelines"
 separator: "/"
 group_map:
   dataset_register: "01_Datasets"

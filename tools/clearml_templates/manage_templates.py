@@ -29,6 +29,7 @@ from tabular_analysis.clearml.pipeline_templates import (
 )
 from tabular_analysis.common.hydra_config import compose_config
 from tabular_analysis.platform_adapter_clearml_env import clearml_script_mismatches, resolve_clearml_script_spec
+from tabular_analysis.platform_adapter_core import _ensure_clearml_project_system_tags, _get_clearml_project_system_tags
 from tabular_analysis.platform_adapter_pipeline import (
     create_pipeline_draft_controller,
     load_pipeline_controller_from_task,
@@ -70,6 +71,7 @@ class PlanContext:
     schema_version: str
     template_set_id: str
     solution_root: str
+    pipeline_root_group: str
     group_map: dict[str, str]
 
 
@@ -106,10 +108,12 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
     run_cfg_path = repo_root / "conf" / "run" / "base.yaml"
     layout_cfg_path = repo_root / "conf" / "clearml" / "project_layout.yaml"
     solution_root = "TabularAnalysis"
+    pipeline_root_group = "Pipelines"
     group_map: dict[str, str] = {}
     if layout_cfg_path.exists():
         layout_cfg = OmegaConf.load(layout_cfg_path)
         solution_root = str(getattr(layout_cfg, "solution_root", None) or solution_root)
+        pipeline_root_group = str(getattr(layout_cfg, "pipeline_root_group", None) or pipeline_root_group)
         raw_group_map = getattr(layout_cfg, "group_map", None)
         if raw_group_map is not None:
             rendered_group_map = OmegaConf.to_container(raw_group_map, resolve=False)
@@ -122,6 +126,7 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
             schema_version="v1",
             template_set_id="default",
             solution_root=solution_root,
+            pipeline_root_group=pipeline_root_group,
             group_map=group_map,
         )
     cfg = OmegaConf.load(run_cfg_path)
@@ -132,6 +137,7 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
         schema_version=str(template_ctx.schema_version),
         template_set_id=str(template_ctx.template_set_id),
         solution_root=solution_root,
+        pipeline_root_group=pipeline_root_group,
         group_map=group_map,
     )
 
@@ -176,6 +182,7 @@ def _load_templates(spec_path: Path, ctx: PlanContext) -> list[TemplateSpec]:
         "schema_version": ctx.schema_version,
         "template_set_id": ctx.template_set_id,
         "solution_root": ctx.solution_root,
+        "pipeline_root_group": ctx.pipeline_root_group,
         "group_map": ctx.group_map,
     }
     specs: list[TemplateSpec] = []
@@ -267,6 +274,7 @@ def _plan_output(spec_path: Path, ctx: PlanContext, templates: list[TemplateSpec
             "schema_version": ctx.schema_version,
             "template_set_id": ctx.template_set_id,
             "solution_root": ctx.solution_root,
+            "pipeline_root_group": ctx.pipeline_root_group,
             "group_map": ctx.group_map,
         },
         "templates": [
@@ -479,6 +487,20 @@ def _deprecate_template_task(task_id: str) -> None:
     update_clearml_task_tags(str(task_id), add=["template:deprecated"])
 
 
+def _ensure_pipeline_template_project(task_id: str, project_name: str) -> None:
+    task = _load_clearml_task(task_id)
+    setter = getattr(task, "set_project", None)
+    if callable(setter):
+        setter(project_name=str(project_name))
+    refreshed = _load_clearml_task(task_id)
+    actual_project = clearml_task_project_name(refreshed)
+    if str(actual_project or "") != str(project_name):
+        raise RuntimeError(
+            f"Pipeline template project drifted after draft creation: {actual_project!r} != {project_name!r}"
+        )
+    _ensure_clearml_project_system_tags(project_name, ["pipeline"], remove_tags=["hidden"])
+
+
 def _upsert_standard_template(
     resolved: ResolvedTemplateSpec,
     *,
@@ -613,6 +635,7 @@ def _upsert_pipeline_template(
     ensure_clearml_task_tags(task_id, resolved.expected_tags)
     ensure_clearml_task_properties(task_id, resolved.expected_properties)
     build_pipeline_template_draft(cfg=cfg, controller=controller, pipeline_profile=spec.name)
+    _ensure_pipeline_template_project(task_id, spec.project_name)
     lock_templates[spec.name] = {
         "task_id": task_id,
         "project_name": spec.project_name,
@@ -709,6 +732,9 @@ def _validate_templates(
             task_type = (clearml_task_type_from_obj(task) or "").lower()
             if "controller" not in task_type:
                 errors.append(f"{spec.name}: task type must be controller, got {task_type or 'unknown'}")
+            project_system_tags = set(_get_clearml_project_system_tags(spec.project_name))
+            if "pipeline" not in project_system_tags:
+                errors.append(f"{spec.name}: project system tags missing 'pipeline' for {spec.project_name!r}")
         actual_tags = set(clearml_task_tags(task))
         missing_tags = [tag for tag in resolved.expected_tags if tag not in actual_tags]
         if missing_tags:
@@ -760,6 +786,7 @@ def main() -> int:
         schema_version=str(args.schema_version or defaults.schema_version),
         template_set_id=str(args.template_set_id or defaults.template_set_id),
         solution_root=str(defaults.solution_root),
+        pipeline_root_group=str(defaults.pipeline_root_group),
         group_map=dict(defaults.group_map),
     )
 

@@ -94,7 +94,7 @@ templates:
       schema_version: "{schema_version}"
 
   train_model_full:
-    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[pipeline]}"
+    project_name: "{project_root}/{solution_root}/{pipeline_root_group}"
     task_name_template: "train_model_full"
     entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
     default_overrides:
@@ -129,7 +129,7 @@ templates:
       pipeline_profile: "train_model_full"
 
   train_ensemble_full:
-    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[pipeline]}"
+    project_name: "{project_root}/{solution_root}/{pipeline_root_group}"
     task_name_template: "train_ensemble_full"
     entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
     default_overrides:
@@ -213,7 +213,7 @@ templates:
       schema_version: "{schema_version}"
 
   pipeline:
-    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[pipeline]}"
+    project_name: "{project_root}/{solution_root}/{pipeline_root_group}"
     task_name_template: "pipeline"
     entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
     default_overrides:

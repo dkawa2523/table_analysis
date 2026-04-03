@@ -35,7 +35,7 @@ def create_pipeline_controller(cfg: Any, *, name: str | None=None, tags: Iterabl
     _apply_clearml_system_tags(task, ['pipeline'])
     if tag_list:
         _apply_clearml_tags(task, tag_list)
-    project_name = _cfg_value(cfg, 'run.clearml.project_name') or controller_project or getattr(task, 'project', None)
+    project_name = controller_project or _cfg_value(cfg, 'run.clearml.project_name') or getattr(task, 'project', None)
     _ensure_clearml_project_system_tags(project_name, ['pipeline'], remove_tags=['hidden'])
     if properties:
         platform_clearml = _load_clearml_module(clearml_enabled=True)
@@ -89,15 +89,20 @@ def create_pipeline_draft_controller(*, project_name: str, task_name: str, modul
     else:
         kwargs['script'] = script
     try:
-        return PipelineController.create(**kwargs)
+        controller = PipelineController.create(**kwargs)
     except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
         raise PlatformAdapterError(f'Failed to create visible pipeline draft: {exc}') from exc
+    task = _resolve_clearml_task(controller)
+    _apply_clearml_task_type(task, clearml_task_type_controller())
+    _apply_clearml_system_tags(task, ['pipeline'])
+    _ensure_clearml_project_system_tags(project_name, ['pipeline'], remove_tags=['hidden'])
+    return controller
 
 
 def clone_pipeline_controller(*, source_task_id: str, task_name: str | None=None, project_name: str | None=None, parent_task_id: str | None=None) -> Any:
     PipelineController = _load_visible_pipeline_controller_class()
     try:
-        return PipelineController.clone(
+        controller = PipelineController.clone(
             str(source_task_id),
             name=str(task_name) if task_name else None,
             parent=str(parent_task_id) if parent_task_id else None,
@@ -105,6 +110,12 @@ def clone_pipeline_controller(*, source_task_id: str, task_name: str | None=None
         )
     except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
         raise PlatformAdapterError(f'Failed to clone pipeline controller: {exc}') from exc
+    if project_name:
+        _ensure_clearml_project_system_tags(project_name, ['pipeline'], remove_tags=['hidden'])
+    task = _resolve_clearml_task(controller)
+    _apply_clearml_task_type(task, clearml_task_type_controller())
+    _apply_clearml_system_tags(task, ['pipeline'])
+    return controller
 
 
 def enqueue_pipeline_controller(target: Any, queue_name: str, *, force: bool=False) -> Any:

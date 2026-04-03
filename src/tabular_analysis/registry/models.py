@@ -10,15 +10,15 @@ _OPTIONAL_IMPORT_ERRORS = (ImportError, ModuleNotFoundError)
 _MODEL_BUILD_RECOVERABLE_ERRORS = (AttributeError, RuntimeError, TypeError, ValueError)
 _OMEGACONF_RECOVERABLE_ERRORS = (OSError, RuntimeError, TypeError, ValueError)
 OPTIONAL_DEPENDENCIES = {
-    "lightgbm": "models",
-    "xgboost": "models",
-    "catboost": "models",
+    "lightgbm": "lightgbm",
+    "xgboost": "xgboost",
+    "catboost": "catboost",
     "tabpfn": "tabpfn",
 }
 _OPTIONAL_VARIANT_EXTRAS = {
-    "lgbm": "models",
-    "xgboost": "models",
-    "catboost": "models",
+    "lgbm": "lightgbm",
+    "xgboost": "xgboost",
+    "catboost": "catboost",
     "tabpfn": "tabpfn",
 }
 _CLASS_PATH_TASK_TYPE_OVERRIDES = {

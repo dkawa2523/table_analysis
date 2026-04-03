@@ -1,4 +1,4 @@
-# 03_CLEARML_UI_CONTRACT（ClearML UI 契約）
+﻿# 03_CLEARML_UI_CONTRACT（ClearML UI 契約）
 
 このドキュメントは **非DSユーザーが ClearML UI だけで判断できる**ための契約です。
 
@@ -18,7 +18,8 @@
 - `MFG/TabularAnalysis/test_toy_20260101_120000/04_Ensembles`
 - `MFG/TabularAnalysis/test_toy_20260101_120000/05_Infer`
 - `MFG/TabularAnalysis/test_toy_20260101_120000/05_Infer_Children`（batch/optimize の child）
-- `MFG/TabularAnalysis/test_toy_20260101_120000/00_Pipelines`（leaderboard もここに配置）
+- `MFG/TabularAnalysis/Pipelines`（visible controller template / run）
+- `MFG/TabularAnalysis/Pipelines/test_toy_20260101_120000/05_Leaderboard`
 
 ## Task 名（推奨）
 `<process>__<variant>__v<schema_version>`
@@ -86,3 +87,4 @@
 - デフォルトは軽い図（重要度・残差など）
 - 例: `feature_importance.png`, `residuals.png`, `confusion_matrix.png`, `roc_curve.png`
 - SHAP 等の重い可視化は config フラグでオンデマンド（デフォルトOFF）
+

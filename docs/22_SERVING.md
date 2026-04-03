@@ -1,4 +1,4 @@
-# Serving (Optional FastAPI)
+﻿# Serving (Optional FastAPI)
 
 This repository includes a lightweight serving skeleton for integrating a trained
 `model_bundle.joblib` into an API. FastAPI/uvicorn are optional extras and are
@@ -47,3 +47,4 @@ curl -X POST "http://localhost:8000/predict" \
 
 - `strict_schema=False` (default): coerce types and continue with warnings.
 - `strict_schema=True`: return HTTP 422 if schema issues are found.
+

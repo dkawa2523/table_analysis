@@ -1,22 +1,59 @@
-# 01_POLYREPO_INTENT（なぜポリレポか）
+﻿# 01 Polyrepo Intent
 
-本プロジェクトは polyrepo 方針に従い、
-**Platform（共通基盤）と Solution（用途別製品）を分離**します。
+## 背景
 
-## Platform（ml-platform）の役割
-- ClearML / Hydra / Artifacts の「契約」と共通ユーティリティ
-- 実行モード（local / logging / agent / clone）
-- manifest/out.json/hash の生成など、全 Solution に共通な追跡性
-- registry interface（拡張点の型）
+このプロジェクトは polyrepo 前提で構成されています。  
+理由は、platform の汎用責務と solution の domain 責務を分け、solution ごとの進化を速くするためです。
 
-> 本 Solution は、Platform へ domain 固有ロジックを入れません（禁止）。
+## repository の分担
 
-## Solution（ml-solution-tabular-analysis）の役割
-- tabular 固有の前処理、モデル、評価、推論モード
-- tabular の pipeline（どのタスクをどう繋ぐか）
-- 非DS向けの運用手順（ClearML 上での見え方と判断導線）
+### `ml_platform`
 
-## ポリレポのメリット
-- ClearML 上で「どの用途のタスクか」が URL と Project 階層で一瞬で判別できる
-- 変更影響範囲が小さい（レビュー・CI・リリースが軽い）
-- Solution が増えても兄弟 repo を増やすだけでスケールできる
+platform repo は次を担当します。
+
+- 共通 runtime
+- Hydra / ClearML の基盤
+- artifact / manifest / hashing の共通処理
+- 汎用 adapter や utility
+
+### `ml-solution-tabular-analysis`
+
+solution repo は次を担当します。
+
+- tabular ドメインの task 実装
+- tabular 向け前処理
+- model registry と model set
+- leaderboard / infer / reporting
+- ClearML UI 契約と operator 運用
+
+## なぜ mono-repo にしないのか
+
+polyrepo にしている理由:
+
+- platform の release と solution の改善を分けたい
+- domain 固有ロジックを solution 側で素早く変更したい
+- ClearML 運用の UI 契約を solution 側で閉じたい
+
+## 実装上の原則
+
+### platform API への依存は adapter family 経由
+
+solution の process や registry から platform を直接広く参照しないようにしています。  
+接続面は `platform_adapter_*.py` に寄せています。
+
+### platform へ戻すべきものは戻す
+
+tabular 固有でない helper が増えたら platform へ戻す候補です。  
+ただし、solution でしか意味がない UI 契約や運用ロジックは solution 側に残します。
+
+### docs も polyrepo 前提
+
+platform の概念説明は platform 側、tabular 固有の挙動は solution 側の docs に置きます。
+
+## この repo で読むべき場所
+
+- solution の入口: `README.md`
+- code の地図: [65_DEV_GUIDE_DIRECTORY_MAP.md](65_DEV_GUIDE_DIRECTORY_MAP.md)
+- platform との接点: [13_PLATFORM_INTEGRATION.md](13_PLATFORM_INTEGRATION.md)
+
+
