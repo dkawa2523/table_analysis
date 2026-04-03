@@ -15,6 +15,12 @@ OPTIONAL_DEPENDENCIES = {
     "catboost": "models",
     "tabpfn": "tabpfn",
 }
+_OPTIONAL_VARIANT_EXTRAS = {
+    "lgbm": "models",
+    "xgboost": "models",
+    "catboost": "models",
+    "tabpfn": "tabpfn",
+}
 _CLASS_PATH_TASK_TYPE_OVERRIDES = {
     "sklearn.linear_model.LogisticRegression": "classification",
     "sklearn.linear_model.ElasticNet": "regression",
@@ -208,3 +214,10 @@ def list_model_variants(task_type: str | None = None) -> list[str]:
         seen.add(name)
         variants.append(name)
     return variants
+
+
+def resolve_model_variant_optional_extra(model_variant_name: str | None) -> str | None:
+    name = str(model_variant_name).strip() if model_variant_name is not None else ""
+    if not name:
+        return None
+    return _OPTIONAL_VARIANT_EXTRAS.get(name) or OPTIONAL_DEPENDENCIES.get(name)

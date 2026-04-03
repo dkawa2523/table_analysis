@@ -22,14 +22,30 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from tabular_analysis.ops.clearml_identity import resolve_template_context
+from tabular_analysis.clearml.pipeline_templates import (
+    build_pipeline_template_properties,
+    build_pipeline_template_tags,
+    is_pipeline_template_name,
+)
+from tabular_analysis.common.hydra_config import compose_config
 from tabular_analysis.platform_adapter_clearml_env import resolve_clearml_script_spec
+from tabular_analysis.platform_adapter_pipeline import (
+    create_pipeline_draft_controller,
+    load_pipeline_controller_from_task,
+)
 from tabular_analysis.platform_adapter_task import (
     clearml_task_exists,
+    clearml_task_id,
+    clearml_task_project_name,
     create_clearml_task,
+    clearml_task_type_from_obj,
     ensure_clearml_task_properties,
+    reset_clearml_task_args,
     ensure_clearml_task_script,
     ensure_clearml_task_tags,
+    update_clearml_task_tags,
 )
+from tabular_analysis.processes.pipeline import build_pipeline_template_draft
 
 
 @dataclass(frozen=True)
@@ -51,6 +67,19 @@ class PlanContext:
     template_set_id: str
     solution_root: str
     group_map: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ResolvedTemplateSpec:
+    spec: TemplateSpec
+    module: str | None
+    script: str | None
+    entry_args: list[str]
+    overrides: list[str]
+    expected_tags: list[str]
+    expected_properties: dict[str, Any]
+    script_spec: Any
+    cfg: Any | None = None
 
 
 def _repo_root() -> Path:
@@ -331,9 +360,258 @@ def _normalized_args(args: Iterable[str]) -> list[str]:
     return normalized
 
 
+def _arg_pairs(args: Iterable[str]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for item in _normalized_args(args):
+        key, value = item.split("=", 1)
+        pairs.append((str(key), str(value)))
+    return pairs
+
+
+def _is_pipeline_template(spec: TemplateSpec) -> bool:
+    return is_pipeline_template_name(spec.name)
+
+
+def _compose_pipeline_template_cfg(repo_root: Path, spec: TemplateSpec, ctx: PlanContext, *, entry_args: list[str]) -> Any:
+    config_dir = repo_root / "conf"
+    overrides = [
+        *entry_args,
+        *spec.default_overrides,
+        f"run.clearml.project_root={ctx.project_root}",
+        f"run.clearml.template_usecase_id={ctx.usecase_id}",
+        f"run.clearml.template_set_id={ctx.template_set_id}",
+        f"run.schema_version={ctx.schema_version}",
+        f"run.usecase_id={ctx.usecase_id}",
+        f"run.clearml.project_name={spec.project_name}",
+        f"run.clearml.task_name={spec.task_name_template}",
+    ]
+    return compose_config(config_dir, "config", overrides)
+
+
+def _load_clearml_task(task_id: str) -> Any:
+    try:
+        from clearml import Task as ClearMLTask
+    except ImportError as exc:
+        raise RuntimeError("clearml is required to inspect template tasks.") from exc
+    return ClearMLTask.get_task(task_id=str(task_id))
+
+
+def _task_name(task: Any) -> str | None:
+    value = getattr(task, "name", None) or getattr(task, "task_name", None)
+    return str(value) if value else None
+
+
+def _task_user_properties(task: Any) -> dict[str, Any]:
+    getter = getattr(task, "get_user_properties", None)
+    if callable(getter):
+        try:
+            payload = getter()
+        except Exception:
+            payload = None
+        if isinstance(payload, Mapping):
+            normalized: dict[str, Any] = {}
+            for key, value in payload.items():
+                if isinstance(value, Mapping) and "value" in value:
+                    normalized[str(key)] = value.get("value")
+                else:
+                    normalized[str(key)] = value
+            return normalized
+    data = getattr(task, "data", None)
+    execution = getattr(data, "execution", None) if data is not None else None
+    user_properties = getattr(execution, "user_properties", None) if execution is not None else None
+    if isinstance(user_properties, Mapping):
+        return {str(key): value.get("value") if isinstance(value, Mapping) and "value" in value else value for key, value in user_properties.items()}
+    return {}
+
+
+def _resolve_template_spec(
+    spec: TemplateSpec,
+    *,
+    ctx: PlanContext,
+    repo_root: Path,
+    repo: str | None,
+    branch: str | None,
+    version_mode: str | None,
+    cfg: Any | None = None,
+) -> ResolvedTemplateSpec:
+    module, script, entry_args = _parse_entrypoint(spec.entrypoint)
+    entry_point = f"-m {module}" if module else script
+    resolved_cfg = cfg
+    if resolved_cfg is None and _is_pipeline_template(spec):
+        resolved_cfg = _compose_pipeline_template_cfg(repo_root, spec, ctx, entry_args=entry_args)
+    spec_cfg = resolved_cfg if resolved_cfg is not None else {"run": {"clearml": {"code_ref": {"mode": version_mode}}}}
+    script_spec = resolve_clearml_script_spec(
+        spec_cfg,
+        entry_point_override=entry_point,
+        repo_override=repo,
+        branch_override=branch,
+        version_mode_override=version_mode,
+        task_name_override="pipeline" if _is_pipeline_template(spec) else spec.name,
+        canonicalize_pipeline=False,
+    )
+    expected_tags = build_pipeline_template_tags(spec.name, cfg=resolved_cfg) if _is_pipeline_template(spec) else list(spec.tags)
+    expected_properties = dict(spec.properties_minimal)
+    if _is_pipeline_template(spec):
+        expected_properties.update(build_pipeline_template_properties(spec.name))
+    return ResolvedTemplateSpec(
+        spec=spec,
+        module=module,
+        script=script,
+        entry_args=entry_args,
+        overrides=_normalized_args([*entry_args, *spec.default_overrides]),
+        expected_tags=expected_tags,
+        expected_properties=expected_properties,
+        script_spec=script_spec,
+        cfg=resolved_cfg,
+    )
+
+
+def _deprecate_template_task(task_id: str) -> None:
+    update_clearml_task_tags(str(task_id), add=["template:deprecated"])
+
+
+def _upsert_standard_template(
+    resolved: ResolvedTemplateSpec,
+    *,
+    lock_templates: dict[str, Any],
+    now: str,
+) -> None:
+    spec = resolved.spec
+    existing = lock_templates.get(spec.name) if isinstance(lock_templates, dict) else None
+    existing_id = existing.get("task_id") if isinstance(existing, dict) else None
+    task_id: str | None = None
+    if existing_id:
+        try:
+            clearml_task_exists(str(existing_id))
+            changes: list[str] = []
+            if reset_clearml_task_args(str(existing_id), resolved.overrides):
+                changes.append("args")
+            if ensure_clearml_task_script(
+                str(existing_id),
+                repo=resolved.script_spec.repository,
+                branch=resolved.script_spec.branch,
+                entry_point=resolved.script_spec.entry_point,
+                working_dir=resolved.script_spec.working_dir,
+                version_num=resolved.script_spec.version_num,
+                diff="",
+            ):
+                changes.append("script")
+            if ensure_clearml_task_tags(str(existing_id), resolved.expected_tags):
+                changes.append("tags")
+            if ensure_clearml_task_properties(str(existing_id), resolved.expected_properties):
+                changes.append("properties")
+            task_id = str(existing_id)
+            if changes:
+                print(f"Update template {spec.name}: {', '.join(changes)}")
+            else:
+                print(f"Reuse template {spec.name}: {existing_id}")
+        except Exception:
+            print(f"Existing task id not found, recreating: {spec.name}")
+    if not task_id:
+        task_id = create_clearml_task(
+            project_name=spec.project_name,
+            task_name=spec.task_name_template,
+            module=resolved.module,
+            script=resolved.script,
+            args=resolved.overrides,
+            repo=resolved.script_spec.repository,
+            branch=resolved.script_spec.branch,
+            tags=resolved.expected_tags,
+            properties=resolved.expected_properties,
+        )
+        ensure_clearml_task_script(
+            task_id,
+            repo=resolved.script_spec.repository,
+            branch=resolved.script_spec.branch,
+            entry_point=resolved.script_spec.entry_point,
+            working_dir=resolved.script_spec.working_dir,
+            version_num=resolved.script_spec.version_num,
+            diff="",
+        )
+        print(f"Created template {spec.name}: {task_id}")
+    lock_templates[spec.name] = {
+        "task_id": task_id,
+        "project_name": spec.project_name,
+        "task_name": spec.task_name_template,
+        "entrypoint": spec.entrypoint,
+        "updated_at": now,
+    }
+
+
+def _upsert_pipeline_template(
+    resolved: ResolvedTemplateSpec,
+    *,
+    lock_templates: dict[str, Any],
+    now: str,
+) -> None:
+    spec = resolved.spec
+    cfg = resolved.cfg
+    if cfg is None:
+        raise RuntimeError(f"Resolved config is missing for pipeline template {spec.name}.")
+    arg_pairs = _arg_pairs(resolved.overrides)
+    existing = lock_templates.get(spec.name) if isinstance(lock_templates, dict) else None
+    existing_id = existing.get("task_id") if isinstance(existing, dict) else None
+    recreate = False
+    task_id: str | None = None
+    controller = None
+    if existing_id:
+        try:
+            task = _load_clearml_task(str(existing_id))
+            task_type = (clearml_task_type_from_obj(task) or "").lower()
+            task_project = clearml_task_project_name(task)
+            if "controller" not in task_type or str(task_project or "") != spec.project_name:
+                recreate = True
+                _deprecate_template_task(str(existing_id))
+            else:
+                controller = load_pipeline_controller_from_task(source_task_id=str(existing_id))
+                task_id = str(existing_id)
+        except Exception:
+            recreate = True
+    if recreate or controller is None or not task_id:
+        controller = create_pipeline_draft_controller(
+            project_name=spec.project_name,
+            task_name=spec.task_name_template,
+            module=resolved.module,
+            script=resolved.script,
+            args=arg_pairs,
+            repo=resolved.script_spec.repository,
+            branch=resolved.script_spec.branch,
+            commit=resolved.script_spec.version_num,
+            working_dir=resolved.script_spec.working_dir,
+        )
+        task_id = clearml_task_id(controller)
+        if not task_id:
+            raise RuntimeError(f"Failed to create pipeline template draft for {spec.name}.")
+        print(f"Created pipeline template {spec.name}: {task_id}")
+    else:
+        reset_clearml_task_args(task_id, resolved.overrides)
+        print(f"Update pipeline template {spec.name}: {task_id}")
+    ensure_clearml_task_script(
+        task_id,
+        repo=resolved.script_spec.repository,
+        branch=resolved.script_spec.branch,
+        entry_point=resolved.script_spec.entry_point,
+        working_dir=resolved.script_spec.working_dir,
+        version_num=resolved.script_spec.version_num,
+        diff="",
+    )
+    ensure_clearml_task_tags(task_id, resolved.expected_tags)
+    ensure_clearml_task_properties(task_id, resolved.expected_properties)
+    build_pipeline_template_draft(cfg=cfg, controller=controller, pipeline_profile=spec.name)
+    lock_templates[spec.name] = {
+        "task_id": task_id,
+        "project_name": spec.project_name,
+        "task_name": spec.task_name_template,
+        "entrypoint": spec.entrypoint,
+        "updated_at": now,
+    }
+
+
 def _apply_templates(
     templates: list[TemplateSpec],
     *,
+    ctx: PlanContext,
+    repo_root: Path,
     lock_path: Path,
     repo: str | None,
     branch: str | None,
@@ -344,109 +622,98 @@ def _apply_templates(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     for spec in templates:
-        module, script, entry_args = _parse_entrypoint(spec.entrypoint)
-        entry_point = f"-m {module}" if module else script
-        spec_cfg = {"run": {"clearml": {"code_ref": {"mode": version_mode}}}}
-        script_spec = resolve_clearml_script_spec(
-            spec_cfg,
-            entry_point_override=entry_point,
-            repo_override=repo,
-            branch_override=branch,
-            version_mode_override=version_mode,
-            task_name_override=spec.name,
-            canonicalize_pipeline=False,
+        resolved = _resolve_template_spec(
+            spec,
+            ctx=ctx,
+            repo_root=repo_root,
+            repo=repo,
+            branch=branch,
+            version_mode=version_mode,
         )
-
-        existing = lock_templates.get(spec.name) if isinstance(lock_templates, dict) else None
-        existing_id = None
-        if isinstance(existing, dict):
-            existing_id = existing.get("task_id")
-        if existing_id:
-            try:
-                clearml_task_exists(str(existing_id))
-                changes: list[str] = []
-                if ensure_clearml_task_script(
-                    str(existing_id),
-                    repo=script_spec.repository,
-                    branch=script_spec.branch,
-                    entry_point=script_spec.entry_point,
-                    working_dir=script_spec.working_dir,
-                    version_num=script_spec.version_num,
-                    diff="",
-                ):
-                    changes.append("script")
-                if ensure_clearml_task_tags(str(existing_id), spec.tags):
-                    changes.append("tags")
-                if ensure_clearml_task_properties(str(existing_id), spec.properties_minimal):
-                    changes.append("properties")
-                if changes:
-                    print(f"Update template {spec.name}: {', '.join(changes)}")
-                else:
-                    print(f"Reuse template {spec.name}: {existing_id}")
-                continue
-            except Exception:
-                print(f"Existing task id not found, recreating: {spec.name}")
-
-        overrides = _normalized_args([*entry_args, *spec.default_overrides])
-        task_id = create_clearml_task(
-            project_name=spec.project_name,
-            task_name=spec.task_name_template,
-            module=module,
-            script=script,
-            args=overrides,
-            repo=script_spec.repository,
-            branch=script_spec.branch,
-            tags=spec.tags,
-            properties=spec.properties_minimal,
-        )
-        ensure_clearml_task_script(
-            task_id,
-            repo=script_spec.repository,
-            branch=script_spec.branch,
-            entry_point=script_spec.entry_point,
-            working_dir=script_spec.working_dir,
-            version_num=script_spec.version_num,
-            diff="",
-        )
-        lock_templates[spec.name] = {
-            "task_id": task_id,
-            "project_name": spec.project_name,
-            "task_name": spec.task_name_template,
-            "entrypoint": spec.entrypoint,
-            "updated_at": now,
-        }
-        print(f"Created template {spec.name}: {task_id}")
+        if _is_pipeline_template(spec):
+            _upsert_pipeline_template(
+                resolved,
+                lock_templates=lock_templates,
+                now=now,
+            )
+        else:
+            _upsert_standard_template(
+                resolved,
+                lock_templates=lock_templates,
+                now=now,
+            )
 
     lock["templates"] = lock_templates
     _save_lock(lock_path, lock)
 
 
-def _validate_templates(lock_path: Path) -> bool:
+def _validate_templates(
+    templates: list[TemplateSpec],
+    *,
+    ctx: PlanContext,
+    repo_root: Path,
+    lock_path: Path,
+    repo: str | None,
+    branch: str | None,
+    version_mode: str | None,
+) -> bool:
     if not lock_path.exists():
         print(f"Lock file not found: {lock_path}")
-        return True
-    lock = _load_lock(lock_path)
-    templates = lock.get("templates", {})
-    if not isinstance(templates, dict) or not templates:
-        print("No templates in lock file.")
-        return True
-    missing: list[str] = []
-    for name, payload in templates.items():
-        if not isinstance(payload, dict):
-            missing.append(str(name))
-            continue
-        task_id = payload.get("task_id")
-        if not task_id:
-            missing.append(str(name))
-            continue
-        try:
-            clearml_task_exists(str(task_id))
-        except Exception:
-            missing.append(str(name))
-    if missing:
-        print("Missing template tasks: " + ", ".join(sorted(missing)))
         return False
-    print("OK: all template tasks exist.")
+    lock = _load_lock(lock_path)
+    locked = lock.get("templates", {})
+    if not isinstance(locked, dict) or not locked:
+        print("No templates in lock file.")
+        return False
+    errors: list[str] = []
+    for spec in templates:
+        resolved = _resolve_template_spec(
+            spec,
+            ctx=ctx,
+            repo_root=repo_root,
+            repo=repo,
+            branch=branch,
+            version_mode=version_mode,
+        )
+        payload = locked.get(spec.name)
+        if not isinstance(payload, dict) or not payload.get("task_id"):
+            errors.append(f"{spec.name}: missing lock entry")
+            continue
+        task_id = str(payload["task_id"])
+        try:
+            task = _load_clearml_task(task_id)
+        except Exception as exc:
+            errors.append(f"{spec.name}: failed to load task {task_id}: {exc}")
+            continue
+        actual_project = clearml_task_project_name(task)
+        if str(actual_project or "") != spec.project_name:
+            errors.append(f"{spec.name}: unexpected project {actual_project!r} != {spec.project_name!r}")
+        if _task_name(task) and str(_task_name(task)) != spec.task_name_template:
+            errors.append(f"{spec.name}: unexpected task name {_task_name(task)!r} != {spec.task_name_template!r}")
+        if _is_pipeline_template(spec):
+            task_type = (clearml_task_type_from_obj(task) or "").lower()
+            if "controller" not in task_type:
+                errors.append(f"{spec.name}: task type must be controller, got {task_type or 'unknown'}")
+        actual_tags = set(clearml_task_tags(task))
+        missing_tags = [tag for tag in resolved.expected_tags if tag not in actual_tags]
+        if missing_tags:
+            errors.append(f"{spec.name}: missing tags {missing_tags}")
+        actual_properties = _task_user_properties(task)
+        missing_properties = {
+            key: value
+            for key, value in resolved.expected_properties.items()
+            if str(actual_properties.get(str(key), "")) != str(value)
+        }
+        if missing_properties:
+            errors.append(f"{spec.name}: property drift {missing_properties}")
+        if clearml_script_mismatches(resolved.script_spec, clearml_task_script(task)):
+            errors.append(f"{spec.name}: script metadata drift")
+    if errors:
+        print("Template validation failed:")
+        for item in errors:
+            print(f"- {item}")
+        return False
+    print("OK: all template tasks validated.")
     return True
 
 
@@ -499,6 +766,8 @@ def main() -> int:
     if args.apply:
         _apply_templates(
             templates,
+            ctx=ctx,
+            repo_root=repo_root,
             lock_path=Path(args.lock),
             repo=repo_url,
             branch=args.branch,
@@ -507,7 +776,15 @@ def main() -> int:
         return 0
 
     if args.validate:
-        ok = _validate_templates(Path(args.lock))
+        ok = _validate_templates(
+            templates,
+            ctx=ctx,
+            repo_root=repo_root,
+            lock_path=Path(args.lock),
+            repo=repo_url,
+            branch=args.branch,
+            version_mode=version_mode,
+        )
         return 0 if ok else 1
 
     return 0

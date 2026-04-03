@@ -25,14 +25,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
 
+def _python_env(repo: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    src = str((repo / "src").resolve())
+    current = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = src if not current else f"{src}{os.pathsep}{current}"
+    return env
+
+
 def _run(cmd: List[str], *, cwd: Path) -> str:
-    p = subprocess.run(cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    p = subprocess.run(
+        cmd,
+        cwd=str(cwd),
+        env=_python_env(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
     if p.returncode != 0:
         raise RuntimeError(f"Command failed (exit={p.returncode})\n$ {' '.join(cmd)}\n\n{p.stdout}")
     return p.stdout

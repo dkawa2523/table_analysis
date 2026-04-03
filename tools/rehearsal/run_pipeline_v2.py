@@ -279,7 +279,6 @@ def _build_pipeline_cmd(
         if queue_name:
             cmd.append(_format_override("run.clearml.queue_name", queue_name))
         cmd.append("run.clearml.env.bootstrap=uv")
-        cmd.append("run.clearml.env.uv.all_extras=true")
         cmd.append("run.clearml.env.uv.frozen=true")
     if project_root:
         cmd.append(_format_override("run.clearml.project_root", project_root))

@@ -1,0 +1,33 @@
+services:
+  clearml-services:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: table-analysis-clearml-agent:latest
+    container_name: clearml-services
+    init: true
+    restart: unless-stopped
+    environment:
+      CLEARML_CONFIG_FILE: /root/.clearml/clearml.conf
+      UV_CACHE_DIR: /root/.clearml/uv-cache
+    volumes:
+      - type: bind
+        source: ${CLEARML_HOME_HOST:?set CLEARML_HOME_HOST}
+        target: /root/.clearml
+    command: ["clearml-agent", "daemon", "--queue", "services"]
+
+  clearml-default:
+    image: table-analysis-clearml-agent:latest
+    container_name: clearml-default
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - clearml-services
+    environment:
+      CLEARML_CONFIG_FILE: /root/.clearml/clearml.conf
+      UV_CACHE_DIR: /root/.clearml/uv-cache
+    volumes:
+      - type: bind
+        source: ${CLEARML_HOME_HOST:?set CLEARML_HOME_HOST}
+        target: /root/.clearml
+    command: ["clearml-agent", "daemon", "--queue", "default"]

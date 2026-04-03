@@ -1,6 +1,19 @@
 # Model set: regression_all
 task_type: regression
-auto: true
-variants: []
-exclude:
-  - tabpfn
+auto: false
+variants:
+  - catboost
+  - elasticnet
+  - extra_trees
+  - gaussian_process
+  - gradient_boosting
+  - knn
+  - lasso
+  - lgbm
+  - linear_regression
+  - mlp
+  - random_forest
+  - ridge
+  - svr
+  - xgboost
+exclude: []

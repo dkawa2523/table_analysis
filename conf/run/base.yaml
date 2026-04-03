@@ -32,11 +32,9 @@ clearml:
   task_name: null
 
   pipeline:
-    # subproject | visible
-    project_mode: "subproject"
+    # Visible pipeline templates and runs live in the same project.
     project_name: null
-    project_tag_pipeline: true
-    project_unhide: true
+    template_task_id: null
 
   extra_tags: []
 
@@ -55,7 +53,7 @@ clearml:
     uv:
       venv_dir: ".venv"
       extras: []
-      all_extras: true
+      all_extras: false
       frozen: true
 
 # Monitoring defaults are defined in conf/monitor/base.yaml.

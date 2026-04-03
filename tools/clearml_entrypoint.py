@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 import sys
-import importlib.util
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,10 @@ _SRC_PATH = _REPO_ROOT / "src"
 if str(_SRC_PATH) not in sys.path:
     sys.path.insert(0, str(_SRC_PATH))
 
+from tabular_analysis.common.clearml_bootstrap import (
+    resolve_model_variant_name_from_overrides,
+    resolve_required_uv_extras,
+)
 from tabular_analysis.common.clearml_config import read_clearml_api_section
 
 
@@ -199,17 +202,18 @@ def _infer_optimize_enabled(overrides: dict[str, str]) -> bool:
 
 
 def _resolve_uv_extras(overrides: dict[str, str]) -> list[str]:
-    extras: list[str] = []
-    explicit = overrides.get("run.clearml.env.uv.extras")
-    if explicit:
-        extras = _parse_list(explicit)
-    else:
-        task_name = _resolve_task_name(overrides)
-        if task_name in {"train_model", "train_ensemble", "infer"}:
-            extras = ["models", "tabpfn"]
-    if _infer_optimize_enabled(overrides) and "optuna" not in extras:
-        extras.append("optuna")
-    return extras
+    explicit_raw = overrides.get("run.clearml.env.uv.extras")
+    explicit_extras = _parse_list(explicit_raw) if explicit_raw is not None else None
+    task_name = _resolve_task_name(overrides)
+    model_variant_name = resolve_model_variant_name_from_overrides(overrides)
+    infer_mode = "optimize" if _infer_optimize_enabled(overrides) else overrides.get("infer.mode")
+    return resolve_required_uv_extras(
+        task_name=task_name,
+        model_variant_name=model_variant_name,
+        infer_mode=infer_mode,
+        explicit_extras=explicit_extras,
+        explicit_extras_provided=explicit_raw is not None,
+    )
 
 
 def _resolve_uv_settings(overrides: dict[str, str]) -> tuple[str, list[str], bool, bool]:
@@ -253,10 +257,24 @@ def _maybe_install_apt_packages(argv: list[str]) -> None:
     subprocess.run(cmd, check=True, env=env)
 
 
-def _ensure_uv_available() -> None:
-    if importlib.util.find_spec("uv") is not None:
-        return
-    subprocess.run([sys.executable, "-m", "pip", "install", "uv"], check=True)
+def _resolve_uv_command() -> list[str]:
+    uv_bin = shutil.which("uv")
+    if uv_bin:
+        return [uv_bin]
+    raise RuntimeError(
+        "uv binary is required for ClearML bootstrap. "
+        "Install it in the agent image or task runtime environment."
+    )
+
+
+def _apply_uv_runtime_env(env: dict[str, str], *, venv_path: Path | None = None) -> dict[str, str]:
+    patched = dict(env)
+    if venv_path is not None:
+        patched["UV_PROJECT_ENVIRONMENT"] = str(venv_path)
+    patched.setdefault("UV_PYTHON", sys.executable)
+    if os.name != "nt" and (_is_clearml_context() or _in_docker()):
+        patched.setdefault("UV_CACHE_DIR", "/root/.clearml/uv-cache")
+    return patched
 
 
 def _uv_sync(
@@ -267,8 +285,7 @@ def _uv_sync(
     all_extras: bool,
     frozen: bool,
 ) -> None:
-    # Use module invocation so we don't depend on a PATH entry for the uv binary.
-    cmd = [sys.executable, "-m", "uv", "sync", "--project", str(repo_root)]
+    cmd = [*_resolve_uv_command(), "sync", "--project", str(repo_root)]
     if frozen:
         cmd.append("--frozen")
     if all_extras:
@@ -276,20 +293,16 @@ def _uv_sync(
     else:
         for extra in extras:
             cmd.extend(["--extra", extra])
-    env = os.environ.copy()
-    env["UV_PROJECT_ENVIRONMENT"] = str(venv_path)
-    env.setdefault("UV_PYTHON", sys.executable)
+    env = _apply_uv_runtime_env(os.environ.copy(), venv_path=venv_path)
     subprocess.run(cmd, check=True, env=env)
 
 
-def _exec_uv_run(repo_root: Path, argv: list[str]) -> None:
-    env = os.environ.copy()
+def _exec_uv_run(repo_root: Path, venv_path: Path, argv: list[str]) -> None:
+    env = _apply_uv_runtime_env(os.environ.copy(), venv_path=venv_path)
     env[_BOOTSTRAP_ENV] = "1"
     env.setdefault("TABULAR_ANALYSIS_CONFIG_DIR", str(repo_root / "conf"))
     cmd = [
-        sys.executable,
-        "-m",
-        "uv",
+        *_resolve_uv_command(),
         "run",
         "--project",
         str(repo_root),
@@ -327,7 +340,7 @@ def _maybe_bootstrap_uv(repo_root: Path, argv: list[str]) -> None:
         all_extras=all_extras,
         frozen=frozen,
     )
-    _exec_uv_run(repo_root, argv)
+    _exec_uv_run(repo_root, venv_path, argv)
 
 
 def _looks_like_container(text: str) -> bool:

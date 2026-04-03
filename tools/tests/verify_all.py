@@ -25,6 +25,7 @@ def _python_env(repo: Path) -> dict[str, str]:
     src = str((repo / "src").resolve())
     current = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = src if not current else f"{src}{os.pathsep}{current}"
+    env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     return env
 
 

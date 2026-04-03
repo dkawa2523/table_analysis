@@ -29,12 +29,20 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 - `run.clearml.queue_name` must match the queue the agent is watching.
 - The agent must appear online in the ClearML UI.
 - If tasks stay queued, verify that the queue has at least one healthy worker.
+- Canonical container assets live under `tools/clearml_agent/`.
+- Use shared cache by mounting `/root/.clearml` and setting `UV_CACHE_DIR=/root/.clearml/uv-cache`.
+- Start agents with `--init` (or Docker `init: true`) so zombie processes do not accumulate.
 
 ## 3) Dependency and bootstrap errors
 - `ModuleNotFoundError` usually means the repo bootstrap or optional dependency set is incomplete.
 - Confirm the task uses `tools/clearml_entrypoint.py`.
 - Confirm the environment includes `-e .` or the equivalent editable install path.
 - Recheck optional extras when using serving, Optuna, or non-core models.
+- Current bootstrap policy is task-specific:
+  - `dataset_register`, `preprocess`, `leaderboard`, `pipeline`: base dependencies only
+  - `train_model`: only the optional extra needed by the selected model
+  - `infer`: model-specific extra when known, otherwise `models` fallback
+  - `infer.mode=optimize`: add `optuna`
 
 ## Hydra list override pitfalls
 Bad:

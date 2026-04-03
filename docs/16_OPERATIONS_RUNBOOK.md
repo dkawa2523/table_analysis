@@ -9,7 +9,7 @@
 - ClearML を使う運用（logging/agent/clone）とローカル運用の両方を対象
 
 ## Preconditions
-- Python 3.10+ / `uv sync --frozen` (ClearML parity: `uv sync --all-extras --frozen`)
+- Python 3.10+ / `uv sync --frozen` (ClearML parity: task-specific `uv sync --extra ... --frozen`)
 - データ入力が確定していること（`data.dataset_path` または `data.raw_dataset_id`）
 - ClearML を使う場合は `clearml.conf` / 環境変数の設定が完了していること
 

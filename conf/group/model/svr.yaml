@@ -1,10 +1,9 @@
-# モデルバリアント: SVR/SVC（scikit-learn）
+# Model variant: SVR (regression only)
 model_variant:
   name: svr
   framework: sklearn
-  class_path:
-    regression: sklearn.svm.SVR
-    classification: sklearn.svm.SVC
+  task_type: regression
+  class_path: sklearn.svm.SVR
   params:
     kernel: rbf
     C: 1.0

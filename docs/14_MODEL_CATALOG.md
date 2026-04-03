@@ -63,8 +63,8 @@
 | `tabpfn` | TabPFN | optional |
 
 > NOTE:
-> - `svr` / `svc` は `eval.task_type` に応じて SVR/SVC が選択される
-> - 運用上は `svr`=回帰、`svc`=分類 を推奨
+> - `svr` は回帰専用、`svc` は分類専用
+> - `regression_all` には `svr` を含み、`svc` は含まない
 
 ## 1.2 線形回帰系モデルの注意点
 

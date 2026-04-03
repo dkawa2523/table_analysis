@@ -15,9 +15,17 @@ REQUIRED_TEMPLATES = {
     "dataset_register",
     "preprocess",
     "train_model",
+    "train_model_full",
+    "train_ensemble_full",
     "infer",
     "leaderboard",
     "pipeline",
+}
+
+PIPELINE_TEMPLATE_NAMES = {
+    "pipeline",
+    "train_model_full",
+    "train_ensemble_full",
 }
 
 REQUIRED_FIELDS = {
@@ -78,6 +86,8 @@ def _assert_overrides(overrides: list[str]) -> None:
         raise AssertionError("default_overrides must include run.clearml.enabled=true")
     if not any(item.startswith("run.clearml.execution=") for item in overrides):
         raise AssertionError("default_overrides must include run.clearml.execution=...")
+    if "run.clearml.env.uv.all_extras=true" in overrides:
+        raise AssertionError("default_overrides must not force run.clearml.env.uv.all_extras=true")
 
 
 def _validate_spec(repo: Path) -> None:
@@ -124,16 +134,30 @@ def _validate_spec(repo: Path) -> None:
         _assert_overrides([str(item) for item in overrides])
         _assert_contains(tags, "template_set:")
         _assert_contains(tags, "usecase:")
-        _assert_contains(tags, f"process:{name}")
+        expected_process = "pipeline" if name in PIPELINE_TEMPLATE_NAMES else str(name)
+        _assert_contains(tags, f"process:{expected_process}")
         _assert_contains(tags, "schema:")
+        if name in PIPELINE_TEMPLATE_NAMES:
+            _assert_contains(tags, "task_kind:template")
+            _assert_contains(tags, f"pipeline_profile:{name}")
+            if "run.clearml.execution=pipeline_controller" not in [str(item) for item in overrides]:
+                raise AssertionError(f"pipeline template {name} must use run.clearml.execution=pipeline_controller")
 
         for key in ("usecase_id", "process", "schema_version"):
             if key not in props:
                 raise AssertionError(f"template {name} missing properties_minimal.{key}")
+        if name in PIPELINE_TEMPLATE_NAMES:
+            if props.get("process") != "pipeline":
+                raise AssertionError(f"pipeline template {name} properties_minimal.process must be pipeline")
+            if props.get("task_kind") != "template":
+                raise AssertionError(f"pipeline template {name} missing properties_minimal.task_kind=template")
+            if props.get("pipeline_profile") != name:
+                raise AssertionError(f"pipeline template {name} missing properties_minimal.pipeline_profile={name}")
 
-        stage = stage_map.get(name)
-        project_group = group_map.get(name)
-        expected_tokens = [token for token in (project_group, stage, f"{{group_map[{name}]}}") if token]
+        project_key = "pipeline" if name in PIPELINE_TEMPLATE_NAMES else name
+        stage = stage_map.get(project_key)
+        project_group = group_map.get(project_key)
+        expected_tokens = [token for token in (project_group, stage, f"{{group_map[{project_key}]}}") if token]
         if expected_tokens and not any(token in project_name for token in expected_tokens) and "{group_map[" not in project_name:
             raise AssertionError(f"template {name} project_name should include one of {expected_tokens}")
 

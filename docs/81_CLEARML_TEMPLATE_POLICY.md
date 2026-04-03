@@ -12,6 +12,15 @@ ClearML template tasks are selected by a strict contract. Runtime now looks up t
 
 Fallback lookup without `template_set` or `schema` is intentionally disabled.
 
+Visible pipeline templates are a separate first-class contract:
+
+- `process:pipeline`
+- `task_kind:template`
+- `pipeline_profile:<name>`
+
+These tasks are stored as `TaskTypes.controller` so operators can inspect, clone,
+edit, and run them directly from the ClearML Pipelines tab.
+
 ## Required Config
 - `run.clearml.template_usecase_id`
 - `run.clearml.template_set_id`
@@ -35,6 +44,7 @@ Supported operations are `--plan`, `--apply`, and `--validate`. Historical examp
 - Keep `template_set_id` fixed during normal operation.
 - Change `template_set_id` only for intentionally breaking template changes.
 - `--apply` is the normalization step for template metadata, script settings, and tags.
+- `--apply` also creates or refreshes visible pipeline controller templates for `pipeline`, `train_model_full`, and `train_ensemble_full`.
 - When a template generation is intentionally replaced, mark the older template as `template:deprecated` instead of keeping multiple active variants.
 - Run `--apply` before `--validate` when tags, script, repo, or branch changed.
 - Do not pin runtime to template task IDs; always resolve by canonical tags.

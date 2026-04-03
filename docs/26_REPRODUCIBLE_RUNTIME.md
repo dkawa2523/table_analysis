@@ -15,13 +15,17 @@ the upload step is a no-op but local files are still created.
 
 ## Lockfile workflow (uv recommended)
 `uv.lock` is the primary lockfile. It is generated from `pyproject.toml` and used by
-ClearML entrypoint bootstrap (`uv sync --all-extras --frozen`) for stable, repo-side
-environments.
+ClearML entrypoint bootstrap (`uv sync --frozen` plus task-specific `--extra ...`) for
+stable, repo-side environments.
 
 Note: `run.clearml.env.apt_packages` installs **OS libraries** at task runtime via
 `apt-get`. This is **Linux-only** and requires root + apt-get in the agent image.
 Windows environments need a different OS package mechanism (e.g., winget/choco),
 so do not assume apt-based installs there.
+
+Canonical ClearML agents should preinstall `git`, `clearml-agent`, `uv`, and base OS
+libraries such as `libgomp1`. Task-time bootstrap remains enabled, but it now relies on
+shared `uv` cache rather than startup-time package installation inside each task.
 
 ### Update steps
 1. Regenerate the lockfile after dependency changes:
@@ -32,7 +36,8 @@ so do not assume apt-based installs there.
    ```bash
    uv sync --frozen
    ```
-   - For ClearML parity, use `uv sync --all-extras --frozen`.
+   - For ClearML parity, add only the needed extras such as
+     `uv sync --extra models --frozen` or `uv sync --extra tabpfn --frozen`.
 
 ### Legacy pip lock (optional)
 If you must use pip-only environments, you can still generate a `requirements/lock.txt`
