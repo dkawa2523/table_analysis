@@ -336,13 +336,25 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
                 "queues": {"default": "default"},
                 "steps": {"train": [], "preprocess": [], "train_ensemble": [], "dataset_register": None, "leaderboard": None, "infer": None},
                 "plan_only": False,
+                "run_overrides": {},
+                "data_overrides": {},
+                "downstream_data_overrides": {},
+                "eval_overrides": {},
+                "run_dataset_register": False,
+                "run_preprocess": True,
+                "run_train": False,
+                "run_train_ensemble": False,
+                "run_leaderboard": False,
+                "run_infer": False,
+                "preprocess_variants": ["stdscaler_ohe"],
+                "model_variants": [],
             },
             pipeline_profile="train_ensemble_full",
             metadata={},
             queue_name="services",
         )
         pipeline_module.clearml_task_id = lambda task: "controller-123"
-        pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"ok": True}
+        pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"run.grid_run_id": "grid-001"}
         pipeline_module.load_pipeline_controller_from_task = lambda source_task: fake_controller
         pipeline_module._collect_step_task_ids = lambda controller: {}
         pipeline_module._build_clearml_pipeline_refs = lambda **kwargs: (None, [], [], [], None, None)
@@ -354,6 +366,9 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
             raise AssertionError(f"controller should start on pipeline queue: {fake_controller.started_with}")
         if getattr(fake_controller, "_default_execution_queue", None) != "default":
             raise AssertionError(f"loaded controller should reseed default execution queue: {getattr(fake_controller, '_default_execution_queue', None)}")
+        pipeline_args = getattr(fake_controller, "_pipeline_args", {})
+        if pipeline_args.get("run/grid_run_id") != "grid-001":
+            raise AssertionError(f"loaded controller should reseed pipeline args: {pipeline_args}")
         if summary.get("pipeline_task_id") != "controller-123":
             raise AssertionError(f"unexpected pipeline summary: {summary}")
     finally:

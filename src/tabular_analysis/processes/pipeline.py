@@ -1165,6 +1165,27 @@ def _reset_pipeline_controller_definition(controller: Any) -> None:
     )
 
 
+def _reseed_loaded_pipeline_controller_runtime(
+    controller: Any,
+    *,
+    runtime_defaults: Mapping[str, Any],
+    default_execution_queue: str,
+) -> None:
+    preserved_nodes = getattr(controller, '_nodes', None)
+    preserved_pipeline_args = getattr(controller, '_pipeline_args', None)
+    preserved_pipeline_args_desc = getattr(controller, '_pipeline_args_desc', None)
+    preserved_pipeline_args_type = getattr(controller, '_pipeline_args_type', None)
+    preserved_args_map = getattr(controller, '_args_map', None)
+    _reset_pipeline_controller_definition(controller)
+    if preserved_nodes:
+        setattr(controller, '_nodes', preserved_nodes)
+    setattr(controller, '_default_execution_queue', default_execution_queue)
+    setattr(controller, '_pipeline_args', dict(preserved_pipeline_args or _template_pipeline_params(runtime_defaults)))
+    setattr(controller, '_pipeline_args_desc', dict(preserved_pipeline_args_desc or {}))
+    setattr(controller, '_pipeline_args_type', dict(preserved_pipeline_args_type or {}))
+    setattr(controller, '_args_map', dict(preserved_args_map or {}))
+
+
 def _seed_pipeline_template_parameters(controller: Any, defaults: Mapping[str, Any]) -> None:
     adder = getattr(controller, 'add_parameter', None)
     if not callable(adder):
@@ -1298,19 +1319,25 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
         raise RuntimeError('Current pipeline controller task is missing.')
     contract = _resolve_visible_pipeline_run_contract(cfg=cfg, grid_run_id=grid_run_id)
     pipeline_task_id = clearml_task_id(ctx.task)
+    runtime_defaults = _build_pipeline_template_runtime_defaults(
+        cfg=cfg,
+        plan=contract.plan,
+        grid_run_id=grid_run_id,
+        pipeline_profile=contract.pipeline_profile,
+        pipeline_task_id=pipeline_task_id,
+    )
     if pipeline_task_id:
-        _apply_visible_pipeline_run_defaults(target=ctx.task, task_id=pipeline_task_id, cfg=cfg, contract=contract, grid_run_id=grid_run_id)
+        runtime_defaults = _apply_visible_pipeline_run_defaults(target=ctx.task, task_id=pipeline_task_id, cfg=cfg, contract=contract, grid_run_id=grid_run_id)
     controller = load_pipeline_controller_from_task(source_task=ctx.task)
-    loaded_nodes = getattr(controller, '_nodes', None)
-    _reset_pipeline_controller_definition(controller)
-    if loaded_nodes:
-        setattr(controller, '_nodes', loaded_nodes)
-    setattr(
-        controller,
-        '_default_execution_queue',
+    default_execution_queue = (
         _normalize_str(contract.plan.get('queues', {}).get('default'))
         or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
-        or 'default',
+        or 'default'
+    )
+    _reseed_loaded_pipeline_controller_runtime(
+        controller,
+        runtime_defaults=runtime_defaults,
+        default_execution_queue=default_execution_queue,
     )
     if not getattr(controller, '_nodes', None):
         raise RuntimeError(
