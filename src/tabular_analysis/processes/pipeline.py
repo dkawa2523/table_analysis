@@ -1301,6 +1301,17 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
     if pipeline_task_id:
         _apply_visible_pipeline_run_defaults(target=ctx.task, task_id=pipeline_task_id, cfg=cfg, contract=contract, grid_run_id=grid_run_id)
     controller = load_pipeline_controller_from_task(source_task=ctx.task)
+    loaded_nodes = getattr(controller, '_nodes', None)
+    _reset_pipeline_controller_definition(controller)
+    if loaded_nodes:
+        setattr(controller, '_nodes', loaded_nodes)
+    setattr(
+        controller,
+        '_default_execution_queue',
+        _normalize_str(contract.plan.get('queues', {}).get('default'))
+        or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
+        or 'default',
+    )
     if not getattr(controller, '_nodes', None):
         raise RuntimeError(
             'Current ClearML task does not contain a serialized pipeline graph. '

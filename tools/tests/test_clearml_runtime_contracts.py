@@ -307,6 +307,65 @@ def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
             os.environ["CLEARML_TASK_ID"] = original_task_id
 
 
+def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
+    class _FakeTask:
+        pass
+
+    class _FakeController:
+        def __init__(self) -> None:
+            self._nodes = {"preprocess": object()}
+            self.started_with: str | None = None
+
+        def start(self, *, queue: str | None = None) -> None:
+            self.started_with = queue
+
+    fake_controller = _FakeController()
+    fake_task = _FakeTask()
+    originals = {
+        "resolve_contract": pipeline_module._resolve_visible_pipeline_run_contract,
+        "clearml_task_id": pipeline_module.clearml_task_id,
+        "apply_defaults": pipeline_module._apply_visible_pipeline_run_defaults,
+        "load_controller": pipeline_module.load_pipeline_controller_from_task,
+        "collect_step_ids": pipeline_module._collect_step_task_ids,
+        "build_refs": pipeline_module._build_clearml_pipeline_refs,
+        "build_summary": pipeline_module._build_local_pipeline_run_summary,
+    }
+    try:
+        pipeline_module._resolve_visible_pipeline_run_contract = lambda **kwargs: pipeline_module._VisiblePipelineRunContract(
+            plan={
+                "queues": {"default": "default"},
+                "steps": {"train": [], "preprocess": [], "train_ensemble": [], "dataset_register": None, "leaderboard": None, "infer": None},
+                "plan_only": False,
+            },
+            pipeline_profile="train_ensemble_full",
+            metadata={},
+            queue_name="services",
+        )
+        pipeline_module.clearml_task_id = lambda task: "controller-123"
+        pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"ok": True}
+        pipeline_module.load_pipeline_controller_from_task = lambda source_task: fake_controller
+        pipeline_module._collect_step_task_ids = lambda controller: {}
+        pipeline_module._build_clearml_pipeline_refs = lambda **kwargs: (None, [], [], [], None, None)
+        pipeline_module._build_local_pipeline_run_summary = lambda **kwargs: {"status": "stub"}
+        cfg = OmegaConf.create({"run": {"clearml": {"queue_name": "default"}}})
+        ctx = pipeline_module.TaskContext(task=fake_task, project_name="LOCAL/TabularAnalysis/Test/00_Pipelines", task_name="pipeline", output_dir=Path.cwd())
+        summary = pipeline_module._execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id="grid-001")
+        if fake_controller.started_with != "services":
+            raise AssertionError(f"controller should start on pipeline queue: {fake_controller.started_with}")
+        if getattr(fake_controller, "_default_execution_queue", None) != "default":
+            raise AssertionError(f"loaded controller should reseed default execution queue: {getattr(fake_controller, '_default_execution_queue', None)}")
+        if summary.get("pipeline_task_id") != "controller-123":
+            raise AssertionError(f"unexpected pipeline summary: {summary}")
+    finally:
+        pipeline_module._resolve_visible_pipeline_run_contract = originals["resolve_contract"]
+        pipeline_module.clearml_task_id = originals["clearml_task_id"]
+        pipeline_module._apply_visible_pipeline_run_defaults = originals["apply_defaults"]
+        pipeline_module.load_pipeline_controller_from_task = originals["load_controller"]
+        pipeline_module._collect_step_task_ids = originals["collect_step_ids"]
+        pipeline_module._build_clearml_pipeline_refs = originals["build_refs"]
+        pipeline_module._build_local_pipeline_run_summary = originals["build_summary"]
+
+
 def main() -> int:
     _assert_clearml_hocon_reader()
     _assert_batch_execution_mode()
@@ -316,6 +375,7 @@ def main() -> int:
     _assert_entrypoint_reads_clearml_slash_overrides()
     _assert_regression_model_set_contract()
     _assert_pipeline_controller_context_attaches_by_task_id()
+    _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
     print("OK: clearml runtime contracts")
     return 0
 
