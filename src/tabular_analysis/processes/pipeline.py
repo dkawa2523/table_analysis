@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import OrderedDict
 from ..common.config_utils import cfg_value as _cfg_value, set_cfg_value as _set_cfg_value, normalize_str as _normalize_str, to_int as _to_int
 from ..common.collection_utils import to_list as _to_list, to_mapping as _to_mapping
 from ..common.dataset_utils import derive_local_raw_dataset_id
@@ -1139,6 +1140,16 @@ def _add_clearml_pipeline_steps(*, cfg: Any, plan: Mapping[str, Any], steps: Map
         step_requests=step_requests,
         parameter_override_builder=_build_pipeline_step_parameter_override_payload,
     )
+
+
+def _apply_runtime_pipeline_step_overrides(*, cfg: Any, plan: Mapping[str, Any], controller: Any) -> None:
+    step_requests = list(_iter_pipeline_controller_step_requests(cfg=cfg, plan=plan, steps=plan['steps']))
+    for (step, overrides) in step_requests:
+        node = getattr(controller, '_nodes', {}).get(step['step_name'])
+        if node is None:
+            continue
+        setattr(node, 'parameters', OrderedDict(_build_pipeline_step_parameter_override_payload(overrides)))
+        setattr(node, 'queue', step.get('queue'))
 def _reset_pipeline_controller_definition(controller: Any) -> None:
     # Controllers reconstructed from Task objects only deserialize the DAG payload.
     # Re-seed the runtime defaults that ClearML's draft serialization expects.
@@ -1363,6 +1374,7 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
         runtime_defaults=runtime_defaults,
         default_execution_queue=default_execution_queue,
     )
+    _apply_runtime_pipeline_step_overrides(cfg=cfg, plan=contract.plan, controller=controller)
     if not getattr(controller, '_nodes', None):
         raise RuntimeError(
             'Current ClearML task does not contain a serialized pipeline graph. '
