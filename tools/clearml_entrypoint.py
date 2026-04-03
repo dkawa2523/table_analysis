@@ -89,6 +89,29 @@ def _get_override(overrides: dict[str, str], *keys: str) -> str | None:
     return None
 
 
+_SKIPPED_LOADED_OVERRIDE_KEYS = {
+    "default_queue",
+}
+
+
+def _normalize_loaded_override_key(key: str) -> str:
+    prefix = "+" if key.startswith("+") else ""
+    body = key.lstrip("+").replace("/", ".").strip()
+    return f"{prefix}{body}" if body else ""
+
+
+def _store_loaded_override(overrides: dict[str, Any], key: str, value: Any) -> None:
+    normalized = _normalize_loaded_override_key(str(key))
+    if not normalized:
+        return
+    if normalized.lstrip("+") in _SKIPPED_LOADED_OVERRIDE_KEYS:
+        return
+    raw = str(key).strip()
+    if "/" in raw and "." not in raw and normalized in overrides:
+        return
+    overrides[normalized] = value
+
+
 def _parse_bool(value: str | None, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -471,14 +494,17 @@ def _load_clearml_overrides() -> dict[str, Any]:
             args_section = params.get("Args")
             if isinstance(args_section, dict):
                 for key, value in args_section.items():
-                    _flatten_params(str(key), value, overrides, sep="/")
+                    flattened: dict[str, Any] = {}
+                    _flatten_params(str(key), value, flattened, sep="/")
+                    for flat_key, flat_value in flattened.items():
+                        _store_loaded_override(overrides, flat_key, flat_value)
             else:
                 for key, value in params.items():
                     if not isinstance(key, str) or not key.startswith("Args/"):
                         continue
                     override_key = key[5:]
                     if override_key:
-                        overrides[override_key] = value
+                        _store_loaded_override(overrides, override_key, value)
         if overrides:
             return overrides
         params = {}
@@ -489,14 +515,17 @@ def _load_clearml_overrides() -> dict[str, Any]:
         args_section = params.get("Args") if isinstance(params, dict) else None
         if isinstance(args_section, dict):
             for key, value in args_section.items():
-                _flatten_params(str(key), value, overrides, sep="/")
+                flattened: dict[str, Any] = {}
+                _flatten_params(str(key), value, flattened, sep="/")
+                for flat_key, flat_value in flattened.items():
+                    _store_loaded_override(overrides, flat_key, flat_value)
         elif isinstance(params, dict):
             for key, value in params.items():
                 if not isinstance(key, str) or not key.startswith("Args/"):
                     continue
                 override_key = key[5:]
                 if override_key:
-                    overrides[override_key] = value
+                    _store_loaded_override(overrides, override_key, value)
         return overrides
 
     task = Task.current_task()

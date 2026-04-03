@@ -21,7 +21,12 @@ from tabular_analysis.common.clearml_bootstrap import resolve_required_uv_extras
 from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
 from tabular_analysis.registry.models import list_model_variants
-from tools.clearml_entrypoint import _resolve_bootstrap_mode, _resolve_uv_settings
+from tools.clearml_entrypoint import (
+    _normalize_loaded_override_key,
+    _resolve_bootstrap_mode,
+    _resolve_uv_settings,
+    _store_loaded_override,
+)
 from omegaconf import OmegaConf
 
 
@@ -194,6 +199,16 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
         raise AssertionError("slash-form all_extras should default to false")
     if not frozen:
         raise AssertionError("slash-form frozen should resolve to true")
+    if _normalize_loaded_override_key("data/raw_dataset_id") != "data.raw_dataset_id":
+        raise AssertionError("slash-form ClearML args must normalize to Hydra dot overrides")
+    loaded: dict[str, str] = {}
+    _store_loaded_override(loaded, "data/raw_dataset_id", "template_raw_dataset")
+    _store_loaded_override(loaded, "data.raw_dataset_id", "runtime_dataset")
+    _store_loaded_override(loaded, "default_queue", "default")
+    if loaded.get("data.raw_dataset_id") != "runtime_dataset":
+        raise AssertionError(f"dotted override must win over slash placeholder: {loaded}")
+    if "default_queue" in loaded:
+        raise AssertionError(f"controller-only default_queue should not be forwarded to Hydra: {loaded}")
 
 
 def _assert_regression_model_set_contract() -> None:
