@@ -30,6 +30,7 @@ from tabular_analysis.processes.pipeline_support import (
 )
 from tabular_analysis.registry.models import list_model_variants
 from tools.clearml_templates import manage_templates as manage_templates_module
+from tools.rehearsal import run_pipeline_v2 as rehearsal_module
 from tools.clearml_entrypoint import (
     _extract_cli_keys,
     _normalize_loaded_override_key,
@@ -68,6 +69,15 @@ def _assert_batch_execution_mode() -> None:
     except ValueError:
         return
     raise AssertionError("clearml_children should require ClearML")
+
+
+def _assert_rehearsal_sync_cfg_keeps_clearml_enabled() -> None:
+    cfg = rehearsal_module._build_minimal_clearml_cfg()
+    clearml_cfg = getattr(getattr(cfg, "run", None), "clearml", None)
+    if not bool(getattr(clearml_cfg, "enabled", False)):
+        raise AssertionError(f"rehearsal sync cfg must keep ClearML enabled: {cfg}")
+    if str(getattr(clearml_cfg, "execution", "local")) == "local":
+        raise AssertionError(f"rehearsal sync cfg must not resolve to local execution: {cfg}")
 
 
 def _assert_strict_template_lookup() -> None:
@@ -505,6 +515,68 @@ def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
             os.environ.pop("CLEARML_TASK_ID", None)
         else:
             os.environ["CLEARML_TASK_ID"] = original_task_id
+
+
+def _assert_pipeline_controller_context_attaches_by_pipeline_task_id_override() -> None:
+    class _FakeTaskObject:
+        name = "pipeline"
+
+        def get_project_name(self) -> str:
+            return "LOCAL/TabularAnalysis/Pipelines"
+
+    class _FakeTaskApi:
+        @staticmethod
+        def current_task() -> None:
+            return None
+
+        @staticmethod
+        def get_task(task_id: str | None = None) -> _FakeTaskObject | None:
+            if task_id != "fake-controller-task":
+                raise AssertionError(f"unexpected task lookup: {task_id}")
+            return fake_task
+
+    fake_task = _FakeTaskObject()
+    original_module = sys.modules.get("clearml")
+    original_task_id = os.environ.get("CLEARML_TASK_ID")
+    original_trains_task_id = os.environ.get("TRAINS_TASK_ID")
+    if "CLEARML_TASK_ID" in os.environ:
+        os.environ.pop("CLEARML_TASK_ID")
+    if "TRAINS_TASK_ID" in os.environ:
+        os.environ.pop("TRAINS_TASK_ID")
+    sys.modules["clearml"] = type("_FakeClearMLModule", (), {"Task": _FakeTaskApi})()
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = OmegaConf.create(
+                {
+                    "task": {"stage": "99_pipeline"},
+                    "run": {
+                        "output_dir": tmpdir,
+                        "usecase_id": "fake-usecase",
+                        "clearml": {
+                            "project_name": "LOCAL/TabularAnalysis/Pipelines",
+                            "pipeline_task_id": "fake-controller-task",
+                        },
+                    },
+                }
+            )
+            ctx = pipeline_module._create_pipeline_controller_runtime_context(cfg)
+            if ctx.task is not fake_task:
+                raise AssertionError(
+                    "pipeline controller runtime context must attach to run.clearml.pipeline_task_id when env lookup is unavailable"
+                )
+    finally:
+        if original_module is None:
+            sys.modules.pop("clearml", None)
+        else:
+            sys.modules["clearml"] = original_module
+        if original_task_id is None:
+            os.environ.pop("CLEARML_TASK_ID", None)
+        else:
+            os.environ["CLEARML_TASK_ID"] = original_task_id
+        if original_trains_task_id is None:
+            os.environ.pop("TRAINS_TASK_ID", None)
+        else:
+            os.environ["TRAINS_TASK_ID"] = original_trains_task_id
 
 
 def _assert_pipeline_step_references_are_not_quoted() -> None:
@@ -1084,6 +1156,7 @@ def _assert_uv_lock_exposes_split_model_extras() -> None:
 def main() -> int:
     _assert_clearml_hocon_reader()
     _assert_batch_execution_mode()
+    _assert_rehearsal_sync_cfg_keeps_clearml_enabled()
     _assert_strict_template_lookup()
     _assert_visible_pipeline_template_lookup()
     _assert_project_layout_contract()
@@ -1095,6 +1168,7 @@ def main() -> int:
     _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_profile_defaults_clear_stale_model_variants()
     _assert_pipeline_controller_context_attaches_by_task_id()
+    _assert_pipeline_controller_context_attaches_by_pipeline_task_id_override()
     _assert_pipeline_step_references_are_not_quoted()
     _assert_pipeline_steps_enable_recursive_parameter_parsing()
     _assert_leaderboard_bootstrap_extras_follow_pipeline_model_variants()

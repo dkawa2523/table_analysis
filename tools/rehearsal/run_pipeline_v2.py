@@ -409,7 +409,7 @@ def _build_minimal_clearml_cfg() -> Any:
         from omegaconf import OmegaConf
     except Exception as exc:
         raise RuntimeError("omegaconf is required to sync ClearML artifacts.") from exc
-    return OmegaConf.create({"run": {"clearml": {"enabled": True}}})
+    return OmegaConf.create({"run": {"clearml": {"enabled": True, "execution": "logging"}}})
 
 
 def _sync_pipeline_artifacts(repo: Path, output_dir: Path, pipeline_task_id: str) -> dict[str, Path]:

@@ -1674,7 +1674,8 @@ def _run_clearml_pipeline_impl(cfg: Any, grid_run_id: str, *, use_templates: boo
     return _finalize_pipeline_run_summary(cfg, summary)
 def _create_pipeline_controller_runtime_context(cfg: Any) -> TaskContext:
     stage = getattr(getattr(cfg, 'task', None), 'stage', '99_pipeline')
-    if not _running_inside_clearml_task():
+    pipeline_task_id = _normalize_str(_cfg_value(cfg, 'run.clearml.pipeline_task_id'))
+    if (not _running_inside_clearml_task()) and (not pipeline_task_id):
         return _create_local_task_context(cfg, stage=stage, task_name='pipeline')
     try:
         from clearml import Task as ClearMLTask
@@ -1682,7 +1683,11 @@ def _create_pipeline_controller_runtime_context(cfg: Any) -> TaskContext:
         raise RuntimeError('clearml is required to attach to the current pipeline controller task.') from exc
     task = ClearMLTask.current_task()
     if task is None:
-        task_id = os.getenv('CLEARML_TASK_ID') or os.getenv('TRAINS_TASK_ID')
+        task_id = (
+            os.getenv('CLEARML_TASK_ID')
+            or os.getenv('TRAINS_TASK_ID')
+            or pipeline_task_id
+        )
         if task_id:
             try:
                 task = ClearMLTask.get_task(task_id=task_id)
