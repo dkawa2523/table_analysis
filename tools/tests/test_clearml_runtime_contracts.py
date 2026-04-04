@@ -466,6 +466,69 @@ def _assert_pipeline_steps_enable_recursive_parameter_parsing() -> None:
         raise AssertionError(f"pipeline steps must enable recursive parameter parsing for list step refs: {captured}")
 
 
+def _assert_leaderboard_bootstrap_extras_follow_pipeline_model_variants() -> None:
+    cfg = OmegaConf.create(
+        {
+            "task": {"stage": "99_pipeline"},
+            "pipeline": {
+                "preprocess_variant": "stdscaler_ohe",
+                "model_set": "regression_all",
+                "grid": {"model_variants": ["ridge", "lgbm", "xgboost"], "max_jobs": 50},
+                "run_dataset_register": False,
+                "run_preprocess": True,
+                "run_train": True,
+                "run_train_ensemble": False,
+                "run_leaderboard": True,
+                "run_infer": False,
+                "plan_only": False,
+                "hpo": {"enabled": False, "params": {}},
+            },
+            "run": {
+                "output_dir": "outputs",
+                "usecase_id": "demo_usecase",
+                "schema_version": "v1",
+                "clearml": {
+                    "enabled": True,
+                    "execution": "pipeline_controller",
+                    "project_root": "LOCAL",
+                    "queue_name": "default",
+                    "env": {"bootstrap": "uv", "uv": {"venv_dir": ".venv", "frozen": True, "all_extras": False}},
+                },
+            },
+            "exec_policy": {
+                "queues": {
+                    "default": "default",
+                    "pipeline": "controller",
+                    "train_model_heavy": "heavy-model",
+                    "heavy_model_variants": ["catboost", "xgboost"],
+                },
+                "limits": {"max_jobs": 50, "max_models": 10, "max_hpo_trials": 0},
+            },
+            "eval": {
+                "primary_metric": "rmse",
+                "direction": "auto",
+                "cv_folds": 5,
+                "seed": 42,
+                "task_type": "regression",
+                "classification": {"mode": "auto", "top_k": 1},
+                "metrics": {"classification_multiclass": ["accuracy", "f1_macro", "logloss"]},
+                "calibration": {"enabled": False},
+                "uncertainty": {"enabled": False},
+                "ci": {"enabled": False},
+            },
+            "leaderboard": {"top_k": 10},
+            "data": {"raw_dataset_id": "raw-123", "target_column": "target", "split": {"strategy": "random", "test_size": 0.2, "seed": 42}},
+        }
+    )
+    plan = pipeline_module._build_pipeline_plan(cfg, "grid-demo", child_execution="logging")
+    leaderboard_step = plan["steps"]["leaderboard"]
+    if leaderboard_step is None:
+        raise AssertionError("leaderboard step must exist in pipeline plan")
+    extras = leaderboard_step["overrides"].get("run.clearml.env.uv.extras")
+    if extras != ["lightgbm", "xgboost"]:
+        raise AssertionError(f"leaderboard bootstrap extras must follow planned optional model variants: {extras}")
+
+
 def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
     class _FakeTask:
         pass
@@ -695,6 +758,7 @@ def main() -> int:
     _assert_pipeline_controller_context_attaches_by_task_id()
     _assert_pipeline_step_references_are_not_quoted()
     _assert_pipeline_steps_enable_recursive_parameter_parsing()
+    _assert_leaderboard_bootstrap_extras_follow_pipeline_model_variants()
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
     _assert_plan_only_controller_does_not_launch_steps()
     _assert_pipeline_template_defaults_keep_plan_only()

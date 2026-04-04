@@ -276,10 +276,38 @@ def _should_inject_task_uv_overrides(cfg: Any) -> bool:
     if _to_list(_cfg_value(cfg, 'run.clearml.env.uv.extras')):
         return False
     return not bool(_cfg_value(cfg, 'run.clearml.env.uv.all_extras', False))
-def _build_task_uv_overrides(cfg: Any, *, task_name: str, model_variant: str | None=None, infer_mode: str | None=None) -> dict[str, Any]:
+
+
+def _resolve_optional_extras_for_model_variants(model_variants: Iterable[str]) -> list[str]:
+    extras: list[str] = []
+    for model_variant in model_variants:
+        extras.extend(
+            resolve_required_uv_extras(
+                task_name='train_model',
+                model_variant_name=_normalize_str(model_variant),
+            )
+        )
+    return _dedupe_tag_values(extras)
+
+
+def _build_task_uv_overrides(
+    cfg: Any,
+    *,
+    task_name: str,
+    model_variant: str | None=None,
+    infer_mode: str | None=None,
+    explicit_extras: Iterable[str] | None=None,
+) -> dict[str, Any]:
     if not _should_inject_task_uv_overrides(cfg):
         return {}
-    extras = resolve_required_uv_extras(task_name=task_name, model_variant_name=model_variant, infer_mode=infer_mode)
+    explicit_extras_list = list(explicit_extras) if explicit_extras is not None else None
+    extras = resolve_required_uv_extras(
+        task_name=task_name,
+        model_variant_name=model_variant,
+        infer_mode=infer_mode,
+        explicit_extras=explicit_extras_list,
+        explicit_extras_provided=explicit_extras is not None,
+    )
     return {'run.clearml.env.uv.extras': extras, 'run.clearml.env.uv.all_extras': False}
 def _ensure_override(overrides: list[str], key: str, value: Any) -> None:
     if value is None or key in {str(item).strip().split('=', 1)[0].strip().lstrip('+~') for item in overrides}:
@@ -754,7 +782,15 @@ def _build_plan_steps(cfg: Any, *, base_output_dir: Path, grid_run_id: str, run_
         overrides = {'run.output_dir': str(run_root)}
         if max_models > 0:
             overrides['leaderboard.top_k'] = max_models
-        overrides.update(_build_task_uv_overrides(cfg, task_name='leaderboard'))
+        overrides.update(
+            _build_task_uv_overrides(
+                cfg,
+                task_name='leaderboard',
+                explicit_extras=_resolve_optional_extras_for_model_variants(
+                    [str(job.get('model_variant') or '') for job in train_jobs]
+                ),
+            )
+        )
         step_queue = _select_queue(queues, 'leaderboard')
         leaderboard_step = _step(step_name='leaderboard', task_name='leaderboard', run_root=run_root, parents=[*[step['step_name'] for step in train_steps], *[step['step_name'] for step in train_ensemble_steps]], queue=step_queue, overrides=overrides)
     if run_infer:
