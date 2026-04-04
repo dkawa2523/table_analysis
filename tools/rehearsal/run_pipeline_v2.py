@@ -456,6 +456,166 @@ def _load_json_if_exists(path: Path | None) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _extract_tag_value(tags: Sequence[str], prefix: str) -> str | None:
+    for tag in tags:
+        text = str(tag).strip()
+        if text.startswith(prefix):
+            value = text[len(prefix) :].strip()
+            return value or None
+    return None
+
+
+def _build_live_task_ref(
+    *,
+    task_id: str,
+    tags: Sequence[str],
+    process: str,
+) -> dict[str, Any]:
+    ref: dict[str, Any] = {"task_id": task_id}
+    preprocess_variant = _extract_tag_value(tags, "preprocess:")
+    if preprocess_variant:
+        ref["preprocess_variant"] = preprocess_variant
+    if process == "train_model":
+        model_variant = _extract_tag_value(tags, "model:")
+        if model_variant:
+            ref["model_variant"] = model_variant
+        ref["train_task_id"] = task_id
+    if process == "train_ensemble":
+        method = _extract_tag_value(tags, "ensemble_method:")
+        if method:
+            ref["ensemble_method"] = method
+        ref["train_task_id"] = task_id
+    return ref
+
+
+def _rebuild_pipeline_outputs_from_clearml(
+    *,
+    repo: Path,
+    output_dir: Path,
+    usecase_id: str,
+    pipeline_task_id: str,
+    controller_status: str | None,
+    project_root: str | None,
+) -> dict[str, Any]:
+    _ensure_repo_src_on_path(repo)
+    from tabular_analysis.platform_adapter_task import (
+        clearml_task_id,
+        clearml_task_project_name,
+        clearml_task_status_from_obj,
+        clearml_task_tags,
+        list_clearml_tasks_by_tags,
+    )
+    from tabular_analysis.processes import pipeline as pipeline_module
+    from tabular_analysis.reporting.pipeline_report import build_pipeline_report_bundle
+
+    stage_dir = output_dir / "99_pipeline"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    base_summary = _load_json_if_exists(stage_dir / "pipeline_run.json") or {}
+    prefix = str(project_root).rstrip("/") if project_root else ""
+    tasks = list_clearml_tasks_by_tags([f"usecase:{usecase_id}"])
+    by_process: dict[str, list[dict[str, Any]]] = {}
+    for task in tasks:
+        task_id = clearml_task_id(task)
+        if not task_id:
+            continue
+        tags = [str(tag) for tag in (clearml_task_tags(task) or [])]
+        if ("solution:tabular-analysis" not in tags) and task_id != pipeline_task_id:
+            continue
+        project_name = clearml_task_project_name(task) or ""
+        if prefix and (not str(project_name).startswith(prefix)):
+            continue
+        process = _extract_tag_value(tags, "process:")
+        if not process:
+            continue
+        by_process.setdefault(process, []).append(
+            {
+                "task_id": task_id,
+                "project_name": project_name,
+                "status": _normalize_task_status(clearml_task_status_from_obj(task)),
+                "tags": tags,
+            }
+        )
+
+    def _sort_key(item: Mapping[str, Any]) -> tuple[str, str, str]:
+        tags = [str(tag) for tag in (item.get("tags") or [])]
+        return (
+            _extract_tag_value(tags, "preprocess:") or "",
+            _extract_tag_value(tags, "model:") or _extract_tag_value(tags, "ensemble_method:") or "",
+            str(item.get("task_id") or ""),
+        )
+
+    dataset_items = sorted(by_process.get("dataset_register") or [], key=_sort_key)
+    preprocess_items = sorted(by_process.get("preprocess") or [], key=_sort_key)
+    train_items = sorted(by_process.get("train_model") or [], key=_sort_key)
+    ensemble_items = sorted(by_process.get("train_ensemble") or [], key=_sort_key)
+    leaderboard_items = sorted(by_process.get("leaderboard") or [], key=_sort_key)
+    infer_items = sorted(by_process.get("infer") or [], key=_sort_key)
+    controller_items = sorted(by_process.get("pipeline") or [], key=_sort_key)
+
+    dataset_register_ref = (
+        _build_live_task_ref(task_id=str(dataset_items[0]["task_id"]), tags=dataset_items[0]["tags"], process="dataset_register")
+        if dataset_items
+        else base_summary.get("dataset_register_ref")
+    )
+    preprocess_refs = [
+        _build_live_task_ref(task_id=str(item["task_id"]), tags=item["tags"], process="preprocess")
+        for item in preprocess_items
+    ]
+    train_refs = [
+        _build_live_task_ref(task_id=str(item["task_id"]), tags=item["tags"], process="train_model")
+        for item in train_items
+    ]
+    train_ensemble_refs = [
+        _build_live_task_ref(task_id=str(item["task_id"]), tags=item["tags"], process="train_ensemble")
+        for item in ensemble_items
+    ]
+    leaderboard_ref = (
+        _build_live_task_ref(task_id=str(leaderboard_items[0]["task_id"]), tags=leaderboard_items[0]["tags"], process="leaderboard")
+        if leaderboard_items
+        else base_summary.get("leaderboard_ref")
+    )
+    infer_ref = (
+        _build_live_task_ref(task_id=str(infer_items[0]["task_id"]), tags=infer_items[0]["tags"], process="infer")
+        if infer_items
+        else base_summary.get("infer_ref")
+    )
+
+    summary = dict(base_summary)
+    summary["pipeline_task_id"] = pipeline_task_id
+    summary["dataset_register_ref"] = dataset_register_ref
+    summary["preprocess_ref"] = preprocess_refs
+    summary["train_refs"] = train_refs
+    summary["train_ensemble_refs"] = train_ensemble_refs
+    summary["leaderboard_ref"] = leaderboard_ref
+    summary["infer_ref"] = infer_ref
+    summary["executed_jobs"] = len(train_refs) + len(train_ensemble_refs)
+    if "planned_jobs" not in summary:
+        summary["planned_jobs"] = summary["executed_jobs"]
+    controller_tags = [str(tag) for tag in ((controller_items[0]["tags"] if controller_items else []))]
+    pipeline_profile = _extract_tag_value(controller_tags, "pipeline_profile:")
+    if pipeline_profile:
+        summary["pipeline_profile"] = pipeline_profile
+    grid_run_id = _extract_tag_value(controller_tags, "grid:")
+    if grid_run_id:
+        summary["grid_run_id"] = grid_run_id
+
+    cfg = _build_minimal_clearml_cfg()
+    summary = pipeline_module._finalize_pipeline_run_summary(cfg, summary, status=controller_status)
+    report_bundle = build_pipeline_report_bundle(
+        summary,
+        cfg=cfg,
+        pipeline_run_dir=stage_dir,
+        pipeline_task_id=pipeline_task_id,
+    )
+    (stage_dir / "pipeline_run.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    (stage_dir / "run_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    (stage_dir / "out.json").write_text(json.dumps({"pipeline_run": summary}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (stage_dir / "report.json").write_text(json.dumps(report_bundle.payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    (stage_dir / "report.md").write_text(report_bundle.markdown, encoding="utf-8")
+    (stage_dir / "report_links.json").write_text(json.dumps(report_bundle.links, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
+
+
 def _run_ui_verify(repo: Path, usecase_id: str, project_root: str | None) -> None:
     verify_script = repo / "tools" / "tests" / "rehearsal_verify_clearml_ui.py"
     if not verify_script.exists():
@@ -607,6 +767,19 @@ def main() -> int:
                 )
                 copied_artifacts = _sync_pipeline_artifacts(repo, output_dir, pipeline_task_id)
                 pipeline_run_payload = _load_json_if_exists(copied_artifacts.get("pipeline_run.json"))
+                if controller_status in {"completed", "failed", "stopped"}:
+                    payload_status = _normalize_task_status(
+                        pipeline_run_payload.get("status") if isinstance(pipeline_run_payload, dict) else None
+                    )
+                    if pipeline_run_payload is None or payload_status in {"queued", "running"}:
+                        pipeline_run_payload = _rebuild_pipeline_outputs_from_clearml(
+                            repo=repo,
+                            output_dir=output_dir,
+                            usecase_id=usecase_id,
+                            pipeline_task_id=pipeline_task_id,
+                            controller_status=controller_status,
+                            project_root=args.project_root,
+                        )
             summary = {
                 "usecase_id": usecase_id,
                 "raw_dataset_id": raw_dataset_id,

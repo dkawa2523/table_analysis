@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -22,6 +23,7 @@ from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.ops import clearml_identity as clearml_identity_module
 from tabular_analysis import platform_adapter_task_ops as task_ops_module
 from tabular_analysis.processes import pipeline as pipeline_module
+from tabular_analysis.reporting import pipeline_report as pipeline_report_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
 from tabular_analysis.processes.pipeline_support import (
     apply_pipeline_profile_defaults,
@@ -577,6 +579,154 @@ def _assert_pipeline_controller_context_attaches_by_pipeline_task_id_override() 
             os.environ.pop("TRAINS_TASK_ID", None)
         else:
             os.environ["TRAINS_TASK_ID"] = original_trains_task_id
+
+
+def _assert_rehearsal_rebuild_pipeline_outputs_from_clearml() -> None:
+    class _FakeTask:
+        def __init__(self, task_id: str, project: str, status: str, tags: list[str]) -> None:
+            self.id = task_id
+            self.project = project
+            self.status = status
+            self.tags = tags
+
+    import tabular_analysis.platform_adapter_task as platform_task_module
+
+    original_platform = {
+        "list": platform_task_module.list_clearml_tasks_by_tags,
+        "id": platform_task_module.clearml_task_id,
+        "project": platform_task_module.clearml_task_project_name,
+        "status": platform_task_module.clearml_task_status_from_obj,
+        "tags": platform_task_module.clearml_task_tags,
+    }
+    original_get_status = pipeline_module.get_clearml_task_status
+    original_report_bundle = pipeline_report_module.build_pipeline_report_bundle
+    try:
+        fake_tasks = [
+            _FakeTask(
+                "pipeline-task",
+                "LOCAL/TabularAnalysis/Pipelines/Runs/demo_usecase",
+                "completed",
+                [
+                    "solution:tabular-analysis",
+                    "process:pipeline",
+                    "task_kind:run",
+                    "usecase:demo_usecase",
+                    "grid:grid123",
+                    "pipeline_profile:pipeline",
+                ],
+            ),
+            _FakeTask(
+                "preprocess-task",
+                "LOCAL/TabularAnalysis/Runs/demo_usecase/02_Preprocess",
+                "completed",
+                [
+                    "solution:tabular-analysis",
+                    "process:preprocess",
+                    "usecase:demo_usecase",
+                    "preprocess:stdscaler_ohe",
+                ],
+            ),
+            _FakeTask(
+                "ridge-task",
+                "LOCAL/TabularAnalysis/Runs/demo_usecase/03_TrainModels",
+                "completed",
+                [
+                    "solution:tabular-analysis",
+                    "process:train_model",
+                    "usecase:demo_usecase",
+                    "preprocess:stdscaler_ohe",
+                    "model:ridge",
+                ],
+            ),
+            _FakeTask(
+                "lgbm-task",
+                "LOCAL/TabularAnalysis/Runs/demo_usecase/03_TrainModels",
+                "completed",
+                [
+                    "solution:tabular-analysis",
+                    "process:train_model",
+                    "usecase:demo_usecase",
+                    "preprocess:stdscaler_ohe",
+                    "model:lgbm",
+                ],
+            ),
+            _FakeTask(
+                "leaderboard-task",
+                "LOCAL/TabularAnalysis/Runs/demo_usecase/99_Leaderboard",
+                "completed",
+                [
+                    "solution:tabular-analysis",
+                    "process:leaderboard",
+                    "usecase:demo_usecase",
+                ],
+            ),
+        ]
+
+        platform_task_module.list_clearml_tasks_by_tags = lambda tags, project_name=None, task_name=None, allow_archived=True, order_by=None: fake_tasks
+        platform_task_module.clearml_task_id = lambda task: task.id
+        platform_task_module.clearml_task_project_name = lambda task: task.project
+        platform_task_module.clearml_task_status_from_obj = lambda task: task.status
+        platform_task_module.clearml_task_tags = lambda task: list(task.tags)
+        pipeline_module.get_clearml_task_status = lambda task_id: {
+            "ridge-task": "completed",
+            "lgbm-task": "completed",
+        }.get(task_id, "completed")
+
+        def _fake_report_bundle(pipeline_run, *, cfg=None, max_models=5, pipeline_run_dir=None, pipeline_task_id=None):
+            return pipeline_report_module.PipelineReportBundle(
+                markdown="# Pipeline Summary\n",
+                payload={"status": pipeline_run.get("status"), "summary": {"completed_jobs": pipeline_run.get("completed_jobs")}},
+                links={"pipeline": {"task_id": pipeline_task_id}},
+            )
+
+        pipeline_report_module.build_pipeline_report_bundle = _fake_report_bundle
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            stage_dir = output_dir / "99_pipeline"
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            (stage_dir / "pipeline_run.json").write_text(
+                json.dumps(
+                    {
+                        "grid_run_id": "grid123",
+                        "plan_only": False,
+                        "planned_jobs": 2,
+                        "executed_jobs": 0,
+                        "skipped_due_to_policy": 0,
+                        "train_refs": [],
+                        "train_ensemble_refs": [],
+                        "status": "queued",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            summary = rehearsal_module._rebuild_pipeline_outputs_from_clearml(
+                repo=_REPO,
+                output_dir=output_dir,
+                usecase_id="demo_usecase",
+                pipeline_task_id="pipeline-task",
+                controller_status="completed",
+                project_root="LOCAL",
+            )
+            if summary.get("status") != "completed":
+                raise AssertionError(f"rebuild should finalize completed status: {summary}")
+            if summary.get("completed_jobs") != 2:
+                raise AssertionError(f"rebuild should count completed train jobs: {summary}")
+            if len(summary.get("train_refs") or []) != 2:
+                raise AssertionError(f"rebuild should repopulate train refs: {summary}")
+            report_payload = json.loads((stage_dir / "report.json").read_text(encoding="utf-8"))
+            if report_payload.get("status") != "completed":
+                raise AssertionError(f"report.json should reflect rebuilt completed status: {report_payload}")
+    finally:
+        platform_task_module.list_clearml_tasks_by_tags = original_platform["list"]
+        platform_task_module.clearml_task_id = original_platform["id"]
+        platform_task_module.clearml_task_project_name = original_platform["project"]
+        platform_task_module.clearml_task_status_from_obj = original_platform["status"]
+        platform_task_module.clearml_task_tags = original_platform["tags"]
+        pipeline_module.get_clearml_task_status = original_get_status
+        pipeline_report_module.build_pipeline_report_bundle = original_report_bundle
 
 
 def _assert_pipeline_step_references_are_not_quoted() -> None:
@@ -1169,6 +1319,7 @@ def main() -> int:
     _assert_pipeline_profile_defaults_clear_stale_model_variants()
     _assert_pipeline_controller_context_attaches_by_task_id()
     _assert_pipeline_controller_context_attaches_by_pipeline_task_id_override()
+    _assert_rehearsal_rebuild_pipeline_outputs_from_clearml()
     _assert_pipeline_step_references_are_not_quoted()
     _assert_pipeline_steps_enable_recursive_parameter_parsing()
     _assert_leaderboard_bootstrap_extras_follow_pipeline_model_variants()
