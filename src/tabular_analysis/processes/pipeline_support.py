@@ -191,6 +191,7 @@ def build_pipeline_template_defaults(
     defaults['pipeline.run_train_ensemble'] = plan.get('run_train_ensemble')
     defaults['pipeline.run_leaderboard'] = plan.get('run_leaderboard')
     defaults['pipeline.run_infer'] = plan.get('run_infer')
+    defaults['pipeline.plan_only'] = bool(plan.get('plan_only'))
     defaults['pipeline.grid.preprocess_variants'] = plan.get('preprocess_variants')
     defaults['pipeline.grid.model_variants'] = plan.get('model_variants')
     defaults['pipeline.model_set'] = _normalize_str(_cfg_value(cfg, 'pipeline.model_set'))

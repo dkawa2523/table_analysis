@@ -22,6 +22,7 @@ from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.ops import clearml_identity as clearml_identity_module
 from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
+from tabular_analysis.processes.pipeline_support import build_pipeline_template_defaults
 from tabular_analysis.registry.models import list_model_variants
 from tools.clearml_entrypoint import (
     _extract_cli_keys,
@@ -543,6 +544,39 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
         pipeline_module._build_local_pipeline_run_summary = originals["build_summary"]
 
 
+def _assert_pipeline_template_defaults_keep_plan_only() -> None:
+    cfg = OmegaConf.create(
+        {
+            "pipeline": {"model_set": "regression_all"},
+            "run": {"clearml": {"queue_name": "default"}},
+        }
+    )
+    defaults = build_pipeline_template_defaults(
+        cfg=cfg,
+        plan={
+            "run_overrides": {},
+            "data_overrides": {},
+            "downstream_data_overrides": {},
+            "eval_overrides": {},
+            "queues": {"default": "default"},
+            "run_dataset_register": False,
+            "run_preprocess": True,
+            "run_train": True,
+            "run_train_ensemble": False,
+            "run_leaderboard": True,
+            "run_infer": False,
+            "plan_only": True,
+            "preprocess_variants": ["stdscaler_ohe"],
+            "model_variants": ["ridge"],
+        },
+        grid_run_id="grid-plan-only",
+        pipeline_profile="pipeline",
+        pipeline_task_id="controller-plan-only",
+    )
+    if defaults.get("pipeline.plan_only") is not True:
+        raise AssertionError(f"pipeline template defaults must preserve plan_only: {defaults}")
+
+
 def main() -> int:
     _assert_clearml_hocon_reader()
     _assert_batch_execution_mode()
@@ -557,6 +591,7 @@ def main() -> int:
     _assert_pipeline_step_references_are_not_quoted()
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
     _assert_plan_only_controller_does_not_launch_steps()
+    _assert_pipeline_template_defaults_keep_plan_only()
     print("OK: clearml runtime contracts")
     return 0
 
