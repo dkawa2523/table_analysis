@@ -421,6 +421,51 @@ def _assert_pipeline_step_references_are_not_quoted() -> None:
         raise AssertionError(f"plain scalar overrides must remain unchanged: {payload}")
 
 
+def _assert_pipeline_steps_enable_recursive_parameter_parsing() -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeController:
+        def add_step(
+            self,
+            *,
+            name: str,
+            base_task_id: str,
+            parents: list[str] | None=None,
+            parameter_override: dict[str, object] | None=None,
+            recursively_parse_parameters: bool=False,
+            execution_queue: str | None=None,
+            clone_base_task: bool=True,
+            cache_executed_step: bool=False,
+        ) -> None:
+            captured.update(
+                {
+                    "name": name,
+                    "base_task_id": base_task_id,
+                    "parents": parents,
+                    "parameter_override": parameter_override,
+                    "recursively_parse_parameters": recursively_parse_parameters,
+                    "execution_queue": execution_queue,
+                    "clone_base_task": clone_base_task,
+                    "cache_executed_step": cache_executed_step,
+                }
+            )
+
+    pipeline_module._add_pipeline_step(
+        _FakeController(),
+        name="leaderboard",
+        base_task_id="template-123",
+        parents=["train__a", "train__b"],
+        parameter_override={
+            "Args/leaderboard.train_task_ids": ["${train__a.id}", "${train__b.id}"],
+        },
+        execution_queue="default",
+        clone_base_task=True,
+        cache_executed_step=False,
+    )
+    if captured.get("recursively_parse_parameters") is not True:
+        raise AssertionError(f"pipeline steps must enable recursive parameter parsing for list step refs: {captured}")
+
+
 def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
     class _FakeTask:
         pass
@@ -649,6 +694,7 @@ def main() -> int:
     _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_controller_context_attaches_by_task_id()
     _assert_pipeline_step_references_are_not_quoted()
+    _assert_pipeline_steps_enable_recursive_parameter_parsing()
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
     _assert_plan_only_controller_does_not_launch_steps()
     _assert_pipeline_template_defaults_keep_plan_only()

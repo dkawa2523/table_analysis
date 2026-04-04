@@ -863,6 +863,8 @@ def _add_pipeline_step(controller: Any, *, execution_queue: str | None=None, **k
         params = signature.parameters
         if execution_queue and 'execution_queue' in params:
             kwargs['execution_queue'] = execution_queue
+        if 'recursively_parse_parameters' in params and 'recursively_parse_parameters' not in kwargs:
+            kwargs['recursively_parse_parameters'] = True
         base_task_factory = kwargs.get('base_task_factory')
         if base_task_factory and 'base_task_factory' not in params:
             kwargs.pop('base_task_factory', None)
@@ -1152,6 +1154,7 @@ def _apply_runtime_pipeline_step_overrides(*, cfg: Any, plan: Mapping[str, Any],
         setattr(node, 'queue', step.get('queue'))
         setattr(node, 'base_task_id', task_kwargs.get('base_task_id'))
         setattr(node, 'task_factory_func', task_kwargs.get('base_task_factory'))
+        setattr(node, 'recursively_parse_parameters', True)
 def _reset_pipeline_controller_definition(controller: Any) -> None:
     # Controllers reconstructed from Task objects only deserialize the DAG payload.
     # Re-seed the runtime defaults that ClearML's draft serialization expects.
