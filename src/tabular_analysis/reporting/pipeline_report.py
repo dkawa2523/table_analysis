@@ -134,8 +134,10 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
     resolver = _ArtifactResolver(cfg)
     grid_run_id = pipeline_run.get('grid_run_id')
     pipeline_status = _normalize_str(pipeline_run.get('status')) or None
+    requested_jobs = pipeline_run.get('requested_jobs')
     planned_jobs = pipeline_run.get('planned_jobs')
     executed_jobs = pipeline_run.get('executed_jobs')
+    disabled_jobs = pipeline_run.get('disabled_jobs')
     completed_jobs = pipeline_run.get('completed_jobs')
     failed_jobs = pipeline_run.get('failed_jobs')
     stopped_jobs = pipeline_run.get('stopped_jobs')
@@ -144,6 +146,8 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
     skipped_jobs = pipeline_run.get('skipped_due_to_policy')
     plan_only = pipeline_run.get('plan_only')
     grid = pipeline_run.get('grid', {}) if isinstance(pipeline_run, Mapping) else {}
+    selection_payload = pipeline_run.get('selection', {}) if isinstance(pipeline_run, Mapping) else {}
+    disabled_selection = list(pipeline_run.get('disabled_selection') or [])
     preprocess_variants = list(grid.get('preprocess_variants') or [])
     model_variants = list(grid.get('model_variants') or [])
     hpo_cfg = grid.get('hpo', {}) if isinstance(grid, Mapping) else {}
@@ -243,6 +247,8 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
         actions.append('Wait for training/leaderboard to finish, then regenerate the report.')
     if not leaderboard_rows and train_refs:
         actions.append('Run leaderboard to select the best model explicitly.')
+    if disabled_selection:
+        actions.append('Review the Selection section if you intentionally restricted preprocess/model/ensemble subsets.')
     if len(model_variants) <= 1:
         actions.append('Try additional model variants for a stronger baseline.')
     if len(preprocess_variants) <= 1:
@@ -252,7 +258,7 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
     if not actions:
         actions.append('Validate the recommended model on a fresh holdout set.')
     actions = actions[:3]
-    return {'report_version': 1, 'grid_run_id': grid_run_id, 'status': status, 'summary': {'recommended_model_id': recommended_model_id, 'recommended_registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'primary_metric': recommended_metric, 'best_score': recommended_score, 'models_tried': models_tried, 'train_task_ref': recommended_train_ref, 'planned_jobs': planned_jobs, 'executed_jobs': executed_jobs, 'completed_jobs': completed_jobs, 'failed_jobs': failed_jobs, 'stopped_jobs': stopped_jobs, 'running_jobs': running_jobs, 'queued_jobs': queued_jobs, 'skipped_due_to_policy': skipped_jobs, 'plan_only': plan_only, 'recommendation_rationale': rationale}, 'dataset': {'raw_dataset_id': dataset_out.get('raw_dataset_id'), 'processed_dataset_id': _normalize_str(preprocess_ref.get('processed_dataset_id') if preprocess_ref else None) or comparability.get('processed_dataset_id'), 'rows': rows, 'feature_columns': feature_cols, 'target_column': target_column, 'id_columns': id_columns, 'drop_columns': drop_columns}, 'data_quality': data_quality, 'split': {'preprocess_variant': preprocess_variant, 'strategy': split_payload.get('strategy'), 'test_size': split_payload.get('test_size'), 'seed': split_payload.get('seed'), 'group_column': split_payload.get('group_column'), 'time_column': split_payload.get('time_column'), 'split_hash': split_hash, 'recipe_hash': recipe_hash}, 'comparability': comparability, 'top_models': top_models[:max_models], 'recommendation': {'model_id': recommended_model_id, 'registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'train_task_ref': recommended_train_ref, 'primary_metric': recommended_metric, 'best_score': recommended_score, 'direction': direction, 'primary_metric_ci': recommended_detail.get('primary_metric_ci'), 'task_type': task_type, 'n_classes': recommended_detail.get('n_classes'), 'threshold': recommended_threshold, 'thresholding': notes.get('thresholding'), 'calibration': notes.get('calibration'), 'imbalance': notes.get('imbalance'), 'uncertainty': notes.get('uncertainty')}, 'notes': notes, 'next_actions': actions}
+    return {'report_version': 1, 'grid_run_id': grid_run_id, 'status': status, 'summary': {'recommended_model_id': recommended_model_id, 'recommended_registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'primary_metric': recommended_metric, 'best_score': recommended_score, 'models_tried': models_tried, 'train_task_ref': recommended_train_ref, 'requested_jobs': requested_jobs, 'planned_jobs': planned_jobs, 'executed_jobs': executed_jobs, 'disabled_jobs': disabled_jobs, 'completed_jobs': completed_jobs, 'failed_jobs': failed_jobs, 'stopped_jobs': stopped_jobs, 'running_jobs': running_jobs, 'queued_jobs': queued_jobs, 'skipped_due_to_policy': skipped_jobs, 'plan_only': plan_only, 'recommendation_rationale': rationale}, 'dataset': {'raw_dataset_id': dataset_out.get('raw_dataset_id'), 'processed_dataset_id': _normalize_str(preprocess_ref.get('processed_dataset_id') if preprocess_ref else None) or comparability.get('processed_dataset_id'), 'rows': rows, 'feature_columns': feature_cols, 'target_column': target_column, 'id_columns': id_columns, 'drop_columns': drop_columns}, 'selection': {'requested_preprocess_variants': list(selection_payload.get('requested_preprocess_variants') or []), 'active_preprocess_variants': list(selection_payload.get('active_preprocess_variants') or preprocess_variants), 'disabled_preprocess_variants': list(selection_payload.get('disabled_preprocess_variants') or []), 'requested_model_variants': list(selection_payload.get('requested_model_variants') or []), 'active_model_variants': list(selection_payload.get('active_model_variants') or model_variants), 'disabled_model_variants': list(selection_payload.get('disabled_model_variants') or []), 'requested_ensemble_methods': list(selection_payload.get('requested_ensemble_methods') or []), 'active_ensemble_methods': list(selection_payload.get('active_ensemble_methods') or []), 'disabled_ensemble_methods': list(selection_payload.get('disabled_ensemble_methods') or []), 'disabled_entries': disabled_selection}, 'data_quality': data_quality, 'split': {'preprocess_variant': preprocess_variant, 'strategy': split_payload.get('strategy'), 'test_size': split_payload.get('test_size'), 'seed': split_payload.get('seed'), 'group_column': split_payload.get('group_column'), 'time_column': split_payload.get('time_column'), 'split_hash': split_hash, 'recipe_hash': recipe_hash}, 'comparability': comparability, 'top_models': top_models[:max_models], 'recommendation': {'model_id': recommended_model_id, 'registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'train_task_ref': recommended_train_ref, 'primary_metric': recommended_metric, 'best_score': recommended_score, 'direction': direction, 'primary_metric_ci': recommended_detail.get('primary_metric_ci'), 'task_type': task_type, 'n_classes': recommended_detail.get('n_classes'), 'threshold': recommended_threshold, 'thresholding': notes.get('thresholding'), 'calibration': notes.get('calibration'), 'imbalance': notes.get('imbalance'), 'uncertainty': notes.get('uncertainty')}, 'notes': notes, 'next_actions': actions}
 def _render_report_markdown(payload: Mapping[str, Any], *, max_models: int) -> str:
     summary = payload.get('summary') or {}
     dataset = payload.get('dataset') or {}
@@ -268,6 +274,10 @@ def _render_report_markdown(payload: Mapping[str, Any], *, max_models: int) -> s
         lines.append(f"- planned_jobs: {_format_value(summary.get('planned_jobs'))}")
     if summary.get('executed_jobs') is not None:
         lines.append(f"- executed_jobs: {_format_value(summary.get('executed_jobs'))}")
+    if summary.get('requested_jobs') is not None:
+        lines.append(f"- requested_jobs: {_format_value(summary.get('requested_jobs'))}")
+    if summary.get('disabled_jobs') is not None:
+        lines.append(f"- disabled_jobs: {_format_value(summary.get('disabled_jobs'))}")
     if summary.get('completed_jobs') is not None:
         lines.append(f"- completed_jobs: {_format_value(summary.get('completed_jobs'))}")
     if summary.get('failed_jobs') is not None:
@@ -284,6 +294,20 @@ def _render_report_markdown(payload: Mapping[str, Any], *, max_models: int) -> s
         lines.append('- plan_only: true')
     if summary.get('train_task_ref'):
         lines.append(f"- train_task_ref: {_format_value(summary.get('train_task_ref'))}")
+    selection = payload.get('selection') or {}
+    lines.extend([
+        '',
+        '## Selection',
+        f"- preprocess.requested: {_format_value(selection.get('requested_preprocess_variants'))}",
+        f"- preprocess.active: {_format_value(selection.get('active_preprocess_variants'))}",
+        f"- preprocess.disabled: {_format_value(selection.get('disabled_preprocess_variants'))}",
+        f"- model.requested: {_format_value(selection.get('requested_model_variants'))}",
+        f"- model.active: {_format_value(selection.get('active_model_variants'))}",
+        f"- model.disabled: {_format_value(selection.get('disabled_model_variants'))}",
+        f"- ensemble.requested: {_format_value(selection.get('requested_ensemble_methods'))}",
+        f"- ensemble.active: {_format_value(selection.get('active_ensemble_methods'))}",
+        f"- ensemble.disabled: {_format_value(selection.get('disabled_ensemble_methods'))}",
+    ])
     lines.extend(['', '## Data Overview', f"- raw_dataset_id: {_format_value(dataset.get('raw_dataset_id'))}", f"- processed_dataset_id: {_format_value(dataset.get('processed_dataset_id'))}", f"- rows: {_format_value(dataset.get('rows'))}", f"- feature_columns: {_format_value(dataset.get('feature_columns'))}", f"- target_column: {_format_value(dataset.get('target_column'))}"])
     if dataset.get('id_columns'):
         lines.append(f"- id_columns: {_format_value(dataset.get('id_columns'))}")

@@ -115,6 +115,8 @@ def main() -> int:
     for token in ("# Pipeline Summary", "## Conclusion", "## Recommendation", "## Comparability"):
         if token not in report_text:
             raise AssertionError(f"report.md missing section: {token}")
+    if "## Selection" not in report_text:
+        raise AssertionError("report.md missing Selection section")
 
     report_payload = _load_json(report_json_path)
     pipeline_run = _load_json(pipeline_run_path)
@@ -128,6 +130,7 @@ def main() -> int:
     if report_payload.get("status") != pipeline_run.get("status"):
         raise AssertionError("report.json status must follow pipeline_run.json")
     summary = report_payload.get("summary") or {}
+    selection = report_payload.get("selection") or {}
     recommended_id = summary.get("recommended_model_id")
     if not recommended_id:
         raise AssertionError("report.json missing recommended_model_id")
@@ -141,6 +144,12 @@ def main() -> int:
         raise AssertionError("report.json missing comparability.split_hash")
     if summary.get("completed_jobs") != pipeline_run.get("completed_jobs"):
         raise AssertionError("report.json completed_jobs must mirror pipeline_run.json")
+    if summary.get("requested_jobs") != pipeline_run.get("requested_jobs"):
+        raise AssertionError("report.json requested_jobs must mirror pipeline_run.json")
+    if summary.get("disabled_jobs") != pipeline_run.get("disabled_jobs"):
+        raise AssertionError("report.json disabled_jobs must mirror pipeline_run.json")
+    if "active_model_variants" not in selection:
+        raise AssertionError("report.json missing selection.active_model_variants")
 
     links = _load_json(report_links_path)
     pipeline_link = links.get("pipeline") or {}

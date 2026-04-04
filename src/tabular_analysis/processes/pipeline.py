@@ -32,7 +32,7 @@ from ..platform_adapter_pipeline import apply_clearml_task_overrides, clone_pipe
 from ..platform_adapter_task import clearml_task_id, get_clearml_task_status, report_markdown, reset_clearml_task_args, set_clearml_task_parameters, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
 from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_run_project_name, build_runtime_properties, build_runtime_tags, build_step_run_project_name, build_project_name, resolve_clearml_metadata
-from .pipeline_support import apply_pipeline_profile_defaults, build_pipeline_step_specs, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, normalize_pipeline_profile, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags
+from .pipeline_support import apply_pipeline_profile_defaults, build_pipeline_step_specs, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, normalize_pipeline_profile, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection
 from ..reporting.pipeline_report import build_pipeline_report_bundle
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 _STAGE_BY_TASK = {'dataset_register': '01_dataset_register', 'preprocess': '02_preprocess', 'train_model': '03_train_model', 'train_ensemble': '04_train_ensemble', 'infer': '04_infer', 'leaderboard': '05_leaderboard'}
@@ -457,6 +457,38 @@ def _resolve_ensemble_methods(cfg: Any) -> list[str]:
         return ordered
     method = _normalize_str(_cfg_value(cfg, 'ensemble.method')) or 'mean_topk'
     return [method]
+
+
+def _build_disabled_selection_entries(selection: Mapping[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for preprocess_variant in selection.get('disabled_preprocess_variants') or []:
+        entries.append(
+            {
+                'process': 'preprocess',
+                'preprocess_variant': str(preprocess_variant),
+                'execution_state': 'disabled_by_selection',
+                'reason': 'preprocess_variant_not_enabled',
+            }
+        )
+    for model_variant in selection.get('disabled_model_variants') or []:
+        entries.append(
+            {
+                'process': 'train_model',
+                'model_variant': str(model_variant),
+                'execution_state': 'disabled_by_selection',
+                'reason': 'model_variant_not_enabled',
+            }
+        )
+    for ensemble_method in selection.get('disabled_ensemble_methods') or []:
+        entries.append(
+            {
+                'process': 'train_ensemble',
+                'ensemble_method': str(ensemble_method),
+                'execution_state': 'disabled_by_selection',
+                'reason': 'ensemble_method_not_enabled',
+            }
+        )
+    return entries
 def _collect_ensemble_overrides(cfg: Any) -> dict[str, Any]:
     ensemble_cfg = getattr(cfg, 'ensemble', None)
     overrides: dict[str, Any] = {}
@@ -817,8 +849,19 @@ def _build_pipeline_plan(cfg: Any, grid_run_id: str, *, child_execution: str | N
     if run_preprocess and raw_dataset_id and raw_dataset_id.startswith('local:') and (not dataset_path_value):
         raise ValueError('data.dataset_path is required when data.raw_dataset_id is local.')
     model_set = _normalize_str(_cfg_value(cfg, 'pipeline.model_set'))
-    (preprocess_variants, model_variants) = _resolve_variants(cfg)
-    (hpo_enabled, hpo_trials_by_model, hpo_params_cfg) = _resolve_hpo_trials(cfg, model_variants)
+    (requested_preprocess_variants, requested_model_variants) = _resolve_variants(cfg)
+    requested_ensemble_methods = _resolve_ensemble_methods(cfg) if run_train_ensemble else []
+    selection = resolve_pipeline_selection(
+        cfg,
+        preprocess_variants=requested_preprocess_variants,
+        model_variants=requested_model_variants,
+        ensemble_methods=requested_ensemble_methods,
+    )
+    preprocess_variants = list(selection.get('active_preprocess_variants') or [])
+    model_variants = list(selection.get('active_model_variants') or [])
+    ensemble_methods = list(selection.get('active_ensemble_methods') or [])
+    disabled_selection_entries = _build_disabled_selection_entries(selection)
+    (hpo_enabled, hpo_trials_by_model, hpo_params_cfg) = _resolve_hpo_trials(cfg, requested_model_variants)
     base_extra_tags = _to_list(_cfg_value(cfg, 'run.clearml.extra_tags'))
     limits = _resolve_exec_policy_limits(cfg)
     max_jobs = limits['max_jobs']
@@ -826,14 +869,26 @@ def _build_pipeline_plan(cfg: Any, grid_run_id: str, *, child_execution: str | N
     max_hpo_trials = limits['max_hpo_trials']
     plan_only = resolve_pipeline_plan_only(cfg)
     train_jobs: list[dict[str, Any]] = []
-    plan_info = {'raw_jobs': 0, 'planned_jobs': 0, 'skipped_due_to_policy': 0}
+    plan_info = {'raw_jobs': 0, 'requested_jobs': 0, 'planned_jobs': 0, 'disabled_jobs': 0, 'skipped_due_to_policy': 0}
     if run_train:
-        if not preprocess_variants:
+        if not requested_preprocess_variants:
             raise ValueError('pipeline.grid.preprocess_variants is empty.')
-        if not model_variants:
+        if not requested_model_variants:
             raise ValueError('pipeline.grid.model_variants is empty.')
-        (train_jobs, plan_info, _) = _build_train_plan(preprocess_variants, model_variants, hpo_trials_by_model, max_jobs=max_jobs, max_hpo_trials=max_hpo_trials)
-    if run_preprocess and (not preprocess_variants):
+        (train_jobs, train_plan_info, _) = _build_train_plan(preprocess_variants, model_variants, hpo_trials_by_model, max_jobs=max_jobs, max_hpo_trials=max_hpo_trials)
+        requested_trial_count = sum((len(hpo_trials_by_model.get(model, [])) for model in requested_model_variants))
+        requested_train_jobs = len(requested_preprocess_variants) * requested_trial_count if requested_preprocess_variants else 0
+        disabled_train_jobs = requested_train_jobs - int(train_plan_info.get('raw_jobs', 0))
+        if disabled_train_jobs < 0:
+            disabled_train_jobs = 0
+        plan_info = {
+            'raw_jobs': requested_train_jobs,
+            'requested_jobs': requested_train_jobs,
+            'planned_jobs': int(train_plan_info.get('planned_jobs', 0)),
+            'disabled_jobs': int(disabled_train_jobs),
+            'skipped_due_to_policy': int(train_plan_info.get('skipped_due_to_policy', 0)),
+        }
+    if run_preprocess and (not requested_preprocess_variants):
         raise ValueError('pipeline.grid.preprocess_variants is empty.')
     if run_train and (not run_preprocess):
         raise ValueError('pipeline.run_preprocess=false cannot be combined with run_train=true.')
@@ -843,7 +898,6 @@ def _build_pipeline_plan(cfg: Any, grid_run_id: str, *, child_execution: str | N
     data_overrides = _collect_data_overrides(cfg)
     downstream_data_overrides = _build_downstream_data_overrides(data_overrides, raw_dataset_id=raw_dataset_id) if run_preprocess else dict(data_overrides)
     eval_overrides = _collect_eval_overrides(cfg)
-    ensemble_methods = _resolve_ensemble_methods(cfg)
     ensemble_overrides = _collect_ensemble_overrides(cfg)
     preprocess_targets = preprocess_variants
     if run_train:
@@ -858,11 +912,17 @@ def _build_pipeline_plan(cfg: Any, grid_run_id: str, *, child_execution: str | N
     queues = _resolve_exec_policy_queues(cfg)
     steps = _build_plan_steps(cfg, base_output_dir=base_output_dir, grid_run_id=grid_run_id, run_dataset_register=run_dataset_register, run_preprocess=run_preprocess, run_train=run_train, run_train_ensemble=run_train_ensemble, run_leaderboard=run_leaderboard, run_infer=run_infer, preprocess_targets=preprocess_targets, train_jobs=train_jobs, base_extra_tags=base_extra_tags, max_models=max_models, queues=queues, ensemble_methods=ensemble_methods, ensemble_overrides=ensemble_overrides)
     ensemble_jobs = len(steps['train_ensemble']) if run_train_ensemble else 0
-    if ensemble_jobs:
+    if run_train_ensemble:
         plan_info = dict(plan_info)
-        plan_info['raw_jobs'] = int(plan_info.get('raw_jobs', 0)) + ensemble_jobs
+        requested_ensemble_jobs = len(preprocess_targets) * len(selection.get('requested_ensemble_methods') or [])
+        disabled_ensemble_jobs = requested_ensemble_jobs - ensemble_jobs
+        if disabled_ensemble_jobs < 0:
+            disabled_ensemble_jobs = 0
+        plan_info['raw_jobs'] = int(plan_info.get('raw_jobs', 0)) + requested_ensemble_jobs
+        plan_info['requested_jobs'] = int(plan_info.get('requested_jobs', 0)) + requested_ensemble_jobs
         plan_info['planned_jobs'] = int(plan_info.get('planned_jobs', 0)) + ensemble_jobs
-    return {'base_output_dir': base_output_dir, 'run_dataset_register': run_dataset_register, 'run_preprocess': run_preprocess, 'run_train': run_train, 'run_train_ensemble': run_train_ensemble, 'run_leaderboard': run_leaderboard, 'run_infer': run_infer, 'model_set': model_set, 'preprocess_variants': preprocess_variants, 'model_variants': model_variants, 'hpo_enabled': hpo_enabled, 'hpo_params_cfg': hpo_params_cfg, 'limits': limits, 'max_jobs': max_jobs, 'max_models': max_models, 'max_hpo_trials': max_hpo_trials, 'plan_only': plan_only, 'plan_info': plan_info, 'train_jobs': train_jobs, 'preprocess_targets': preprocess_targets, 'run_overrides': run_overrides, 'data_overrides': data_overrides, 'downstream_data_overrides': downstream_data_overrides, 'eval_overrides': eval_overrides, 'base_extra_tags': base_extra_tags, 'queues': queues, 'steps': steps}
+        plan_info['disabled_jobs'] = int(plan_info.get('disabled_jobs', 0)) + disabled_ensemble_jobs
+    return {'base_output_dir': base_output_dir, 'run_dataset_register': run_dataset_register, 'run_preprocess': run_preprocess, 'run_train': run_train, 'run_train_ensemble': run_train_ensemble, 'run_leaderboard': run_leaderboard, 'run_infer': run_infer, 'model_set': model_set, 'preprocess_variants': preprocess_variants, 'model_variants': model_variants, 'hpo_enabled': hpo_enabled, 'hpo_params_cfg': hpo_params_cfg, 'limits': limits, 'max_jobs': max_jobs, 'max_models': max_models, 'max_hpo_trials': max_hpo_trials, 'plan_only': plan_only, 'plan_info': plan_info, 'selection': selection, 'disabled_selection': disabled_selection_entries, 'train_jobs': train_jobs, 'preprocess_targets': preprocess_targets, 'run_overrides': run_overrides, 'data_overrides': data_overrides, 'downstream_data_overrides': downstream_data_overrides, 'eval_overrides': eval_overrides, 'base_extra_tags': base_extra_tags, 'queues': queues, 'steps': steps}
 def _collect_step_task_ids(controller: Any) -> dict[str, str]:
     getter = getattr(controller, 'get_processed_nodes', None)
     nodes = getter() if callable(getter) else {}
@@ -940,7 +1000,42 @@ def _build_infer_step_overrides(*, cfg: Any, clearml_enabled: bool, run_override
     explicit_train_task_id = _normalize_str(getattr(infer_cfg, 'train_task_id', None))
     return _apply_infer_reference_overrides(overrides, recommendation_payload=leaderboard_out, explicit_model_id=explicit_model_id, explicit_train_task_id=explicit_train_task_id, error_message='infer requires model_id or train_task_id.')
 def _build_local_pipeline_run_summary(*, cfg: Any, plan: Mapping[str, Any], grid_run_id: str, dataset_register_ref: dict[str, Any] | None, preprocess_refs: list[dict[str, Any]], train_refs: list[dict[str, Any]], train_ensemble_refs: list[dict[str, Any]], leaderboard_ref: dict[str, Any] | None, infer_ref: dict[str, Any] | None, executed_jobs: int) -> dict[str, Any]:
-    return {'grid_run_id': grid_run_id, 'plan_only': plan['plan_only'], 'planned_jobs': int(plan['plan_info'].get('planned_jobs', 0)), 'executed_jobs': int(executed_jobs), 'skipped_due_to_policy': int(plan['plan_info'].get('skipped_due_to_policy', 0)), 'dataset_register_ref': dataset_register_ref, 'preprocess_ref': preprocess_refs, 'train_refs': train_refs, 'train_ensemble_refs': train_ensemble_refs, 'leaderboard_ref': leaderboard_ref, 'infer_ref': infer_ref, 'grid': {'preprocess_variants': plan['preprocess_variants'], 'model_variants': plan['model_variants'], 'max_jobs': plan['max_jobs'], 'max_hpo_trials': plan['max_hpo_trials'], 'hpo': {'enabled': plan['hpo_enabled'], 'params': plan['hpo_params_cfg']}}, 'policy': {'limits': dict(plan['limits']), 'selection': _resolve_exec_policy_selection(cfg)}}
+    selection = dict(plan.get('selection') or {})
+    return {
+        'grid_run_id': grid_run_id,
+        'plan_only': plan['plan_only'],
+        'requested_jobs': int(plan['plan_info'].get('requested_jobs', plan['plan_info'].get('raw_jobs', 0))),
+        'planned_jobs': int(plan['plan_info'].get('planned_jobs', 0)),
+        'executed_jobs': int(executed_jobs),
+        'disabled_jobs': int(plan['plan_info'].get('disabled_jobs', 0)),
+        'skipped_due_to_policy': int(plan['plan_info'].get('skipped_due_to_policy', 0)),
+        'disabled_selection': list(plan.get('disabled_selection') or []),
+        'dataset_register_ref': dataset_register_ref,
+        'preprocess_ref': preprocess_refs,
+        'train_refs': train_refs,
+        'train_ensemble_refs': train_ensemble_refs,
+        'leaderboard_ref': leaderboard_ref,
+        'infer_ref': infer_ref,
+        'grid': {
+            'preprocess_variants': plan['preprocess_variants'],
+            'model_variants': plan['model_variants'],
+            'max_jobs': plan['max_jobs'],
+            'max_hpo_trials': plan['max_hpo_trials'],
+            'hpo': {'enabled': plan['hpo_enabled'], 'params': plan['hpo_params_cfg']},
+        },
+        'selection': {
+            'requested_preprocess_variants': list(selection.get('requested_preprocess_variants') or []),
+            'active_preprocess_variants': list(selection.get('active_preprocess_variants') or []),
+            'disabled_preprocess_variants': list(selection.get('disabled_preprocess_variants') or []),
+            'requested_model_variants': list(selection.get('requested_model_variants') or []),
+            'active_model_variants': list(selection.get('active_model_variants') or []),
+            'disabled_model_variants': list(selection.get('disabled_model_variants') or []),
+            'requested_ensemble_methods': list(selection.get('requested_ensemble_methods') or []),
+            'active_ensemble_methods': list(selection.get('active_ensemble_methods') or []),
+            'disabled_ensemble_methods': list(selection.get('disabled_ensemble_methods') or []),
+        },
+        'policy': {'limits': dict(plan['limits']), 'selection': _resolve_exec_policy_selection(cfg)},
+    }
 
 
 def _normalize_pipeline_job_status(value: Any) -> str | None:
@@ -1467,33 +1562,55 @@ def _assert_visible_pipeline_graph_contract(*, cfg: Any, plan: Mapping[str, Any]
         f'template__{normalize_pipeline_profile(pipeline_profile)}',
         child_execution='logging',
     )
+    actual_selection = dict(plan.get('selection') or {})
+    expected_selection = dict(expected_plan.get('selection') or {})
+    actual_requested_preprocess = tuple(str(item) for item in (actual_selection.get('requested_preprocess_variants') or plan.get('preprocess_variants') or []))
+    expected_requested_preprocess = tuple(str(item) for item in (expected_selection.get('requested_preprocess_variants') or expected_plan.get('preprocess_variants') or []))
+    actual_requested_models = tuple(str(item) for item in (actual_selection.get('requested_model_variants') or plan.get('model_variants') or []))
+    expected_requested_models = tuple(str(item) for item in (expected_selection.get('requested_model_variants') or expected_plan.get('model_variants') or []))
+    actual_requested_methods = tuple(str(item) for item in (actual_selection.get('requested_ensemble_methods') or []))
+    expected_requested_methods = tuple(str(item) for item in (expected_selection.get('requested_ensemble_methods') or []))
     actual_preprocess = tuple(str(item) for item in (plan.get('preprocess_variants') or []))
-    expected_preprocess = tuple(str(item) for item in (expected_plan.get('preprocess_variants') or []))
     actual_models = tuple(str(item) for item in (plan.get('model_variants') or []))
-    expected_models = tuple(str(item) for item in (expected_plan.get('model_variants') or []))
     actual_steps = tuple(spec.step_name for spec in build_pipeline_step_specs(plan))
     expected_steps = tuple(spec.step_name for spec in build_pipeline_step_specs(expected_plan))
     mismatches: dict[str, Any] = {}
-    if actual_preprocess != expected_preprocess:
-        mismatches['preprocess_variants'] = {
+    if actual_requested_preprocess != expected_requested_preprocess:
+        mismatches['requested_preprocess_variants'] = {
+            'actual': list(actual_requested_preprocess),
+            'expected': list(expected_requested_preprocess),
+        }
+    if actual_requested_models != expected_requested_models:
+        mismatches['requested_model_variants'] = {
+            'actual': list(actual_requested_models),
+            'expected': list(expected_requested_models),
+        }
+    if actual_requested_methods != expected_requested_methods:
+        mismatches['requested_ensemble_methods'] = {
+            'actual': list(actual_requested_methods),
+            'expected': list(expected_requested_methods),
+        }
+    if not set(actual_preprocess).issubset(set(expected_requested_preprocess)):
+        mismatches['active_preprocess_variants'] = {
             'actual': list(actual_preprocess),
-            'expected': list(expected_preprocess),
+            'allowed_subset_of': list(expected_requested_preprocess),
         }
-    if actual_models != expected_models:
-        mismatches['model_variants'] = {
+    if not set(actual_models).issubset(set(expected_requested_models)):
+        mismatches['active_model_variants'] = {
             'actual': list(actual_models),
-            'expected': list(expected_models),
+            'allowed_subset_of': list(expected_requested_models),
         }
-    if actual_steps != expected_steps:
+    filtered_expected_steps = tuple(step for step in expected_steps if step in set(actual_steps))
+    if actual_steps != filtered_expected_steps:
         mismatches['step_names'] = {
             'actual': list(actual_steps),
-            'expected': list(expected_steps),
+            'expected_subset_of': list(expected_steps),
         }
     if mismatches:
         raise ValueError(
             'Visible pipeline template clones use a fixed DAG. '
-            f'Align the run to profile={normalize_pipeline_profile(pipeline_profile)!r} instead of overriding '
-            f'graph-shaping pipeline values. Mismatch: {mismatches}'
+            f'Use selection-based subsets under profile={normalize_pipeline_profile(pipeline_profile)!r} instead of '
+            f'overriding graph-shaping pipeline values. Mismatch: {mismatches}'
         )
 
 
@@ -1759,6 +1876,18 @@ def run(cfg: Any) -> None:
         upload_artifact(ctx, 'report_links.json', report_links_path)
         report_markdown(ctx, title='Pipeline Report', markdown=report_bundle.markdown)
     out = {'pipeline_run': pipeline_run}
-    inputs = {'run_dataset_register': pipeline_flags['run_dataset_register'], 'run_preprocess': pipeline_flags['run_preprocess'], 'run_train': pipeline_flags['run_train'], 'run_leaderboard': pipeline_flags['run_leaderboard'], 'run_infer': pipeline_flags['run_infer'], 'plan_only': plan_only}
+    inputs = {
+        'run_dataset_register': pipeline_flags['run_dataset_register'],
+        'run_preprocess': pipeline_flags['run_preprocess'],
+        'run_train': pipeline_flags['run_train'],
+        'run_leaderboard': pipeline_flags['run_leaderboard'],
+        'run_infer': pipeline_flags['run_infer'],
+        'plan_only': plan_only,
+        'selection': {
+            'enabled_preprocess_variants': list(_to_list(_cfg_value(cfg, 'pipeline.selection.enabled_preprocess_variants'))),
+            'enabled_model_variants': list(_to_list(_cfg_value(cfg, 'pipeline.selection.enabled_model_variants'))),
+            'enabled_ensemble_methods': list(_to_list(_cfg_value(cfg, 'ensemble.selection.enabled_methods'))),
+        },
+    }
     outputs = {'grid_run_id': grid_run_id, 'pipeline_run_path': str(pipeline_run_path), 'run_summary_path': str(run_summary_path)}
     emit_outputs_and_manifest(ctx, cfg, process='pipeline', out=out, inputs=inputs, outputs=outputs, hash_payloads={'config_hash': ('config', cfg), 'split_hash': ('split', {}), 'recipe_hash': ('recipe', {})}, clearml_enabled=clearml_enabled)

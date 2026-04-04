@@ -25,7 +25,7 @@ from tabular_analysis.platform_adapter_task import (
 )
 
 
-EXPECTED_SECTIONS = {"inputs", "dataset", "preprocess", "model", "eval", "pipeline", "clearml"}
+EXPECTED_SECTIONS = {"inputs", "dataset", "selection", "preprocess", "model", "eval", "pipeline", "clearml"}
 
 
 def _task_name(task: Any) -> str:

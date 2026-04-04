@@ -223,27 +223,39 @@ def _build_dataset_register_cmd(
     return cmd
 
 
-def _resolve_model_overrides(task_type: str, models: str | None, model_set: str | None) -> list[str]:
+def _resolve_model_overrides(
+    task_type: str,
+    models: str | None,
+    model_set: str | None,
+    *,
+    use_selection: bool,
+) -> list[str]:
     if model_set:
         return [_format_override("pipeline.model_set", model_set)]
     if not models or models == "small":
         if task_type == "classification":
-            return [_format_override("pipeline.model_variants", ["logistic_regression"])]
-        return [_format_override("pipeline.model_variants", ["ridge", "elasticnet"])]
+            key = "pipeline.selection.enabled_model_variants" if use_selection else "pipeline.model_variants"
+            return [_format_override(key, ["logistic_regression"])]
+        key = "pipeline.selection.enabled_model_variants" if use_selection else "pipeline.model_variants"
+        return [_format_override(key, ["ridge", "elasticnet"])]
     if models == "all":
         if task_type == "regression":
             return [_format_override("pipeline.model_set", "regression_all")]
-        return [_format_override("pipeline.model_variants", ["logistic_regression"])]
+        key = "pipeline.selection.enabled_model_variants" if use_selection else "pipeline.model_variants"
+        return [_format_override(key, ["logistic_regression"])]
     model_list = [item.strip() for item in models.split(",") if item.strip()]
     if not model_list:
         return []
-    return [_format_override("pipeline.model_variants", model_list)]
+    key = "pipeline.selection.enabled_model_variants" if use_selection else "pipeline.model_variants"
+    return [_format_override(key, model_list)]
 
 
-def _resolve_preprocess_overrides(preprocess: str) -> list[str]:
+def _resolve_preprocess_overrides(preprocess: str, *, use_selection: bool) -> list[str]:
     items = [item.strip() for item in preprocess.split(",") if item.strip()]
     if not items:
         return []
+    if use_selection:
+        return [_format_override("pipeline.selection.enabled_preprocess_variants", items)]
     if len(items) == 1:
         return [_format_override("pipeline.preprocess_variant", items[0])]
     return [_format_override("pipeline.preprocess_variants", items)]
@@ -279,6 +291,7 @@ def _build_pipeline_cmd(
     ]
     if raw_dataset_id.startswith("local:"):
         cmd.append(_format_override("data.dataset_path", str(dataset_path)))
+    use_selection = execution == "agent"
     if execution == "local":
         cmd.append("run.clearml.enabled=false")
     elif execution == "logging":
@@ -300,8 +313,8 @@ def _build_pipeline_cmd(
         cmd.append("eval.primary_metric=accuracy")
     if plan_only:
         cmd.append("pipeline.plan_only=true")
-    cmd.extend(_resolve_preprocess_overrides(preprocess))
-    cmd.extend(_resolve_model_overrides(task_type, models, model_set))
+    cmd.extend(_resolve_preprocess_overrides(preprocess, use_selection=use_selection))
+    cmd.extend(_resolve_model_overrides(task_type, models, model_set, use_selection=use_selection))
     return cmd
 
 
@@ -793,8 +806,10 @@ def main() -> int:
             if pipeline_run_payload:
                 for key in (
                     "status",
+                    "requested_jobs",
                     "planned_jobs",
                     "executed_jobs",
+                    "disabled_jobs",
                     "completed_jobs",
                     "failed_jobs",
                     "stopped_jobs",

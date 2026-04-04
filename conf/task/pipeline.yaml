@@ -17,6 +17,9 @@ pipeline:
   preprocess_variants: []
   model_set: regression_all
   model_variants: []
+  selection:
+    enabled_preprocess_variants: []
+    enabled_model_variants: []
 
   grid:
     preprocess_variants: [stdscaler_ohe]

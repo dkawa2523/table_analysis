@@ -3,8 +3,6 @@ sections:
   inputs:
     - run.usecase_id
     - run.output_dir
-    - data.dataset_path
-    - data.target_column
     - infer.mode
     - infer.input_path
     - infer.input_json
@@ -15,9 +13,14 @@ sections:
     - infer.validation.inputs_path
     - infer.validation.inputs_json
   dataset:
+    - data.dataset_path
+    - data.target_column
     - data.raw_dataset_id
     - data.processed_dataset_id
     - infer.train_task_id
+  selection:
+    - pipeline.selection.*
+    - ensemble.selection.*
   preprocess:
     - preprocess.*
     - data.split.*
@@ -31,7 +34,15 @@ sections:
     - eval.*
     - leaderboard.*
   pipeline:
-    - pipeline.*
+    - pipeline.profile
+    - pipeline.run_dataset_register
+    - pipeline.run_preprocess
+    - pipeline.run_train
+    - pipeline.run_train_ensemble
+    - pipeline.run_leaderboard
+    - pipeline.run_infer
+    - pipeline.plan_only
+    - pipeline.model_set
   clearml:
     - run.clearml.enabled
     - run.clearml.execution

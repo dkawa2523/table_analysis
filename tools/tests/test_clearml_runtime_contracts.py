@@ -470,6 +470,30 @@ def _assert_pipeline_profile_defaults_clear_stale_model_variants() -> None:
         raise AssertionError(f"unexpected preprocess variants after profile defaults: {preprocess_variants}")
 
 
+def _assert_pipeline_profile_defaults_clear_stale_selection() -> None:
+    cfg = OmegaConf.create(
+        {
+            "pipeline": {
+                "selection": {
+                    "enabled_preprocess_variants": ["legacy_preprocess"],
+                    "enabled_model_variants": ["ridge"],
+                }
+            },
+            "ensemble": {
+                "enabled": True,
+                "selection": {"enabled_methods": ["weighted"]},
+            },
+        }
+    )
+    updated = apply_pipeline_profile_defaults(cfg, "train_ensemble_full")
+    if list(updated.pipeline.selection.enabled_preprocess_variants) != []:
+        raise AssertionError(f"pipeline profile defaults must clear stale preprocess selection: {updated}")
+    if list(updated.pipeline.selection.enabled_model_variants) != []:
+        raise AssertionError(f"pipeline profile defaults must clear stale model selection: {updated}")
+    if list(updated.ensemble.selection.enabled_methods) != []:
+        raise AssertionError(f"pipeline profile defaults must clear stale ensemble selection: {updated}")
+
+
 def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
     class _FakeTaskObject:
         name = "pipeline"
@@ -1041,6 +1065,17 @@ def _assert_pipeline_template_defaults_keep_plan_only() -> None:
             "plan_only": True,
             "preprocess_variants": ["stdscaler_ohe"],
             "model_variants": ["ridge"],
+            "selection": {
+                "requested_preprocess_variants": ["stdscaler_ohe"],
+                "active_preprocess_variants": ["stdscaler_ohe"],
+                "disabled_preprocess_variants": [],
+                "requested_model_variants": ["ridge", "lgbm"],
+                "active_model_variants": ["ridge"],
+                "disabled_model_variants": ["lgbm"],
+                "requested_ensemble_methods": [],
+                "active_ensemble_methods": [],
+                "disabled_ensemble_methods": [],
+            },
         },
         grid_run_id="grid-plan-only",
         pipeline_profile="pipeline",
@@ -1048,6 +1083,10 @@ def _assert_pipeline_template_defaults_keep_plan_only() -> None:
     )
     if defaults.get("pipeline.plan_only") is not True:
         raise AssertionError(f"pipeline template defaults must preserve plan_only: {defaults}")
+    if defaults.get("pipeline.grid.model_variants") != ["ridge", "lgbm"]:
+        raise AssertionError(f"pipeline template defaults must keep requested model superset in grid.model_variants: {defaults}")
+    if defaults.get("pipeline.selection.enabled_model_variants") != ["ridge"]:
+        raise AssertionError(f"pipeline template defaults must expose active model subset via selection: {defaults}")
 
 
 def _assert_pipeline_run_summary_tracks_actual_job_statuses() -> None:
@@ -1197,6 +1236,48 @@ def _assert_visible_template_clone_rejects_graph_shaping_model_override() -> Non
     raise AssertionError("visible template clones must reject graph-shaping model overrides")
 
 
+def _assert_visible_template_clone_allows_selection_subset() -> None:
+    cfg = OmegaConf.create(
+        {
+            "run": {"output_dir": "outputs"},
+            "pipeline": {
+                "run_dataset_register": False,
+                "run_preprocess": True,
+                "run_train": True,
+                "run_train_ensemble": False,
+                "run_leaderboard": True,
+                "run_infer": False,
+                "model_set": "regression_all",
+                "grid": {
+                    "preprocess_variants": ["stdscaler_ohe"],
+                    "model_variants": [],
+                },
+                "selection": {
+                    "enabled_model_variants": ["ridge", "lgbm", "xgboost"],
+                    "enabled_preprocess_variants": ["stdscaler_ohe"],
+                },
+            },
+            "data": {"raw_dataset_id": "ds-001"},
+            "ensemble": {"enabled": False},
+            "exec_policy": {"limits": {"max_jobs": 50, "max_models": 50, "max_hpo_trials": 0}},
+        }
+    )
+    plan = pipeline_module._build_pipeline_plan(cfg, "grid-selection-check", child_execution="logging")
+    pipeline_module._assert_visible_pipeline_graph_contract(
+        cfg=cfg,
+        plan=plan,
+        pipeline_profile="pipeline",
+    )
+    if plan.get("model_variants") != ["lgbm", "ridge", "xgboost"]:
+        raise AssertionError(f"selection subset must shape active model variants only: {plan}")
+    requested = (plan.get("selection") or {}).get("requested_model_variants") or []
+    expected = pipeline_module._resolve_model_set_variants("regression_all")
+    if requested != expected:
+        raise AssertionError(f"selection subset must preserve requested model superset: {plan}")
+    if int((plan.get("plan_info") or {}).get("disabled_jobs", 0)) <= 0:
+        raise AssertionError(f"selection subset must record disabled jobs: {plan}")
+
+
 def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
     repo = Path(__file__).resolve().parents[2]
     defaults = manage_templates_module._load_run_defaults(repo)
@@ -1278,6 +1359,15 @@ def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
     expected_variants = pipeline_module._resolve_model_set_variants("regression_all")
     if draft["shared_defaults"].get("pipeline.grid.model_variants") != expected_variants:
         raise AssertionError(f"pipeline template defaults must expand the full regression profile: {draft['shared_defaults']}")
+    editable_defaults = draft.get("editable_defaults") or {}
+    for key in (
+        "run.usecase_id",
+        "data.raw_dataset_id",
+        "pipeline.selection.enabled_preprocess_variants",
+        "pipeline.selection.enabled_model_variants",
+    ):
+        if key not in editable_defaults:
+            raise AssertionError(f"pipeline template draft must expose {key} as editable default: {draft}")
     step_names = {str(item["name"]) for item in controller.steps}
     expected_train_steps = {f"train__stdscaler_ohe__{variant}" for variant in expected_variants}
     missing = sorted(expected_train_steps - step_names)
@@ -1317,6 +1407,7 @@ def main() -> int:
     _assert_regression_model_set_contract()
     _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_profile_defaults_clear_stale_model_variants()
+    _assert_pipeline_profile_defaults_clear_stale_selection()
     _assert_pipeline_controller_context_attaches_by_task_id()
     _assert_pipeline_controller_context_attaches_by_pipeline_task_id_override()
     _assert_rehearsal_rebuild_pipeline_outputs_from_clearml()
@@ -1330,6 +1421,7 @@ def main() -> int:
     _assert_manage_templates_pipeline_properties_follow_resolved_context()
     _assert_visible_template_graph_mismatch_uses_default_profile_with_explicit_template_id()
     _assert_visible_template_clone_rejects_graph_shaping_model_override()
+    _assert_visible_template_clone_allows_selection_subset()
     _assert_pipeline_template_draft_uses_profile_model_set()
     _assert_uv_lock_exposes_split_model_extras()
     print("OK: clearml runtime contracts")

@@ -14,6 +14,7 @@ ClearML UI の HyperParameters を、`General` だらけにせず、operator と
 
 - `inputs`
 - `dataset`
+- `selection`
 - `preprocess`
 - `model`
 - `eval`
@@ -28,7 +29,16 @@ ClearML UI の HyperParameters を、`General` だらけにせず、operator と
 - `pipeline.profile`
 - `pipeline.run_train`
 - `pipeline.run_train_ensemble`
-- `pipeline.grid.model_variants`
+- `pipeline.model_set`
+
+### selection
+
+- `pipeline.selection.enabled_preprocess_variants`
+- `pipeline.selection.enabled_model_variants`
+- `ensemble.selection.enabled_methods`
+
+固定 DAG の visible pipeline template では、subset 実行は `selection` section で表現します。  
+`pipeline.model_variants` や `pipeline.grid.model_variants` は local / ad hoc 実行の互換用で、operator 向けの通常 UI では graph-shaping key として扱います。
 
 ### clearml
 

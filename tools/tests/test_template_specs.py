@@ -161,8 +161,18 @@ def _validate_spec(repo: Path) -> None:
             _assert_contains(tags, f"pipeline_profile:{name}")
             if "run.clearml.execution=pipeline_controller" not in [str(item) for item in overrides]:
                 raise AssertionError(f"pipeline template {name} must use run.clearml.execution=pipeline_controller")
+            if "pipeline.run_dataset_register=false" not in [str(item) for item in overrides]:
+                raise AssertionError(f"pipeline template {name} must pin pipeline.run_dataset_register=false")
             if any(str(item).startswith("+pipeline.model_set=") for item in overrides):
                 raise AssertionError(f"pipeline template {name} must not carry stale +pipeline.model_set overrides")
+            if any(
+                str(item).startswith(prefix)
+                for prefix in ("pipeline.model_variants=", "pipeline.grid.model_variants=")
+                for item in overrides
+            ):
+                raise AssertionError(
+                    f"pipeline template {name} must not expose graph-shaping model variant overrides in spec defaults"
+                )
 
         for key in ("usecase_id", "process", "schema_version", "project_root", "template_set_id", "task_kind"):
             if key not in props:

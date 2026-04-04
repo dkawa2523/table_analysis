@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _normalize_str
+from ..common.collection_utils import to_list as _to_list
 
 
 @dataclass(frozen=True)
@@ -86,14 +87,21 @@ PIPELINE_TEMPLATE_UI_WHITELIST: dict[str, tuple[str, ...]] = {
     'pipeline': (
         'run.usecase_id',
         'data.raw_dataset_id',
+        'pipeline.selection.enabled_preprocess_variants',
+        'pipeline.selection.enabled_model_variants',
     ),
     'train_model_full': (
         'run.usecase_id',
         'data.raw_dataset_id',
+        'pipeline.selection.enabled_preprocess_variants',
+        'pipeline.selection.enabled_model_variants',
     ),
     'train_ensemble_full': (
         'run.usecase_id',
         'data.raw_dataset_id',
+        'pipeline.selection.enabled_preprocess_variants',
+        'pipeline.selection.enabled_model_variants',
+        'ensemble.selection.enabled_methods',
         'ensemble.top_k',
     ),
 }
@@ -182,6 +190,79 @@ def resolve_pipeline_plan_only(cfg: Any | None) -> bool:
     return bool(_cfg_value(cfg, 'pipeline.plan_only')) or bool(_cfg_value(cfg, 'pipeline.dry_run')) or bool(_cfg_value(cfg, 'pipeline.plan'))
 
 
+def _dedupe_strings(values: Any) -> list[str]:
+    items = [_normalize_str(item) for item in _to_list(values)]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _resolve_selection_subset(
+    requested: list[str],
+    enabled: Any,
+    *,
+    label: str,
+) -> tuple[list[str], list[str]]:
+    requested_values = _dedupe_strings(requested)
+    enabled_values = _dedupe_strings(enabled)
+    if not enabled_values:
+        return (requested_values, [])
+    requested_set = set(requested_values)
+    invalid = [item for item in enabled_values if item not in requested_set]
+    if invalid:
+        raise ValueError(
+            f'{label} contains values outside the fixed pipeline profile: '
+            f'invalid={invalid}, allowed={requested_values}'
+        )
+    enabled_set = set(enabled_values)
+    active = [item for item in requested_values if item in enabled_set]
+    disabled = [item for item in requested_values if item not in enabled_set]
+    return (active, disabled)
+
+
+def resolve_pipeline_selection(
+    cfg: Any | None,
+    *,
+    preprocess_variants: list[str],
+    model_variants: list[str],
+    ensemble_methods: list[str],
+) -> dict[str, list[str]]:
+    requested_preprocess = _dedupe_strings(preprocess_variants)
+    requested_models = _dedupe_strings(model_variants)
+    requested_methods = _dedupe_strings(ensemble_methods)
+    (active_preprocess, disabled_preprocess) = _resolve_selection_subset(
+        requested_preprocess,
+        _cfg_value(cfg, 'pipeline.selection.enabled_preprocess_variants'),
+        label='pipeline.selection.enabled_preprocess_variants',
+    )
+    (active_models, disabled_models) = _resolve_selection_subset(
+        requested_models,
+        _cfg_value(cfg, 'pipeline.selection.enabled_model_variants'),
+        label='pipeline.selection.enabled_model_variants',
+    )
+    (active_methods, disabled_methods) = _resolve_selection_subset(
+        requested_methods,
+        _cfg_value(cfg, 'ensemble.selection.enabled_methods'),
+        label='ensemble.selection.enabled_methods',
+    )
+    return {
+        'requested_preprocess_variants': requested_preprocess,
+        'active_preprocess_variants': active_preprocess,
+        'disabled_preprocess_variants': disabled_preprocess,
+        'requested_model_variants': requested_models,
+        'active_model_variants': active_models,
+        'disabled_model_variants': disabled_models,
+        'requested_ensemble_methods': requested_methods,
+        'active_ensemble_methods': active_methods,
+        'disabled_ensemble_methods': disabled_methods,
+    }
+
+
 def apply_pipeline_profile_defaults(cfg: Any, pipeline_profile: str) -> Any:
     spec = get_pipeline_profile_spec(pipeline_profile)
     try:
@@ -220,7 +301,10 @@ def apply_pipeline_profile_defaults(cfg: Any, pipeline_profile: str) -> Any:
     _set('pipeline.model_set', spec.model_set)
     _set('pipeline.model_variants', [])
     _set('pipeline.grid.model_variants', [])
+    _set('pipeline.selection.enabled_preprocess_variants', [])
+    _set('pipeline.selection.enabled_model_variants', [])
     _set('ensemble.enabled', spec.run_train_ensemble)
+    _set('ensemble.selection.enabled_methods', [])
     return cfg
 
 
@@ -263,9 +347,13 @@ def build_pipeline_template_defaults(
     defaults['pipeline.run_leaderboard'] = plan.get('run_leaderboard')
     defaults['pipeline.run_infer'] = plan.get('run_infer')
     defaults['pipeline.plan_only'] = bool(plan.get('plan_only'))
-    defaults['pipeline.grid.preprocess_variants'] = plan.get('preprocess_variants')
-    defaults['pipeline.grid.model_variants'] = plan.get('model_variants')
+    selection = dict(plan.get('selection') or {})
+    defaults['pipeline.grid.preprocess_variants'] = selection.get('requested_preprocess_variants') or plan.get('preprocess_variants')
+    defaults['pipeline.grid.model_variants'] = selection.get('requested_model_variants') or plan.get('model_variants')
     defaults['pipeline.model_set'] = _normalize_str(_cfg_value(cfg, 'pipeline.model_set'))
+    defaults['pipeline.selection.enabled_preprocess_variants'] = selection.get('active_preprocess_variants') or plan.get('preprocess_variants')
+    defaults['pipeline.selection.enabled_model_variants'] = selection.get('active_model_variants') or plan.get('model_variants')
+    defaults['ensemble.selection.enabled_methods'] = selection.get('active_ensemble_methods') or []
     return {key: value for key, value in defaults.items() if value is not None}
 
 
@@ -397,6 +485,7 @@ __all__ = [
     'resolve_pipeline_plan_only',
     'resolve_pipeline_profile',
     'resolve_pipeline_run_flags',
+    'resolve_pipeline_selection',
     'resolve_pipeline_queues',
     'resolve_pipeline_variants',
     'strip_local_only_pipeline_overrides',

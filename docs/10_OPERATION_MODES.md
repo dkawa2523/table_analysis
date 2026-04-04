@@ -94,12 +94,14 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  pipeline.model_set=regression_all
+  pipeline.selection.enabled_preprocess_variants=[stdscaler_ohe] \
+  pipeline.selection.enabled_model_variants=[ridge,lgbm,xgboost]
 ```
 
 - `run.clearml.queue_name` は pipeline child routing の正本ではありません。
 - pipeline mode では `exec_policy.queues.*` が child task の queue を決めます。
 - `run.clearml.queue_name` を渡す場合は controller queue の明示用途に限定します。
+- visible pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、入力は既存 `data.raw_dataset_id` です。
 
 ## queue との関係
 

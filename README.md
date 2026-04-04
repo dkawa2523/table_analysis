@@ -232,7 +232,8 @@ ClearML template は `manage_templates.py` で管理します。
   - preprocess + single-model train + 3 ensemble + leaderboard
 
 visible pipeline template は profile 固定の DAG です。  
-operator が UI から安全に触る前提は `run.usecase_id`, `data.raw_dataset_id`, `ensemble.top_k` 程度で、`pipeline.model_set` や `pipeline.grid.model_variants` を UI 上で変えて custom DAG を作る運用は想定していません。
+operator が UI から安全に触る前提は `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants`、必要時のみ `ensemble.selection.enabled_methods`, `ensemble.top_k` 程度で、`pipeline.model_set` や `pipeline.grid.model_variants` を UI 上で変えて custom DAG を作る運用は想定していません。  
+標準の visible pipeline は `pipeline.run_dataset_register=false` を前提にし、入力 dataset は既存の `data.raw_dataset_id` を指定します。`dataset_register` は rehearsal / smoke / 事前準備の別導線です。
 
 visible pipeline template は ClearML 上の次 project に置かれます。
 

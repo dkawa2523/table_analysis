@@ -2,6 +2,8 @@
 enabled: false
 method: mean_topk
 methods: null
+selection:
+  enabled_methods: []
 top_k: 3
 selection_metric: ${eval.primary_metric}
 exclude_variants: []

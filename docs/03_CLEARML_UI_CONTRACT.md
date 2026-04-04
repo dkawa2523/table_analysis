@@ -65,8 +65,9 @@ operator が主に見る階層:
 visible pipeline template について:
 
 - `Pipelines/Templates` にある template は profile 固定の DAG です
-- operator が UI から編集してよいのは dataset / usecase / ensemble top_k などの限定された項目だけです
-- `pipeline.model_set` や `pipeline.grid.model_variants` を変えて DAG を差し替える運用はしません
+- operator が UI から編集してよいのは `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants`、必要時のみ `ensemble.selection.enabled_methods`, `ensemble.top_k` などの限定された項目だけです
+- `pipeline.model_set` や `pipeline.grid.model_variants` は fixed template profile を支える内部の graph-shaping 値として扱い、通常の clone / run 導線では触りません
+- visible pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、dataset 登録は rehearsal / 準備系導線に分けます
 
 ## Artifacts（全タスク必須）
 - `config_resolved.yaml`

@@ -48,7 +48,9 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 注意:
 
 - visible pipeline template の DAG は profile ごとに固定です
-- UI から安全に編集する対象は `run.usecase_id`, `data.raw_dataset_id`, `ensemble.top_k` 程度に絞ります
+- 標準 pipeline は `data.raw_dataset_id` 指定前提で、`dataset_register` は準備系導線です
+- UI から安全に編集する対象は `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants` に絞ります
+- `train_ensemble_full` だけは追加で `ensemble.selection.enabled_methods`, `ensemble.top_k` を編集対象にします
 - `pipeline.model_set` や `pipeline.grid.model_variants` を UI で変えて custom graph を作る運用は行いません
 - custom な task 組み合わせを試すときは developer 向けの CLI / config 変更で扱います
 
@@ -73,8 +75,8 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  pipeline.preprocess_variant=stdscaler_ohe \
-  pipeline.model_set=regression_all
+  pipeline.selection.enabled_preprocess_variants=[stdscaler_ohe] \
+  pipeline.selection.enabled_model_variants=[ridge,lgbm,xgboost]
 ```
 
 ### ensemble ありの full run
