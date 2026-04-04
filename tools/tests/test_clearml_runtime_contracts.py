@@ -298,6 +298,7 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
     _store_loaded_override(loaded, "data/raw_dataset_id", "template_raw_dataset")
     _store_loaded_override(loaded, "data.raw_dataset_id", "runtime_dataset")
     _store_loaded_override(loaded, "default_queue", "default")
+    _store_loaded_override(loaded, "+pipeline.model_set", "regression_all")
     _store_loaded_override(loaded, "pipeline/model_set", "regression_all")
     _store_loaded_override(loaded, "pipeline/profile", "train_ensemble_full")
     if loaded.get("data.raw_dataset_id") != "runtime_dataset":

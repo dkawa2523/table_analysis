@@ -5,55 +5,55 @@ templates:
     project_name: LOCAL/TabularAnalysis/Templates/Steps/01_Datasets
     task_name: dataset_register
     entrypoint: python tools/clearml_entrypoint.py task=dataset_register
-    updated_at: '2026-04-04T13:30:25Z'
+    updated_at: '2026-04-04T13:33:34Z'
   preprocess:
     task_id: 2e471e815f9141fca809cc3273d458e9
     project_name: LOCAL/TabularAnalysis/Templates/Steps/02_Preprocess
     task_name: preprocess
     entrypoint: python tools/clearml_entrypoint.py task=preprocess
-    updated_at: '2026-04-04T13:30:25Z'
+    updated_at: '2026-04-04T13:33:34Z'
   train_model:
     task_id: b65f45177d0f4572b58a26bc1faec574
     project_name: LOCAL/TabularAnalysis/Templates/Steps/03_TrainModels
     task_name: train_model
     entrypoint: python tools/clearml_entrypoint.py task=train_model
-    updated_at: '2026-04-04T13:30:25Z'
+    updated_at: '2026-04-04T13:33:34Z'
   infer:
     task_id: bc30bf78736f44d2b5d7c9fab8e51c70
     project_name: LOCAL/TabularAnalysis/Templates/Steps/05_Infer
     task_name: infer
     entrypoint: python tools/clearml_entrypoint.py task=infer
-    updated_at: '2026-04-04T13:30:25Z'
+    updated_at: '2026-04-04T13:33:34Z'
   leaderboard:
     task_id: 528776ef216346608b9c8a273e1aa257
     project_name: LOCAL/TabularAnalysis/Templates/Steps/99_Leaderboard
     task_name: leaderboard
     entrypoint: python tools/clearml_entrypoint.py task=leaderboard
-    updated_at: '2026-04-04T13:30:25Z'
+    updated_at: '2026-04-04T13:33:34Z'
   pipeline:
     task_id: 511835b6ca2447348a8107b966f8753f
     project_name: LOCAL/TabularAnalysis/Pipelines/Templates
     task_name: pipeline
     entrypoint: python tools/clearml_entrypoint.py task=pipeline
-    updated_at: '2026-04-04T13:30:25Z'
+    updated_at: '2026-04-04T13:33:34Z'
   train_ensemble:
     task_id: 3b457af4216543788ae9d5c1964ddb29
     project_name: LOCAL/TabularAnalysis/Templates/Steps/04_Ensembles
     task_name: train_ensemble
     entrypoint: python tools/clearml_entrypoint.py task=train_ensemble
-    updated_at: '2026-04-04T13:30:25Z'
+    updated_at: '2026-04-04T13:33:34Z'
   train_model_full:
     task_id: df22a78e10044cf2bdf553113f78d148
     project_name: LOCAL/TabularAnalysis/Pipelines/Templates
     task_name: train_model_full
     entrypoint: python tools/clearml_entrypoint.py task=pipeline
-    updated_at: '2026-04-04T13:30:25Z'
+    updated_at: '2026-04-04T13:33:34Z'
   train_ensemble_full:
     task_id: 5b3c3482780f436f87e85e350a6f126f
     project_name: LOCAL/TabularAnalysis/Pipelines/Templates
     task_name: train_ensemble_full
     entrypoint: python tools/clearml_entrypoint.py task=pipeline
-    updated_at: '2026-04-04T13:30:25Z'
+    updated_at: '2026-04-04T13:33:34Z'
 context:
   project_root: LOCAL
   schema_version: v1

@@ -120,6 +120,12 @@ def _store_loaded_override(overrides: dict[str, Any], key: str, value: Any) -> N
         return
     if bare_key in _APPENDED_LOADED_OVERRIDE_KEYS and not normalized.startswith("+"):
         normalized = f"+{normalized}"
+    plain_key = bare_key
+    appended_key = f"+{bare_key}"
+    if not normalized.startswith("+"):
+        overrides.pop(appended_key, None)
+    elif plain_key in overrides:
+        return
     raw = str(key).strip()
     if "/" in raw and "." not in raw and normalized in overrides:
         return
