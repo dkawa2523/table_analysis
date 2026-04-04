@@ -22,7 +22,7 @@ from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.ops import clearml_identity as clearml_identity_module
 from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
-from tabular_analysis.processes.pipeline_support import build_pipeline_template_defaults
+from tabular_analysis.processes.pipeline_support import build_pipeline_template_defaults, resolve_pipeline_profile
 from tabular_analysis.registry.models import list_model_variants
 from tools.clearml_entrypoint import (
     _extract_cli_keys,
@@ -593,6 +593,49 @@ def _assert_pipeline_template_defaults_keep_plan_only() -> None:
         raise AssertionError(f"pipeline template defaults must preserve plan_only: {defaults}")
 
 
+def _assert_explicit_template_task_id_skips_profile_signature_match() -> None:
+    cfg = OmegaConf.create(
+        {
+            "run": {
+                "clearml": {
+                    "pipeline": {
+                        "template_task_id": "template-123",
+                    }
+                }
+            }
+        }
+    )
+    profile = resolve_pipeline_profile(
+        cfg,
+        {
+            "run_dataset_register": False,
+            "run_preprocess": True,
+            "run_train": True,
+            "run_train_ensemble": False,
+            "run_leaderboard": True,
+            "run_infer": False,
+            "model_set": None,
+        },
+    )
+    if profile != "pipeline":
+        raise AssertionError(f"explicit template_task_id should allow default pipeline profile fallback: {profile}")
+
+
+def _assert_uv_lock_exposes_split_model_extras() -> None:
+    text = (_REPO / "uv.lock").read_text(encoding="utf-8")
+    for required in (
+        'lightgbm = [',
+        'xgboost = [',
+        'catboost = [',
+        'provides-extras = ["api", "models", "lightgbm", "xgboost", "catboost", "tabpfn", "optuna", "dev"]',
+        "extra == 'lightgbm'",
+        "extra == 'xgboost'",
+        "extra == 'catboost'",
+    ):
+        if required not in text:
+            raise AssertionError(f"uv.lock missing split extra contract: {required}")
+
+
 def main() -> int:
     _assert_clearml_hocon_reader()
     _assert_batch_execution_mode()
@@ -609,6 +652,8 @@ def main() -> int:
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
     _assert_plan_only_controller_does_not_launch_steps()
     _assert_pipeline_template_defaults_keep_plan_only()
+    _assert_explicit_template_task_id_skips_profile_signature_match()
+    _assert_uv_lock_exposes_split_model_extras()
     print("OK: clearml runtime contracts")
     return 0
 

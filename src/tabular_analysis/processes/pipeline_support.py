@@ -117,6 +117,7 @@ def resolve_pipeline_profile(cfg: Any | None, plan: Mapping[str, Any] | None = N
         if profile not in PIPELINE_PROFILE_SPECS:
             raise ValueError(f'Unsupported pipeline.profile: {profile}')
         return profile
+    explicit_template_task_id = _normalize_str(_cfg_value(cfg, 'run.clearml.pipeline.template_task_id')) if cfg is not None else ''
     if plan is not None:
         signature = {
             'run_dataset_register': bool(plan.get('run_dataset_register')),
@@ -139,6 +140,8 @@ def resolve_pipeline_profile(cfg: Any | None, plan: Mapping[str, Any] | None = N
             }
             if signature == expected:
                 return profile_name
+        if explicit_template_task_id:
+            return DEFAULT_PIPELINE_PROFILE
         raise ValueError(
             'No built-in visible pipeline template matches the current pipeline settings. '
             'Specify run.clearml.pipeline.template_task_id or align the config to a supported profile.'
