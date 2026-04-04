@@ -32,7 +32,7 @@ from ..platform_adapter_pipeline import apply_clearml_task_overrides, clone_pipe
 from ..platform_adapter_task import clearml_task_id, get_clearml_task_status, report_markdown, reset_clearml_task_args, set_clearml_task_parameters, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
 from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_run_project_name, build_runtime_properties, build_runtime_tags, build_step_run_project_name, build_project_name, resolve_clearml_metadata
-from .pipeline_support import apply_pipeline_profile_defaults, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, normalize_pipeline_profile, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags
+from .pipeline_support import apply_pipeline_profile_defaults, build_pipeline_step_specs, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, normalize_pipeline_profile, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags
 from ..reporting.pipeline_report import build_pipeline_report_bundle
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 _STAGE_BY_TASK = {'dataset_register': '01_dataset_register', 'preprocess': '02_preprocess', 'train_model': '03_train_model', 'train_ensemble': '04_train_ensemble', 'infer': '04_infer', 'leaderboard': '05_leaderboard'}
@@ -1438,6 +1438,7 @@ def _build_pipeline_launch_summary(*, cfg: Any, plan: Mapping[str, Any], grid_ru
 def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str) -> _VisiblePipelineRunContract:
     plan = _build_pipeline_plan(cfg, grid_run_id, child_execution='logging')
     pipeline_profile = _resolve_pipeline_template_profile(cfg, plan)
+    _assert_visible_pipeline_graph_contract(cfg=cfg, plan=plan, pipeline_profile=pipeline_profile)
     metadata = dict(
         resolve_clearml_metadata(
         cfg,
@@ -1454,6 +1455,46 @@ def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str) -> _Vi
         metadata=metadata,
         queue_name=queue_name,
     )
+
+
+def _assert_visible_pipeline_graph_contract(*, cfg: Any, plan: Mapping[str, Any], pipeline_profile: str) -> None:
+    expected_cfg = apply_pipeline_profile_defaults(
+        _clone_cfg_for_runtime_overrides(cfg),
+        pipeline_profile,
+    )
+    expected_plan = _build_pipeline_plan(
+        expected_cfg,
+        f'template__{normalize_pipeline_profile(pipeline_profile)}',
+        child_execution='logging',
+    )
+    actual_preprocess = tuple(str(item) for item in (plan.get('preprocess_variants') or []))
+    expected_preprocess = tuple(str(item) for item in (expected_plan.get('preprocess_variants') or []))
+    actual_models = tuple(str(item) for item in (plan.get('model_variants') or []))
+    expected_models = tuple(str(item) for item in (expected_plan.get('model_variants') or []))
+    actual_steps = tuple(spec.step_name for spec in build_pipeline_step_specs(plan))
+    expected_steps = tuple(spec.step_name for spec in build_pipeline_step_specs(expected_plan))
+    mismatches: dict[str, Any] = {}
+    if actual_preprocess != expected_preprocess:
+        mismatches['preprocess_variants'] = {
+            'actual': list(actual_preprocess),
+            'expected': list(expected_preprocess),
+        }
+    if actual_models != expected_models:
+        mismatches['model_variants'] = {
+            'actual': list(actual_models),
+            'expected': list(expected_models),
+        }
+    if actual_steps != expected_steps:
+        mismatches['step_names'] = {
+            'actual': list(actual_steps),
+            'expected': list(expected_steps),
+        }
+    if mismatches:
+        raise ValueError(
+            'Visible pipeline template clones use a fixed DAG. '
+            f'Align the run to profile={normalize_pipeline_profile(pipeline_profile)!r} instead of overriding '
+            f'graph-shaping pipeline values. Mismatch: {mismatches}'
+        )
 
 
 def _apply_visible_pipeline_run_defaults(*, target: Any, task_id: str, cfg: Any, contract: _VisiblePipelineRunContract, grid_run_id: str) -> dict[str, Any]:

@@ -265,6 +265,7 @@ def _build_pipeline_cmd(
     preprocess: str,
     models: str | None,
     model_set: str | None,
+    plan_only: bool,
 ) -> list[str]:
     cmd = [
         py,
@@ -297,6 +298,8 @@ def _build_pipeline_cmd(
     if task_type == "classification":
         cmd.append("eval.task_type=classification")
         cmd.append("eval.primary_metric=accuracy")
+    if plan_only:
+        cmd.append("pipeline.plan_only=true")
     cmd.extend(_resolve_preprocess_overrides(preprocess))
     cmd.extend(_resolve_model_overrides(task_type, models, model_set))
     return cmd
@@ -438,6 +441,11 @@ def _sync_pipeline_artifacts(repo: Path, output_dir: Path, pipeline_task_id: str
         except OSError:
             shutil.copy2(source, target)
         copied[name] = target
+    pipeline_run = copied.get("pipeline_run.json")
+    if pipeline_run is not None and "run_summary.json" not in copied:
+        fallback = stage_dir / "run_summary.json"
+        shutil.copy2(pipeline_run, fallback)
+        copied["run_summary.json"] = fallback
     return copied
 
 
@@ -487,6 +495,11 @@ def main() -> int:
         help="Optional usecase_id override (default: test_<dataset>_<timestamp>)",
     )
     ap.add_argument("--target-column", default="target", help="Target column name")
+    ap.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Build or launch only the controller plan without executing child steps",
+    )
     ap.add_argument("--dry-run", action="store_true", help="Only print commands, do not execute")
     ap.add_argument(
         "--skip-ui-verify",
@@ -578,6 +591,7 @@ def main() -> int:
                 preprocess=args.preprocess,
                 models=args.models,
                 model_set=args.model_set,
+                plan_only=args.plan_only,
             )
             commands.append(cmd_pipeline)
             _run(cmd_pipeline, cwd=repo, dry_run=False, env=env)
@@ -662,6 +676,7 @@ def main() -> int:
                 preprocess=args.preprocess,
                 models=args.models,
                 model_set=args.model_set,
+                plan_only=args.plan_only,
             )
             commands.append(cmd_pipeline)
             _run(cmd_register, cwd=repo, dry_run=True, env=env)

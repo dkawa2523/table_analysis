@@ -839,7 +839,7 @@ def _assert_manage_templates_pipeline_properties_follow_resolved_context() -> No
         )
 
 
-def _assert_visible_template_graph_mismatch_fails_even_with_explicit_template_id() -> None:
+def _assert_visible_template_graph_mismatch_uses_default_profile_with_explicit_template_id() -> None:
     cfg = OmegaConf.create(
         {
             "run": {
@@ -851,24 +851,61 @@ def _assert_visible_template_graph_mismatch_fails_even_with_explicit_template_id
             }
         }
     )
-    try:
-        resolve_pipeline_profile(
-            cfg,
-            {
+    profile = resolve_pipeline_profile(
+        cfg,
+        {
+            "run_dataset_register": False,
+            "run_preprocess": True,
+            "run_train": True,
+            "run_train_ensemble": False,
+            "run_leaderboard": True,
+            "run_infer": False,
+            "model_set": None,
+        },
+    )
+    if profile != "pipeline":
+        raise AssertionError(f"explicit template_task_id should allow default pipeline profile fallback: {profile}")
+
+
+def _assert_visible_template_clone_rejects_graph_shaping_model_override() -> None:
+    cfg = OmegaConf.create(
+        {
+            "run": {
+                "clearml": {
+                    "pipeline": {
+                        "template_task_id": "template-123",
+                    }
+                }
+            },
+            "pipeline": {
                 "run_dataset_register": False,
                 "run_preprocess": True,
                 "run_train": True,
                 "run_train_ensemble": False,
                 "run_leaderboard": True,
                 "run_infer": False,
-                "model_set": None,
+                "model_set": "regression_all",
+                "grid": {
+                    "preprocess_variants": ["stdscaler_ohe"],
+                    "model_variants": ["ridge", "lgbm", "xgboost"],
+                },
             },
+            "ensemble": {"enabled": False},
+            "exec_policy": {"limits": {"max_jobs": 50, "max_models": 50, "max_hpo_trials": 0}},
+        }
+    )
+    plan = pipeline_module._build_pipeline_plan(cfg, "grid-graph-check", child_execution="logging")
+    try:
+        pipeline_module._assert_visible_pipeline_graph_contract(
+            cfg=cfg,
+            plan=plan,
+            pipeline_profile="pipeline",
         )
     except ValueError as exc:
-        if "template_task_id cannot override a graph mismatch" not in str(exc):
-            raise AssertionError(f"unexpected mismatch message: {exc}") from exc
+        if "fixed DAG" not in str(exc):
+            raise AssertionError(f"unexpected graph mismatch message: {exc}") from exc
         return
-    raise AssertionError("visible template clones must fail fast on graph mismatches")
+    raise AssertionError("visible template clones must reject graph-shaping model overrides")
 
 
 def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
@@ -998,7 +1035,8 @@ def main() -> int:
     _assert_pipeline_template_defaults_keep_plan_only()
     _assert_pipeline_run_summary_tracks_actual_job_statuses()
     _assert_manage_templates_pipeline_properties_follow_resolved_context()
-    _assert_visible_template_graph_mismatch_fails_even_with_explicit_template_id()
+    _assert_visible_template_graph_mismatch_uses_default_profile_with_explicit_template_id()
+    _assert_visible_template_clone_rejects_graph_shaping_model_override()
     _assert_pipeline_template_draft_uses_profile_model_set()
     _assert_uv_lock_exposes_split_model_extras()
     print("OK: clearml runtime contracts")

@@ -70,6 +70,10 @@ def _apply_clearml_files_host_substitution() -> None:
     except _RECOVERABLE_ERRORS:
         files_host = None
     normalized = _normalize_files_host(files_host or '')
+    if not in_docker and normalized:
+        host = urlparse(normalized).hostname
+        if host in {'clearml-fileserver', 'host.docker.internal'}:
+            normalized = None
     if normalized:
         host = urlparse(normalized).hostname
         if host in {'localhost', '127.0.0.1'}:
@@ -89,7 +93,12 @@ def _apply_clearml_files_host_substitution() -> None:
         existing = {}
     extra_prefixes: tuple[str, ...] = ()
     if not in_docker and urlparse(normalized).hostname in {'localhost', '127.0.0.1'}:
-        extra_prefixes = ('http://host.docker.internal:8081', 'https://host.docker.internal:8081')
+        extra_prefixes = (
+            'http://host.docker.internal:8081',
+            'https://host.docker.internal:8081',
+            'http://clearml-fileserver:8081',
+            'https://clearml-fileserver:8081',
+        )
     for prefix in ('http://localhost:8081', 'http://127.0.0.1:8081', 'https://localhost:8081', 'https://127.0.0.1:8081', *extra_prefixes):
         if existing.get(prefix) == normalized:
             continue

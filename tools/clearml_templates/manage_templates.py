@@ -32,7 +32,9 @@ from tabular_analysis.clearml.pipeline_templates import (
 from tabular_analysis.common.hydra_config import compose_config
 from tabular_analysis.processes.pipeline_support import (
     apply_pipeline_profile_defaults,
+    build_pipeline_step_specs,
     build_pipeline_ui_parameter_whitelist,
+    normalize_pipeline_profile,
 )
 from tabular_analysis.platform_adapter_clearml_env import clearml_script_mismatches, resolve_clearml_script_spec
 from tabular_analysis.platform_adapter_core import _ensure_clearml_project_system_tags, _get_clearml_project_system_tags
@@ -55,7 +57,7 @@ from tabular_analysis.platform_adapter_task import (
     ensure_clearml_task_tags,
     update_clearml_task_tags,
 )
-from tabular_analysis.processes.pipeline import build_pipeline_template_draft
+from tabular_analysis.processes.pipeline import _build_pipeline_plan, build_pipeline_template_draft
 
 
 @dataclass(frozen=True)
@@ -630,6 +632,20 @@ def _ensure_pipeline_template_project(task_id: str, project_name: str) -> None:
     _ensure_clearml_project_system_tags(project_name, ["pipeline"], remove_tags=["hidden"])
 
 
+def _pipeline_controller_step_names(controller: Any) -> tuple[str, ...]:
+    nodes = getattr(controller, "_nodes", None) or {}
+    return tuple(sorted(str(name) for name in dict(nodes).keys()))
+
+
+def _expected_pipeline_template_step_names(cfg: Any, spec_name: str) -> tuple[str, ...]:
+    plan = _build_pipeline_plan(
+        cfg,
+        f"template__{normalize_pipeline_profile(spec_name)}",
+        child_execution="logging",
+    )
+    return tuple(sorted(spec.step_name for spec in build_pipeline_step_specs(plan)))
+
+
 def _upsert_standard_template(
     resolved: ResolvedTemplateSpec,
     *,
@@ -739,7 +755,17 @@ def _upsert_pipeline_template(
                 _deprecate_template_task(str(existing_id))
             else:
                 controller = load_pipeline_controller_from_task(source_task_id=str(existing_id))
-                task_id = str(existing_id)
+                actual_step_names = _pipeline_controller_step_names(controller)
+                expected_step_names = _expected_pipeline_template_step_names(cfg, spec.name)
+                if actual_step_names != expected_step_names:
+                    recreate = True
+                    _deprecate_template_task(str(existing_id))
+                    print(
+                        f"Recreate pipeline template {spec.name}: graph drift "
+                        f"{list(actual_step_names)} -> {list(expected_step_names)}"
+                    )
+                else:
+                    task_id = str(existing_id)
         except Exception:
             recreate = True
     if recreate or controller is None or not task_id:
@@ -895,6 +921,18 @@ def _validate_templates(
             project_system_tags = set(_get_clearml_project_system_tags(spec.project_name))
             if "pipeline" not in project_system_tags:
                 errors.append(f"{spec.name}: project system tags missing 'pipeline' for {spec.project_name!r}")
+            try:
+                actual_step_names = _pipeline_controller_step_names(
+                    load_pipeline_controller_from_task(source_task_id=task_id)
+                )
+                expected_step_names = _expected_pipeline_template_step_names(resolved.cfg, spec.name)
+                if actual_step_names != expected_step_names:
+                    errors.append(
+                        f"{spec.name}: pipeline graph drift "
+                        f"{list(actual_step_names)} != {list(expected_step_names)}"
+                    )
+            except Exception as exc:
+                errors.append(f"{spec.name}: failed to inspect pipeline graph: {exc}")
             actual_param_keys = _pipeline_parameter_keys(task)
             expected_param_keys = {
                 str(key).replace(".", "/")
