@@ -30,7 +30,8 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 - The agent must appear online in the ClearML UI.
 - If tasks stay queued, verify that the queue has at least one healthy worker.
 - Canonical container assets live under `tools/clearml_agent/`.
-- Use shared cache by mounting `/root/.clearml` and setting `UV_CACHE_DIR=/root/.clearml/uv-cache`.
+- Use a Docker named volume for `/root/.clearml` and set `UV_CACHE_DIR=/root/.clearml/uv-cache`.
+- Avoid Windows bind mounts for `/root/.clearml`. They can push agent processes into `p9_client_rpc` waits and stall controller runs.
 - Start agents with `--init` (or Docker `init: true`) so zombie processes do not accumulate.
 - Canonical queue split is:
   - `services`: pipeline controllers only

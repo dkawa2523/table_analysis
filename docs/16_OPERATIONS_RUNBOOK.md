@@ -9,6 +9,8 @@
 - ClearML UI に接続できる
 - `services`、`default`、`heavy-model` queue が存在する
 - agent は `tools/clearml_agent/compose.yaml` を正本として起動している
+- agent の `/root/.clearml` は Docker named volume を使う
+  - Windows bind mount は task repository / venv / uv cache が `p9_client_rpc` 待ちになりやすいので避ける
 
 ## 2. template を同期する
 

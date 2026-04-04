@@ -478,6 +478,71 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
         pipeline_module._build_local_pipeline_run_summary = originals["build_summary"]
 
 
+def _assert_plan_only_controller_does_not_launch_steps() -> None:
+    class _FakeTask:
+        pass
+
+    class _FakeController:
+        def __init__(self) -> None:
+            self._nodes = {"preprocess": object()}
+            self.started = False
+
+        def start_locally(self, *, run_pipeline_steps_locally: bool = False) -> None:
+            self.started = True
+
+    fake_controller = _FakeController()
+    fake_task = _FakeTask()
+    originals = {
+        "resolve_contract": pipeline_module._resolve_visible_pipeline_run_contract,
+        "clearml_task_id": pipeline_module.clearml_task_id,
+        "apply_defaults": pipeline_module._apply_visible_pipeline_run_defaults,
+        "load_controller": pipeline_module.load_pipeline_controller_from_task,
+        "build_summary": pipeline_module._build_local_pipeline_run_summary,
+    }
+    try:
+        pipeline_module._resolve_visible_pipeline_run_contract = lambda **kwargs: pipeline_module._VisiblePipelineRunContract(
+            plan={
+                "queues": {"default": "default"},
+                "steps": {"train": [], "preprocess": [], "train_ensemble": [], "dataset_register": None, "leaderboard": None, "infer": None},
+                "plan_only": True,
+                "run_overrides": {},
+                "data_overrides": {},
+                "downstream_data_overrides": {},
+                "eval_overrides": {},
+                "run_dataset_register": False,
+                "run_preprocess": True,
+                "run_train": False,
+                "run_train_ensemble": False,
+                "run_leaderboard": False,
+                "run_infer": False,
+                "preprocess_variants": ["stdscaler_ohe"],
+                "model_variants": [],
+            },
+            pipeline_profile="pipeline",
+            metadata={},
+            queue_name="services",
+        )
+        pipeline_module.clearml_task_id = lambda task: "controller-plan-only"
+        pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"run.grid_run_id": "grid-plan-only"}
+        pipeline_module.load_pipeline_controller_from_task = lambda source_task: fake_controller
+        pipeline_module._build_local_pipeline_run_summary = lambda **kwargs: {"status": "stub", "plan_only": kwargs["plan"]["plan_only"]}
+        cfg = OmegaConf.create({"run": {"clearml": {"queue_name": "default"}}})
+        ctx = pipeline_module.TaskContext(task=fake_task, project_name="LOCAL/TabularAnalysis/Pipelines", task_name="pipeline", output_dir=Path.cwd())
+        summary = pipeline_module._execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id="grid-plan-only")
+        if fake_controller.started:
+            raise AssertionError("plan_only controller should not launch pipeline steps")
+        if summary.get("status") != "planned":
+            raise AssertionError(f"plan_only controller should return planned summary: {summary}")
+        if summary.get("pipeline_task_id") != "controller-plan-only":
+            raise AssertionError(f"plan_only summary missing controller task id: {summary}")
+    finally:
+        pipeline_module._resolve_visible_pipeline_run_contract = originals["resolve_contract"]
+        pipeline_module.clearml_task_id = originals["clearml_task_id"]
+        pipeline_module._apply_visible_pipeline_run_defaults = originals["apply_defaults"]
+        pipeline_module.load_pipeline_controller_from_task = originals["load_controller"]
+        pipeline_module._build_local_pipeline_run_summary = originals["build_summary"]
+
+
 def main() -> int:
     _assert_clearml_hocon_reader()
     _assert_batch_execution_mode()
@@ -491,6 +556,7 @@ def main() -> int:
     _assert_pipeline_controller_context_attaches_by_task_id()
     _assert_pipeline_step_references_are_not_quoted()
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
+    _assert_plan_only_controller_does_not_launch_steps()
     print("OK: clearml runtime contracts")
     return 0
 

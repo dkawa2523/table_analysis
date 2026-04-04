@@ -87,6 +87,12 @@ def _normalize_template_arg_value(value: Any) -> Any:
         return ''
     if isinstance(value, Path):
         return str(value)
+    try:
+        from omegaconf import OmegaConf
+        if OmegaConf.is_config(value):
+            return OmegaConf.to_container(value, resolve=False)
+    except ImportError:
+        pass
     return value
 
 
@@ -1392,6 +1398,23 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
             'Current ClearML task does not contain a serialized pipeline graph. '
             'Clone a visible pipeline template task from the Pipelines tab or run manage_templates.py --apply.'
         )
+    if contract.plan['plan_only']:
+        summary = _build_local_pipeline_run_summary(
+            cfg=cfg,
+            plan=contract.plan,
+            grid_run_id=grid_run_id,
+            dataset_register_ref=None,
+            preprocess_refs=[],
+            train_refs=[],
+            train_ensemble_refs=[],
+            leaderboard_ref=None,
+            infer_ref=None,
+            executed_jobs=0,
+        )
+        summary['status'] = 'planned'
+        summary['pipeline_task_id'] = pipeline_task_id
+        summary['pipeline_profile'] = contract.pipeline_profile
+        return summary
     starter = getattr(controller, 'start_locally', None)
     if not callable(starter):
         raise AttributeError('Pipeline controller does not support start_locally().')
