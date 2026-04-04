@@ -22,15 +22,12 @@ from ..platform_adapter_task import (
 )
 from ..processes.pipeline_support import (
     DEFAULT_PIPELINE_PROFILE,
+    PIPELINE_PROFILE_SPECS,
     is_pipeline_template_name,
     normalize_pipeline_profile,
 )
 
-PIPELINE_TEMPLATE_NAMES = set((
-    'pipeline',
-    'train_model_full',
-    'train_ensemble_full',
-))
+PIPELINE_TEMPLATE_NAMES = frozenset(PIPELINE_PROFILE_SPECS.keys())
 
 
 def build_pipeline_template_project_name(cfg: Any) -> str:

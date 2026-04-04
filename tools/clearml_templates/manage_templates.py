@@ -18,8 +18,10 @@ from omegaconf import OmegaConf
 
 _REPO = Path(__file__).resolve().parents[2]
 _SRC = _REPO / "src"
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
+_PLATFORM_SRC = _REPO.parent / "ml_platform_v1-master" / "src"
+for _path in (_SRC, _PLATFORM_SRC):
+    if _path.exists() and str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 from tabular_analysis.ops.clearml_identity import resolve_template_context
 from tabular_analysis.clearml.pipeline_templates import (
@@ -28,7 +30,10 @@ from tabular_analysis.clearml.pipeline_templates import (
     is_pipeline_template_name,
 )
 from tabular_analysis.common.hydra_config import compose_config
-from tabular_analysis.processes.pipeline_support import build_pipeline_ui_parameter_whitelist
+from tabular_analysis.processes.pipeline_support import (
+    apply_pipeline_profile_defaults,
+    build_pipeline_ui_parameter_whitelist,
+)
 from tabular_analysis.platform_adapter_clearml_env import clearml_script_mismatches, resolve_clearml_script_spec
 from tabular_analysis.platform_adapter_core import _ensure_clearml_project_system_tags, _get_clearml_project_system_tags
 from tabular_analysis.platform_adapter_pipeline import (
@@ -405,12 +410,14 @@ def _plan_output(spec_path: Path, ctx: PlanContext, templates: list[TemplateSpec
 
 def _load_lock(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"version": 1, "templates": {}}
+        return {"version": 2, "context": {}, "templates": {}}
     data = _load_yaml(path)
     if "templates" not in data or not isinstance(data.get("templates"), dict):
         data["templates"] = {}
+    if "context" not in data or not isinstance(data.get("context"), dict):
+        data["context"] = {}
     if "version" not in data:
-        data["version"] = 1
+        data["version"] = 2
     return data
 
 
@@ -418,6 +425,21 @@ def _save_lock(path: Path, payload: Mapping[str, Any]) -> None:
     content = OmegaConf.to_yaml(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _lock_context_payload(ctx: PlanContext) -> dict[str, Any]:
+    return {
+        "project_root": ctx.project_root,
+        "schema_version": ctx.schema_version,
+        "template_set_id": ctx.template_set_id,
+        "solution_root": ctx.solution_root,
+        "pipeline_root_group": ctx.pipeline_root_group,
+        "pipeline_templates_group": ctx.pipeline_templates_group,
+        "pipeline_runs_group": ctx.pipeline_runs_group,
+        "templates_root_group": ctx.templates_root_group,
+        "step_templates_group": ctx.step_templates_group,
+        "runs_root_group": ctx.runs_root_group,
+    }
 
 
 def _normalized_args(args: Iterable[str]) -> list[str]:
@@ -459,7 +481,8 @@ def _compose_pipeline_template_cfg(repo_root: Path, spec: TemplateSpec, ctx: Pla
         f"run.clearml.task_name={spec.task_name_template}",
         "data.raw_dataset_id=template_raw_dataset",
     ]
-    return compose_config(config_dir, "config", overrides)
+    cfg = compose_config(config_dir, "config", overrides)
+    return apply_pipeline_profile_defaults(cfg, spec.name)
 
 
 def _load_clearml_task(task_id: str) -> Any:
@@ -574,7 +597,7 @@ def _resolve_template_spec(
     expected_tags = build_pipeline_template_tags(spec.name, cfg=resolved_cfg) if _is_pipeline_template(spec) else list(spec.tags)
     expected_properties = dict(spec.properties_minimal)
     if _is_pipeline_template(spec):
-        expected_properties.update(build_pipeline_template_properties(spec.name))
+        expected_properties.update(build_pipeline_template_properties(spec.name, cfg=resolved_cfg))
     return ResolvedTemplateSpec(
         spec=spec,
         module=module,
@@ -775,6 +798,8 @@ def _apply_templates(
 ) -> None:
     lock = _load_lock(lock_path)
     lock_templates = lock.get("templates", {})
+    lock["version"] = 2
+    lock["context"] = _lock_context_payload(ctx)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     ordered_templates = [
@@ -824,6 +849,16 @@ def _validate_templates(
         print(f"Lock file not found: {lock_path}")
         return False
     lock = _load_lock(lock_path)
+    expected_context = _lock_context_payload(ctx)
+    actual_context = lock.get("context") or {}
+    context_drift = {
+        key: expected_context[key]
+        for key in expected_context
+        if str(actual_context.get(key, "")) != str(expected_context[key])
+    }
+    if context_drift:
+        print(f"Lock context drift: {context_drift}")
+        return False
     locked = lock.get("templates", {})
     if not isinstance(locked, dict) or not locked:
         print("No templates in lock file.")
@@ -940,8 +975,8 @@ def main() -> int:
         return 0
 
     if not _clearml_config_present(repo_root):
-        print("ClearML config not detected; skipping apply/validate.")
-        return 0
+        print("ClearML config not detected; apply/validate require a live ClearML connection.", file=sys.stderr)
+        return 1
 
     repo_url = args.repo or _detect_repo_url(repo_root)
     branch_name = args.branch or _detect_repo_branch(repo_root)

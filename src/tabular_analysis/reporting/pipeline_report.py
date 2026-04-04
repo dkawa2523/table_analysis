@@ -133,8 +133,14 @@ def _summarize_data_quality_from_out(summary: Mapping[str, Any]) -> dict[str, An
 def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None, max_models: int) -> dict[str, Any]:
     resolver = _ArtifactResolver(cfg)
     grid_run_id = pipeline_run.get('grid_run_id')
+    pipeline_status = _normalize_str(pipeline_run.get('status')) or None
     planned_jobs = pipeline_run.get('planned_jobs')
     executed_jobs = pipeline_run.get('executed_jobs')
+    completed_jobs = pipeline_run.get('completed_jobs')
+    failed_jobs = pipeline_run.get('failed_jobs')
+    stopped_jobs = pipeline_run.get('stopped_jobs')
+    running_jobs = pipeline_run.get('running_jobs')
+    queued_jobs = pipeline_run.get('queued_jobs')
     skipped_jobs = pipeline_run.get('skipped_due_to_policy')
     plan_only = pipeline_run.get('plan_only')
     grid = pipeline_run.get('grid', {}) if isinstance(pipeline_run, Mapping) else {}
@@ -209,7 +215,7 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
         top_models = [_normalize_top_model_row(item) for item in _build_model_rows_from_train_refs(train_refs)]
     models_tried = len(leaderboard_rows) if leaderboard_rows else len(train_refs) if train_refs else len(top_models)
     has_infer_target = bool(preferred_reference.get('infer_model_id') or preferred_reference.get('infer_train_task_id'))
-    status = 'ready' if has_infer_target else 'incomplete'
+    status = pipeline_status or ('ready' if has_infer_target else 'incomplete')
     if data_quality_payload:
         data_quality = _summarize_data_quality(data_quality_payload)
     else:
@@ -229,7 +235,11 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
         if comparability.get('excluded_count'):
             rationale += f" excluded_count={comparability.get('excluded_count')}."
     actions: list[str] = []
-    if not has_infer_target:
+    if status in {'queued', 'running', 'planned'}:
+        actions.append('Wait for the pipeline controller to finish, then regenerate the report.')
+    elif status in {'failed', 'stopped'}:
+        actions.append('Inspect failed/stopped child tasks and rerun from the visible pipeline template if needed.')
+    elif not has_infer_target:
         actions.append('Wait for training/leaderboard to finish, then regenerate the report.')
     if not leaderboard_rows and train_refs:
         actions.append('Run leaderboard to select the best model explicitly.')
@@ -242,7 +252,7 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
     if not actions:
         actions.append('Validate the recommended model on a fresh holdout set.')
     actions = actions[:3]
-    return {'report_version': 1, 'grid_run_id': grid_run_id, 'status': status, 'summary': {'recommended_model_id': recommended_model_id, 'recommended_registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'primary_metric': recommended_metric, 'best_score': recommended_score, 'models_tried': models_tried, 'train_task_ref': recommended_train_ref, 'planned_jobs': planned_jobs, 'executed_jobs': executed_jobs, 'skipped_due_to_policy': skipped_jobs, 'plan_only': plan_only, 'recommendation_rationale': rationale}, 'dataset': {'raw_dataset_id': dataset_out.get('raw_dataset_id'), 'processed_dataset_id': _normalize_str(preprocess_ref.get('processed_dataset_id') if preprocess_ref else None) or comparability.get('processed_dataset_id'), 'rows': rows, 'feature_columns': feature_cols, 'target_column': target_column, 'id_columns': id_columns, 'drop_columns': drop_columns}, 'data_quality': data_quality, 'split': {'preprocess_variant': preprocess_variant, 'strategy': split_payload.get('strategy'), 'test_size': split_payload.get('test_size'), 'seed': split_payload.get('seed'), 'group_column': split_payload.get('group_column'), 'time_column': split_payload.get('time_column'), 'split_hash': split_hash, 'recipe_hash': recipe_hash}, 'comparability': comparability, 'top_models': top_models[:max_models], 'recommendation': {'model_id': recommended_model_id, 'registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'train_task_ref': recommended_train_ref, 'primary_metric': recommended_metric, 'best_score': recommended_score, 'direction': direction, 'primary_metric_ci': recommended_detail.get('primary_metric_ci'), 'task_type': task_type, 'n_classes': recommended_detail.get('n_classes'), 'threshold': recommended_threshold, 'thresholding': notes.get('thresholding'), 'calibration': notes.get('calibration'), 'imbalance': notes.get('imbalance'), 'uncertainty': notes.get('uncertainty')}, 'notes': notes, 'next_actions': actions}
+    return {'report_version': 1, 'grid_run_id': grid_run_id, 'status': status, 'summary': {'recommended_model_id': recommended_model_id, 'recommended_registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'primary_metric': recommended_metric, 'best_score': recommended_score, 'models_tried': models_tried, 'train_task_ref': recommended_train_ref, 'planned_jobs': planned_jobs, 'executed_jobs': executed_jobs, 'completed_jobs': completed_jobs, 'failed_jobs': failed_jobs, 'stopped_jobs': stopped_jobs, 'running_jobs': running_jobs, 'queued_jobs': queued_jobs, 'skipped_due_to_policy': skipped_jobs, 'plan_only': plan_only, 'recommendation_rationale': rationale}, 'dataset': {'raw_dataset_id': dataset_out.get('raw_dataset_id'), 'processed_dataset_id': _normalize_str(preprocess_ref.get('processed_dataset_id') if preprocess_ref else None) or comparability.get('processed_dataset_id'), 'rows': rows, 'feature_columns': feature_cols, 'target_column': target_column, 'id_columns': id_columns, 'drop_columns': drop_columns}, 'data_quality': data_quality, 'split': {'preprocess_variant': preprocess_variant, 'strategy': split_payload.get('strategy'), 'test_size': split_payload.get('test_size'), 'seed': split_payload.get('seed'), 'group_column': split_payload.get('group_column'), 'time_column': split_payload.get('time_column'), 'split_hash': split_hash, 'recipe_hash': recipe_hash}, 'comparability': comparability, 'top_models': top_models[:max_models], 'recommendation': {'model_id': recommended_model_id, 'registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'train_task_ref': recommended_train_ref, 'primary_metric': recommended_metric, 'best_score': recommended_score, 'direction': direction, 'primary_metric_ci': recommended_detail.get('primary_metric_ci'), 'task_type': task_type, 'n_classes': recommended_detail.get('n_classes'), 'threshold': recommended_threshold, 'thresholding': notes.get('thresholding'), 'calibration': notes.get('calibration'), 'imbalance': notes.get('imbalance'), 'uncertainty': notes.get('uncertainty')}, 'notes': notes, 'next_actions': actions}
 def _render_report_markdown(payload: Mapping[str, Any], *, max_models: int) -> str:
     summary = payload.get('summary') or {}
     dataset = payload.get('dataset') or {}
@@ -258,6 +268,16 @@ def _render_report_markdown(payload: Mapping[str, Any], *, max_models: int) -> s
         lines.append(f"- planned_jobs: {_format_value(summary.get('planned_jobs'))}")
     if summary.get('executed_jobs') is not None:
         lines.append(f"- executed_jobs: {_format_value(summary.get('executed_jobs'))}")
+    if summary.get('completed_jobs') is not None:
+        lines.append(f"- completed_jobs: {_format_value(summary.get('completed_jobs'))}")
+    if summary.get('failed_jobs') is not None:
+        lines.append(f"- failed_jobs: {_format_value(summary.get('failed_jobs'))}")
+    if summary.get('stopped_jobs') is not None:
+        lines.append(f"- stopped_jobs: {_format_value(summary.get('stopped_jobs'))}")
+    if summary.get('running_jobs') is not None:
+        lines.append(f"- running_jobs: {_format_value(summary.get('running_jobs'))}")
+    if summary.get('queued_jobs') is not None:
+        lines.append(f"- queued_jobs: {_format_value(summary.get('queued_jobs'))}")
     if summary.get('skipped_due_to_policy') is not None:
         lines.append(f"- skipped_due_to_policy: {_format_value(summary.get('skipped_due_to_policy'))}")
     if summary.get('plan_only'):
@@ -407,6 +427,14 @@ def build_pipeline_report_links(pipeline_run: Mapping[str, Any], *, cfg: Any | N
         if entry:
             train_entries.append(entry)
     links['train'] = train_entries
+    train_ensemble_entries: list[dict[str, Any]] = []
+    for ref in pipeline_run.get('train_ensemble_refs') or []:
+        if not isinstance(ref, Mapping):
+            continue
+        entry = _build_link_entry(cfg, _normalize_str(ref.get('run_dir')), _normalize_str(ref.get('task_id') or ref.get('train_task_id')), extra={'preprocess_variant': _normalize_str(ref.get('preprocess_variant')), 'ensemble_method': _normalize_str(ref.get('ensemble_method'))})
+        if entry:
+            train_ensemble_entries.append(entry)
+    links['train_ensemble'] = train_ensemble_entries
     leaderboard_ref = pipeline_run.get('leaderboard_ref') or {}
     leaderboard_entry = None
     if isinstance(leaderboard_ref, Mapping):

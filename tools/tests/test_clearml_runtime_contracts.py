@@ -22,8 +22,13 @@ from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.ops import clearml_identity as clearml_identity_module
 from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
-from tabular_analysis.processes.pipeline_support import build_pipeline_template_defaults, resolve_pipeline_profile
+from tabular_analysis.processes.pipeline_support import (
+    apply_pipeline_profile_defaults,
+    build_pipeline_template_defaults,
+    resolve_pipeline_profile,
+)
 from tabular_analysis.registry.models import list_model_variants
+from tools.clearml_templates import manage_templates as manage_templates_module
 from tools.clearml_entrypoint import (
     _extract_cli_keys,
     _normalize_loaded_override_key,
@@ -356,6 +361,39 @@ def _assert_explicit_pipeline_variants_override_model_set() -> None:
         raise AssertionError(f"unexpected preprocess variants in override regression: {preprocess_variants}")
 
 
+def _assert_pipeline_profile_defaults_clear_stale_model_variants() -> None:
+    cfg = OmegaConf.create(
+        {
+            "pipeline": {
+                "grid": {"model_variants": ["ridge"]},
+                "model_variants": ["ridge"],
+                "model_set": None,
+            },
+            "ensemble": {"enabled": False},
+        }
+    )
+    updated = apply_pipeline_profile_defaults(cfg, "pipeline")
+    preprocess_variants, model_variants = pipeline_module._resolve_variants(updated)
+    if model_variants != [
+        "catboost",
+        "elasticnet",
+        "extra_trees",
+        "gaussian_process",
+        "gradient_boosting",
+        "knn",
+        "lasso",
+        "lgbm",
+        "linear_regression",
+        "mlp",
+        "random_forest",
+        "ridge",
+        "xgboost",
+    ]:
+        raise AssertionError(f"pipeline profile defaults must expand canonical regression_all: {model_variants}")
+    if preprocess_variants != []:
+        raise AssertionError(f"unexpected preprocess variants after profile defaults: {preprocess_variants}")
+
+
 def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
     class _FakeTaskObject:
         name = "pipeline"
@@ -537,9 +575,14 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
         def __init__(self) -> None:
             self._nodes = {"preprocess": object()}
             self.started_with: str | None = "unset"
+            self.wait_called = False
 
         def start_locally(self, *, run_pipeline_steps_locally: bool = False) -> None:
             self.started_with = "local" if not run_pipeline_steps_locally else "fully-local"
+
+        def wait(self, timeout: float | None = None) -> bool:
+            self.wait_called = True
+            return True
 
     fake_controller = _FakeController()
     fake_task = _FakeTask()
@@ -548,6 +591,7 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
         "clearml_task_id": pipeline_module.clearml_task_id,
         "apply_defaults": pipeline_module._apply_visible_pipeline_run_defaults,
         "load_controller": pipeline_module.load_pipeline_controller_from_task,
+        "add_steps": pipeline_module._add_clearml_pipeline_steps,
         "collect_step_ids": pipeline_module._collect_step_task_ids,
         "build_refs": pipeline_module._build_clearml_pipeline_refs,
         "build_summary": pipeline_module._build_local_pipeline_run_summary,
@@ -578,6 +622,15 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
         pipeline_module.clearml_task_id = lambda task: "controller-123"
         pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"run.grid_run_id": "grid-001"}
         pipeline_module.load_pipeline_controller_from_task = lambda source_task: fake_controller
+        pipeline_module._add_clearml_pipeline_steps = lambda **kwargs: setattr(
+            fake_controller,
+            "_nodes",
+            {
+                "preprocess__stdscaler_ohe": object(),
+                "train__stdscaler_ohe__ridge": object(),
+                "leaderboard": object(),
+            },
+        )
         pipeline_module._collect_step_task_ids = lambda controller: {}
         pipeline_module._build_clearml_pipeline_refs = lambda **kwargs: (None, [], [], [], None, None)
         pipeline_module._build_local_pipeline_run_summary = lambda **kwargs: {"status": "stub"}
@@ -586,11 +639,16 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
         summary = pipeline_module._execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id="grid-001")
         if fake_controller.started_with != "local":
             raise AssertionError(f"remote controller should run controller logic in-place: {fake_controller.started_with}")
+        expected_nodes = {"preprocess__stdscaler_ohe", "train__stdscaler_ohe__ridge", "leaderboard"}
+        if set((getattr(fake_controller, "_nodes", {}) or {}).keys()) != expected_nodes:
+            raise AssertionError(f"loaded controller should rebuild runtime nodes from the current plan: {getattr(fake_controller, '_nodes', None)}")
         if getattr(fake_controller, "_default_execution_queue", None) != "default":
             raise AssertionError(f"loaded controller should reseed default execution queue: {getattr(fake_controller, '_default_execution_queue', None)}")
         pipeline_args = getattr(fake_controller, "_pipeline_args", {})
         if pipeline_args.get("run/grid_run_id") != "grid-001":
             raise AssertionError(f"loaded controller should reseed pipeline args: {pipeline_args}")
+        if not getattr(fake_controller, "wait_called", False):
+            raise AssertionError("loaded controller should wait for child task completion before summarizing")
         if summary.get("pipeline_task_id") != "controller-123":
             raise AssertionError(f"unexpected pipeline summary: {summary}")
     finally:
@@ -598,6 +656,7 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
         pipeline_module.clearml_task_id = originals["clearml_task_id"]
         pipeline_module._apply_visible_pipeline_run_defaults = originals["apply_defaults"]
         pipeline_module.load_pipeline_controller_from_task = originals["load_controller"]
+        pipeline_module._add_clearml_pipeline_steps = originals["add_steps"]
         pipeline_module._collect_step_task_ids = originals["collect_step_ids"]
         pipeline_module._build_clearml_pipeline_refs = originals["build_refs"]
         pipeline_module._build_local_pipeline_run_summary = originals["build_summary"]
@@ -622,6 +681,7 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
         "clearml_task_id": pipeline_module.clearml_task_id,
         "apply_defaults": pipeline_module._apply_visible_pipeline_run_defaults,
         "load_controller": pipeline_module.load_pipeline_controller_from_task,
+        "add_steps": pipeline_module._add_clearml_pipeline_steps,
         "build_summary": pipeline_module._build_local_pipeline_run_summary,
     }
     try:
@@ -650,6 +710,7 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
         pipeline_module.clearml_task_id = lambda task: "controller-plan-only"
         pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"run.grid_run_id": "grid-plan-only"}
         pipeline_module.load_pipeline_controller_from_task = lambda source_task: fake_controller
+        pipeline_module._add_clearml_pipeline_steps = lambda **kwargs: setattr(fake_controller, "_nodes", {"preprocess__stdscaler_ohe": object()})
         pipeline_module._build_local_pipeline_run_summary = lambda **kwargs: {"status": "stub", "plan_only": kwargs["plan"]["plan_only"]}
         cfg = OmegaConf.create({"run": {"clearml": {"queue_name": "default"}}})
         ctx = pipeline_module.TaskContext(task=fake_task, project_name="LOCAL/TabularAnalysis/Pipelines", task_name="pipeline", output_dir=Path.cwd())
@@ -665,6 +726,7 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
         pipeline_module.clearml_task_id = originals["clearml_task_id"]
         pipeline_module._apply_visible_pipeline_run_defaults = originals["apply_defaults"]
         pipeline_module.load_pipeline_controller_from_task = originals["load_controller"]
+        pipeline_module._add_clearml_pipeline_steps = originals["add_steps"]
         pipeline_module._build_local_pipeline_run_summary = originals["build_summary"]
 
 
@@ -701,7 +763,83 @@ def _assert_pipeline_template_defaults_keep_plan_only() -> None:
         raise AssertionError(f"pipeline template defaults must preserve plan_only: {defaults}")
 
 
-def _assert_explicit_template_task_id_skips_profile_signature_match() -> None:
+def _assert_pipeline_run_summary_tracks_actual_job_statuses() -> None:
+    originals = {"get_clearml_task_status": pipeline_module.get_clearml_task_status}
+    try:
+        statuses = {
+            "train-1": "completed",
+            "ensemble-1": "failed",
+        }
+        pipeline_module.get_clearml_task_status = lambda task_id: statuses.get(str(task_id))
+        cfg = OmegaConf.create({})
+        plan = {
+            "plan_only": False,
+            "plan_info": {"planned_jobs": 2, "skipped_due_to_policy": 0},
+            "preprocess_variants": ["stdscaler_ohe"],
+            "model_variants": ["ridge"],
+            "max_jobs": 2,
+            "max_hpo_trials": 0,
+            "hpo_enabled": False,
+            "hpo_params_cfg": {},
+            "limits": {"max_jobs": 2, "max_models": 2, "max_hpo_trials": 0},
+        }
+        summary = pipeline_module._build_local_pipeline_run_summary(
+            cfg=cfg,
+            plan=plan,
+            grid_run_id="grid-001",
+            dataset_register_ref=None,
+            preprocess_refs=[],
+            train_refs=[{"task_id": "train-1", "model_variant": "ridge"}],
+            train_ensemble_refs=[{"task_id": "ensemble-1", "ensemble_method": "weighted"}],
+            leaderboard_ref=None,
+            infer_ref=None,
+            executed_jobs=2,
+        )
+        finalized = pipeline_module._finalize_pipeline_run_summary(cfg, summary)
+        if finalized.get("status") != "failed":
+            raise AssertionError(f"job status aggregation must mark failed pipelines: {finalized}")
+        if finalized.get("executed_jobs") != 2:
+            raise AssertionError(f"executed_jobs must follow launched child tasks: {finalized}")
+        if finalized.get("completed_jobs") != 1 or finalized.get("failed_jobs") != 1:
+            raise AssertionError(f"job status counters must reflect child task states: {finalized}")
+    finally:
+        pipeline_module.get_clearml_task_status = originals["get_clearml_task_status"]
+
+
+def _assert_manage_templates_pipeline_properties_follow_resolved_context() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    defaults = manage_templates_module._load_run_defaults(repo)
+    ctx = manage_templates_module.PlanContext(
+        project_root="LOCAL",
+        usecase_id="TabularAnalysis",
+        schema_version="v1",
+        template_set_id="default",
+        solution_root=defaults.solution_root,
+        pipeline_root_group=defaults.pipeline_root_group,
+        pipeline_templates_group=defaults.pipeline_templates_group,
+        pipeline_runs_group=defaults.pipeline_runs_group,
+        templates_root_group=defaults.templates_root_group,
+        step_templates_group=defaults.step_templates_group,
+        runs_root_group=defaults.runs_root_group,
+        group_map=dict(defaults.group_map),
+    )
+    specs = manage_templates_module._load_templates(repo / "conf" / "clearml" / "templates.yaml", ctx)
+    spec = next(item for item in specs if item.name == "pipeline")
+    resolved = manage_templates_module._resolve_template_spec(
+        spec,
+        ctx=ctx,
+        repo_root=repo,
+        repo=None,
+        branch=None,
+        version_mode="branch",
+    )
+    if resolved.expected_properties.get("project_root") != "LOCAL":
+        raise AssertionError(
+            f"pipeline template properties must follow resolved context overrides: {resolved.expected_properties}"
+        )
+
+
+def _assert_visible_template_graph_mismatch_fails_even_with_explicit_template_id() -> None:
     cfg = OmegaConf.create(
         {
             "run": {
@@ -713,20 +851,115 @@ def _assert_explicit_template_task_id_skips_profile_signature_match() -> None:
             }
         }
     )
-    profile = resolve_pipeline_profile(
-        cfg,
-        {
-            "run_dataset_register": False,
-            "run_preprocess": True,
-            "run_train": True,
-            "run_train_ensemble": False,
-            "run_leaderboard": True,
-            "run_infer": False,
-            "model_set": None,
-        },
+    try:
+        resolve_pipeline_profile(
+            cfg,
+            {
+                "run_dataset_register": False,
+                "run_preprocess": True,
+                "run_train": True,
+                "run_train_ensemble": False,
+                "run_leaderboard": True,
+                "run_infer": False,
+                "model_set": None,
+            },
+        )
+    except ValueError as exc:
+        if "template_task_id cannot override a graph mismatch" not in str(exc):
+            raise AssertionError(f"unexpected mismatch message: {exc}") from exc
+        return
+    raise AssertionError("visible template clones must fail fast on graph mismatches")
+
+
+def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
+    repo = Path(__file__).resolve().parents[2]
+    defaults = manage_templates_module._load_run_defaults(repo)
+    ctx = manage_templates_module.PlanContext(
+        project_root="LOCAL",
+        usecase_id="TabularAnalysis",
+        schema_version="v1",
+        template_set_id="default",
+        solution_root=defaults.solution_root,
+        pipeline_root_group=defaults.pipeline_root_group,
+        pipeline_templates_group=defaults.pipeline_templates_group,
+        pipeline_runs_group=defaults.pipeline_runs_group,
+        templates_root_group=defaults.templates_root_group,
+        step_templates_group=defaults.step_templates_group,
+        runs_root_group=defaults.runs_root_group,
+        group_map=dict(defaults.group_map),
     )
-    if profile != "pipeline":
-        raise AssertionError(f"explicit template_task_id should allow default pipeline profile fallback: {profile}")
+    specs = manage_templates_module._load_templates(repo / "conf" / "clearml" / "templates.yaml", ctx)
+    spec = next(item for item in specs if item.name == "pipeline")
+    cfg = manage_templates_module._compose_pipeline_template_cfg(
+        repo,
+        spec,
+        ctx,
+        entry_args=["task=pipeline"],
+    )
+
+    class _FakeController:
+        def __init__(self) -> None:
+            self.parameters: dict[str, object] = {}
+            self.steps: list[dict[str, object]] = []
+            self._nodes: dict[str, object] = {}
+
+        def add_parameter(self, name: str, default: object = None) -> None:
+            self.parameters[str(name)] = default
+
+        def add_step(
+            self,
+            *,
+            name: str,
+            parents: object = None,
+            parameter_override: object = None,
+            execution_queue: object = None,
+            clone_base_task: object = None,
+            cache_executed_step: object = None,
+            recursively_parse_parameters: object = None,
+            base_task_id: object = None,
+            base_task_factory: object = None,
+        ) -> None:
+            kwargs = {
+                "name": name,
+                "parents": parents,
+                "parameter_override": parameter_override,
+                "execution_queue": execution_queue,
+                "clone_base_task": clone_base_task,
+                "cache_executed_step": cache_executed_step,
+                "recursively_parse_parameters": recursively_parse_parameters,
+                "base_task_id": base_task_id,
+                "base_task_factory": base_task_factory,
+            }
+            self.steps.append(dict(kwargs))
+            self._nodes[str(name)] = object()
+
+        def create_draft(self) -> None:
+            return None
+
+    controller = _FakeController()
+    original_resolve_base_task_id = pipeline_module._resolve_base_task_id
+    try:
+        pipeline_module._resolve_base_task_id = lambda *_args, **_kwargs: "template-base-task"
+        draft = pipeline_module.build_pipeline_template_draft(
+            cfg=cfg,
+            controller=controller,
+            pipeline_profile="pipeline",
+        )
+    finally:
+        pipeline_module._resolve_base_task_id = original_resolve_base_task_id
+    if draft["shared_defaults"].get("pipeline.model_set") != "regression_all":
+        raise AssertionError(f"pipeline template defaults must pin regression_all: {draft['shared_defaults']}")
+    expected_variants = pipeline_module._resolve_model_set_variants("regression_all")
+    if draft["shared_defaults"].get("pipeline.grid.model_variants") != expected_variants:
+        raise AssertionError(f"pipeline template defaults must expand the full regression profile: {draft['shared_defaults']}")
+    step_names = {str(item["name"]) for item in controller.steps}
+    expected_train_steps = {f"train__stdscaler_ohe__{variant}" for variant in expected_variants}
+    missing = sorted(expected_train_steps - step_names)
+    if missing:
+        raise AssertionError(f"pipeline template draft must materialize the full regression graph: missing {missing}")
+    for required in ("preprocess__stdscaler_ohe", "leaderboard"):
+        if required not in step_names:
+            raise AssertionError(f"pipeline template draft missing {required}: {sorted(step_names)}")
 
 
 def _assert_uv_lock_exposes_split_model_extras() -> None:
@@ -755,6 +988,7 @@ def main() -> int:
     _assert_entrypoint_reads_clearml_slash_overrides()
     _assert_regression_model_set_contract()
     _assert_explicit_pipeline_variants_override_model_set()
+    _assert_pipeline_profile_defaults_clear_stale_model_variants()
     _assert_pipeline_controller_context_attaches_by_task_id()
     _assert_pipeline_step_references_are_not_quoted()
     _assert_pipeline_steps_enable_recursive_parameter_parsing()
@@ -762,7 +996,10 @@ def main() -> int:
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
     _assert_plan_only_controller_does_not_launch_steps()
     _assert_pipeline_template_defaults_keep_plan_only()
-    _assert_explicit_template_task_id_skips_profile_signature_match()
+    _assert_pipeline_run_summary_tracks_actual_job_statuses()
+    _assert_manage_templates_pipeline_properties_follow_resolved_context()
+    _assert_visible_template_graph_mismatch_fails_even_with_explicit_template_id()
+    _assert_pipeline_template_draft_uses_profile_model_set()
     _assert_uv_lock_exposes_split_model_extras()
     print("OK: clearml runtime contracts")
     return 0

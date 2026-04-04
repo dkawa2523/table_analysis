@@ -5,14 +5,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
 
+def _python_env(repo: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    src = str((repo / "src").resolve())
+    current = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = src if not current else f"{src}{os.pathsep}{current}"
+    return env
+
+
 def _run(cmd: List[str], *, cwd: Path) -> str:
-    proc = subprocess.run(cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(cwd),
+        env=_python_env(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
     if proc.returncode != 0:
         raise RuntimeError(f"Command failed (exit={proc.returncode})\n$ {' '.join(cmd)}\n\n{proc.stdout}")
     return proc.stdout
@@ -52,6 +68,7 @@ def main() -> int:
             "task=pipeline",
             "run.clearml.enabled=false",
             f"run.output_dir={out_root}",
+            "data.raw_dataset_id=raw_exec_policy_dataset",
             "pipeline.plan_only=true",
             "pipeline.grid.preprocess_variants=[stdscaler_ohe]",
             "pipeline.grid.model_variants=[ridge,lasso]",
@@ -67,11 +84,14 @@ def main() -> int:
 
     pl_dir = out_root / "99_pipeline"
     _check_common(pl_dir)
+    _must_exist(pl_dir / "run_summary.json")
     pl_out = _load_json(pl_dir / "out.json")
     pipeline_run = pl_out.get("pipeline_run") or {}
 
     if not pipeline_run.get("plan_only"):
         raise AssertionError("plan_only must be true in plan mode")
+    if pipeline_run.get("status") != "planned":
+        raise AssertionError(f"plan_only pipeline status must be planned (got {pipeline_run.get('status')})")
 
     planned = pipeline_run.get("planned_jobs")
     executed = pipeline_run.get("executed_jobs")

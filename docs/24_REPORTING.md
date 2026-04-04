@@ -39,10 +39,11 @@ pipeline は複数 task の結果を `report.md` / `report.json` に集約しま
 
 ### pipeline
 
+- `pipeline_run.json`
+- `run_summary.json`
 - `report.md`
 - `report.json`
 - `report_links.json`
-- `run_summary.json`
 
 ## report.md と report.json の使い分け
 
@@ -55,6 +56,8 @@ pipeline は複数 task の結果を `report.md` / `report.json` に集約しま
 
 - 機械可読の summary
 - automation / regression check 向け
+- lifecycle の正本は `pipeline_run.json`
+- `report.json` と `run_summary.json` はその状態を読みやすく投影したもの
 
 ## pipeline report で必ず見たい項目
 
@@ -66,11 +69,16 @@ pipeline は複数 task の結果を `report.md` / `report.json` に集約しま
 - `best_score`
 - `planned_jobs`
 - `executed_jobs`
+- `completed_jobs`
+- `failed_jobs`
+- `stopped_jobs`
+- `running_jobs`
+- `queued_jobs`
 - `skipped_due_to_policy`
 
 ## partial failure の扱い
 
-pipeline は stopped / skipped / partial failure の情報も `run_summary.json` と `report.json` に残します。  
+pipeline は `pipeline_run.json` を lifecycle の canonical source とし、stopped / skipped / partial failure の情報も `run_summary.json` と `report.json` に残します。  
 途中で止まっても「どこまで完了したか」が分かることを重視しています。
 
 ## 関連ドキュメント

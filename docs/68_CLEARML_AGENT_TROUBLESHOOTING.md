@@ -26,13 +26,15 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 ```
 
 ## 2) Queue / agent basics
-- `run.clearml.queue_name` must match the queue the agent is watching.
+- `run.clearml.queue_name` is not the canonical child-routing knob for pipeline runs.
+- In pipeline mode, `exec_policy.queues.*` is the source of truth for child task queues.
+- Use `run.clearml.queue_name` only when you intentionally want to steer the controller task itself.
 - The agent must appear online in the ClearML UI.
 - If tasks stay queued, verify that the queue has at least one healthy worker.
 - Canonical container assets live under `tools/clearml_agent/`.
 - Use a Docker named volume for `/root/.clearml` and set `UV_CACHE_DIR=/root/.clearml/uv-cache`.
 - Avoid Windows bind mounts for `/root/.clearml`. They can push agent processes into `p9_client_rpc` waits and stall controller runs.
-- Start agents with `--init` (or Docker `init: true`) so zombie processes do not accumulate.
+- The canonical agent image already starts through `tini`; do not reintroduce Windows host bind mounts just to share `/root/.clearml`.
 - Canonical queue split is:
   - `controller`: pipeline controllers only
   - `default`: preprocess, light train models, leaderboard, ensembles

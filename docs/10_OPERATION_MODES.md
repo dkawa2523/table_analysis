@@ -97,6 +97,10 @@ python -m tabular_analysis.cli task=pipeline \
   +pipeline.model_set=regression_all
 ```
 
+- `run.clearml.queue_name` は pipeline child routing の正本ではありません。
+- pipeline mode では `exec_policy.queues.*` が child task の queue を決めます。
+- `run.clearml.queue_name` を渡す場合は controller queue の明示用途に限定します。
+
 ## queue との関係
 
 標準の queue 分割:

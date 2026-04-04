@@ -3,7 +3,13 @@
 このドキュメントは **非DSユーザーが ClearML UI だけで判断できる**ための契約です。
 
 ## Project 階層（config-driven）
-`<ROOT>/<solution_root>/<usecase_id>/<process_group>`
+
+operator が主に見る階層:
+
+- pipeline template: `<ROOT>/<solution_root>/Pipelines/Templates`
+- pipeline run: `<ROOT>/<solution_root>/Pipelines/Runs/<usecase_id>`
+- child task run: `<ROOT>/<solution_root>/Runs/<usecase_id>/<process_group>`
+- step template: `<ROOT>/<solution_root>/Templates/Steps/<process_group>`
 
 - ROOT: `run.clearml.project_root`（または `TABULAR_ANALYSIS_CLEARML_PROJECT_ROOT`）
 - solution_root: `run.clearml.project_layout.solution_root`（例: `TabularAnalysis`）
@@ -12,14 +18,16 @@
 - 設定ファイル: `conf/clearml/project_layout.yaml`
 
 例（デフォルト）：
-- `MFG/TabularAnalysis/test_toy_20260101_120000/01_Datasets`
-- `MFG/TabularAnalysis/test_toy_20260101_120000/02_Preprocess`
-- `MFG/TabularAnalysis/test_toy_20260101_120000/03_TrainModels`
-- `MFG/TabularAnalysis/test_toy_20260101_120000/04_Ensembles`
-- `MFG/TabularAnalysis/test_toy_20260101_120000/05_Infer`
-- `MFG/TabularAnalysis/test_toy_20260101_120000/05_Infer_Children`（batch/optimize の child）
-- `MFG/TabularAnalysis/Pipelines`（visible controller template / run）
-- `MFG/TabularAnalysis/Pipelines/test_toy_20260101_120000/05_Leaderboard`
+- `MFG/TabularAnalysis/Pipelines/Templates`
+- `MFG/TabularAnalysis/Pipelines/Runs/test_toy_20260101_120000`
+- `MFG/TabularAnalysis/Templates/Steps/03_TrainModels`
+- `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/01_Datasets`
+- `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/02_Preprocess`
+- `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/03_TrainModels`
+- `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/04_Ensembles`
+- `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/05_Infer`
+- `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/05_Infer_Children`（batch/optimize の child）
+- `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/99_Leaderboard`
 
 ## Task 名（推奨）
 `<process>__<variant>__v<schema_version>`
@@ -53,6 +61,12 @@
 ## HyperParameters（汚染防止：重要）
 - **そのタスクの再現に必要な入力のみ**を記録する
 - pipeline の設定や出力値を train の HyperParameters に混ぜない
+
+visible pipeline template について:
+
+- `Pipelines/Templates` にある template は profile 固定の DAG です
+- operator が UI から編集してよいのは dataset / usecase / ensemble top_k などの限定された項目だけです
+- `pipeline.model_set` や `pipeline.grid.model_variants` を変えて DAG を差し替える運用はしません
 
 ## Artifacts（全タスク必須）
 - `config_resolved.yaml`

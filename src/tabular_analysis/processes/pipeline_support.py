@@ -106,6 +106,14 @@ def normalize_pipeline_profile(value: Any, *, default: str = DEFAULT_PIPELINE_PR
     return text or default
 
 
+def get_pipeline_profile_spec(pipeline_profile: str) -> PipelineProfileSpec:
+    profile = normalize_pipeline_profile(pipeline_profile)
+    spec = PIPELINE_PROFILE_SPECS.get(profile)
+    if spec is None:
+        raise ValueError(f'Unsupported pipeline profile: {profile}')
+    return spec
+
+
 def is_pipeline_template_name(value: Any) -> bool:
     return normalize_pipeline_profile(value) in PIPELINE_PROFILE_SPECS
 
@@ -144,7 +152,7 @@ def resolve_pipeline_profile(cfg: Any | None, plan: Mapping[str, Any] | None = N
             return DEFAULT_PIPELINE_PROFILE
         raise ValueError(
             'No built-in visible pipeline template matches the current pipeline settings. '
-            'Specify run.clearml.pipeline.template_task_id or align the config to a supported profile.'
+            'Align the config to a supported profile or specify run.clearml.pipeline.template_task_id.'
         )
     return DEFAULT_PIPELINE_PROFILE
 
@@ -154,6 +162,66 @@ def build_pipeline_ui_parameter_whitelist(pipeline_profile: str) -> tuple[str, .
     if profile not in PIPELINE_TEMPLATE_UI_WHITELIST:
         raise ValueError(f'Unsupported pipeline profile for UI whitelist: {profile}')
     return PIPELINE_TEMPLATE_UI_WHITELIST[profile]
+
+
+def resolve_pipeline_run_flags(cfg: Any | None) -> dict[str, bool]:
+    pipeline_cfg = getattr(cfg, 'pipeline', None) if cfg is not None else None
+    return {
+        'run_dataset_register': bool(getattr(pipeline_cfg, 'run_dataset_register', False)),
+        'run_preprocess': bool(getattr(pipeline_cfg, 'run_preprocess', True)),
+        'run_train': bool(getattr(pipeline_cfg, 'run_train', True)),
+        'run_train_ensemble': bool(
+            getattr(pipeline_cfg, 'run_train_ensemble', _cfg_value(cfg, 'ensemble.enabled', False))
+        ),
+        'run_leaderboard': bool(getattr(pipeline_cfg, 'run_leaderboard', True)),
+        'run_infer': bool(getattr(pipeline_cfg, 'run_infer', False)),
+    }
+
+
+def resolve_pipeline_plan_only(cfg: Any | None) -> bool:
+    return bool(_cfg_value(cfg, 'pipeline.plan_only')) or bool(_cfg_value(cfg, 'pipeline.dry_run')) or bool(_cfg_value(cfg, 'pipeline.plan'))
+
+
+def apply_pipeline_profile_defaults(cfg: Any, pipeline_profile: str) -> Any:
+    spec = get_pipeline_profile_spec(pipeline_profile)
+    try:
+        from omegaconf import OmegaConf
+    except ImportError:
+        OmegaConf = None
+
+    def _set(path: str, value: Any) -> None:
+        if OmegaConf is not None and OmegaConf.is_config(cfg):
+            OmegaConf.update(cfg, path, value, merge=False, force_add=True)
+            return
+        target = cfg
+        parts = path.split('.')
+        for key in parts[:-1]:
+            child = getattr(target, key, None)
+            if child is None:
+                child = {}
+                if isinstance(target, Mapping):
+                    target[key] = child
+                else:
+                    setattr(target, key, child)
+            target = child
+        leaf = parts[-1]
+        if isinstance(target, Mapping):
+            target[leaf] = value
+        else:
+            setattr(target, leaf, value)
+
+    _set('pipeline.profile', spec.name)
+    _set('pipeline.run_dataset_register', spec.run_dataset_register)
+    _set('pipeline.run_preprocess', spec.run_preprocess)
+    _set('pipeline.run_train', spec.run_train)
+    _set('pipeline.run_train_ensemble', spec.run_train_ensemble)
+    _set('pipeline.run_leaderboard', spec.run_leaderboard)
+    _set('pipeline.run_infer', spec.run_infer)
+    _set('pipeline.model_set', spec.model_set)
+    _set('pipeline.model_variants', [])
+    _set('pipeline.grid.model_variants', [])
+    _set('ensemble.enabled', spec.run_train_ensemble)
+    return cfg
 
 
 def build_pipeline_template_defaults(
@@ -312,6 +380,7 @@ __all__ = [
     'PIPELINE_PROFILE_SPECS',
     'PIPELINE_TEMPLATE_LOCAL_ONLY_KEYS',
     'PIPELINE_TEMPLATE_UI_WHITELIST',
+    'apply_pipeline_profile_defaults',
     'PipelinePlan',
     'PipelineProfileSpec',
     'PipelineStepSpec',
@@ -322,9 +391,12 @@ __all__ = [
     'build_pipeline_template_step_overrides',
     'build_pipeline_ui_parameter_whitelist',
     'extract_pipeline_editable_defaults',
+    'get_pipeline_profile_spec',
     'is_pipeline_template_name',
     'normalize_pipeline_profile',
+    'resolve_pipeline_plan_only',
     'resolve_pipeline_profile',
+    'resolve_pipeline_run_flags',
     'resolve_pipeline_queues',
     'resolve_pipeline_variants',
     'strip_local_only_pipeline_overrides',

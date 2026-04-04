@@ -9,11 +9,13 @@ import json
 import os
 import platform as platform_mod
 import re
+import shutil
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 
 def _format_cmd(cmd: Sequence[str]) -> str:
@@ -32,6 +34,13 @@ def _with_repo_env(repo: Path) -> dict[str, str]:
         entries = [item for item in existing.split(os.pathsep) if item]
         if str(src_dir) not in entries:
             entries.insert(0, str(src_dir))
+            env["PYTHONPATH"] = os.pathsep.join(entries)
+    platform_src = repo.parent / "ml_platform_v1-master" / "src"
+    if platform_src.exists():
+        existing = env.get("PYTHONPATH", "")
+        entries = [item for item in existing.split(os.pathsep) if item]
+        if str(platform_src) not in entries:
+            entries.insert(0, str(platform_src))
             env["PYTHONPATH"] = os.pathsep.join(entries)
     return env
 
@@ -251,6 +260,7 @@ def _build_pipeline_cmd(
     usecase_id: str,
     project_root: str | None,
     queue_name: str | None,
+    template_task_id: str | None,
     task_type: str,
     preprocess: str,
     models: str | None,
@@ -278,6 +288,8 @@ def _build_pipeline_cmd(
         cmd.append("run.clearml.execution=pipeline_controller")
         if queue_name:
             cmd.append(_format_override("run.clearml.queue_name", queue_name))
+        if template_task_id:
+            cmd.append(_format_override("run.clearml.pipeline.template_task_id", template_task_id))
         cmd.append("run.clearml.env.bootstrap=uv")
         cmd.append("run.clearml.env.uv.frozen=true")
     if project_root:
@@ -340,6 +352,102 @@ def _clearml_config_present(repo_root: Path) -> bool:
     return False
 
 
+def _ensure_repo_src_on_path(repo: Path) -> None:
+    src_dir = repo / "src"
+    if src_dir.exists() and str(src_dir) not in sys.path:
+        sys.path.insert(0, str(src_dir))
+
+
+def _normalize_task_status(value: Any) -> str | None:
+    text = str(value).strip().lower() if value is not None else ""
+    if not text:
+        return None
+    if text in {"completed", "closed", "finished", "published", "success"}:
+        return "completed"
+    if text in {"failed", "error"}:
+        return "failed"
+    if text in {"stopped", "aborted"}:
+        return "stopped"
+    if text in {"queued", "created", "pending"}:
+        return "queued"
+    if text in {"in_progress", "running"}:
+        return "running"
+    return text
+
+
+def _wait_for_pipeline_task(
+    task_id: str,
+    *,
+    timeout_sec: float,
+    poll_interval_sec: float,
+) -> str:
+    try:
+        from clearml import Task as ClearMLTask
+    except Exception as exc:
+        raise RuntimeError("clearml is required to wait for remote pipeline completion.") from exc
+
+    deadline = time.time() + max(float(timeout_sec), 1.0)
+    last_status: str | None = None
+    while True:
+        task = ClearMLTask.get_task(task_id=str(task_id))
+        status = _normalize_task_status(getattr(task, "status", None) or getattr(task, "get_status", lambda: None)())
+        if status and status != last_status:
+            print(f"pipeline_status: {status}")
+            last_status = status
+        if status in {"completed", "failed", "stopped"}:
+            return str(status)
+        if time.time() >= deadline:
+            return "timeout"
+        time.sleep(max(float(poll_interval_sec), 1.0))
+
+
+def _build_minimal_clearml_cfg() -> Any:
+    try:
+        from omegaconf import OmegaConf
+    except Exception as exc:
+        raise RuntimeError("omegaconf is required to sync ClearML artifacts.") from exc
+    return OmegaConf.create({"run": {"clearml": {"enabled": True}}})
+
+
+def _sync_pipeline_artifacts(repo: Path, output_dir: Path, pipeline_task_id: str) -> dict[str, Path]:
+    _ensure_repo_src_on_path(repo)
+    from tabular_analysis.platform_adapter_task import get_task_artifact_local_copy
+
+    cfg = _build_minimal_clearml_cfg()
+    stage_dir = output_dir / "99_pipeline"
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    copied: dict[str, Path] = {}
+    for name in (
+        "pipeline_run.json",
+        "run_summary.json",
+        "report.json",
+        "report.md",
+        "report_links.json",
+        "out.json",
+        "manifest.json",
+        "config_resolved.yaml",
+    ):
+        try:
+            source = get_task_artifact_local_copy(cfg, pipeline_task_id, name)
+        except Exception:
+            continue
+        target = stage_dir / name
+        try:
+            if source.resolve() != target.resolve():
+                shutil.copy2(source, target)
+        except OSError:
+            shutil.copy2(source, target)
+        copied[name] = target
+    return copied
+
+
+def _load_json_if_exists(path: Path | None) -> dict[str, Any] | None:
+    if path is None or not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else None
+
+
 def _run_ui_verify(repo: Path, usecase_id: str, project_root: str | None) -> None:
     verify_script = repo / "tools" / "tests" / "rehearsal_verify_clearml_ui.py"
     if not verify_script.exists():
@@ -361,6 +469,7 @@ def main() -> int:
         help="Execution mode",
     )
     ap.add_argument("--queue-name", default=None, help="ClearML queue name (agent only)")
+    ap.add_argument("--template-task-id", default=None, help="Optional visible pipeline template task id")
     ap.add_argument("--task-type", default="regression", choices=["regression", "classification"])
     ap.add_argument("--preprocess", default="stdscaler_ohe", help="Comma-separated preprocess variants")
     ap.add_argument("--models", default="small", help="Comma list or 'small'/'all'")
@@ -383,6 +492,31 @@ def main() -> int:
         "--skip-ui-verify",
         action="store_true",
         help="Skip ClearML UI audit step",
+    )
+    ap.add_argument(
+        "--wait",
+        dest="wait",
+        action="store_true",
+        default=None,
+        help="Wait for remote pipeline completion (default: on for --execution agent)",
+    )
+    ap.add_argument(
+        "--no-wait",
+        dest="wait",
+        action="store_false",
+        help="Do not wait for remote pipeline completion",
+    )
+    ap.add_argument(
+        "--wait-timeout-sec",
+        type=float,
+        default=14400.0,
+        help="Timeout for waiting on remote pipeline completion",
+    )
+    ap.add_argument(
+        "--poll-interval-sec",
+        type=float,
+        default=15.0,
+        help="Polling interval while waiting on remote pipeline completion",
     )
     args = ap.parse_args()
 
@@ -407,6 +541,7 @@ def main() -> int:
     commands: list[list[str]] = []
     result = "dry-run (not executed)" if args.dry_run else "success"
     error: str | None = None
+    wait_for_completion = (args.execution == "agent") if args.wait is None else bool(args.wait)
 
     try:
         cmd_register = _build_dataset_register_cmd(
@@ -438,6 +573,7 @@ def main() -> int:
                 usecase_id=usecase_id,
                 project_root=args.project_root,
                 queue_name=args.queue_name,
+                template_task_id=args.template_task_id,
                 task_type=args.task_type,
                 preprocess=args.preprocess,
                 models=args.models,
@@ -446,6 +582,17 @@ def main() -> int:
             commands.append(cmd_pipeline)
             _run(cmd_pipeline, cwd=repo, dry_run=False, env=env)
             pipeline_task_id = _read_pipeline_task_id(output_dir)
+            controller_status: str | None = None
+            copied_artifacts: dict[str, Path] = {}
+            pipeline_run_payload: dict[str, Any] | None = None
+            if args.execution == "agent" and pipeline_task_id and wait_for_completion:
+                controller_status = _wait_for_pipeline_task(
+                    pipeline_task_id,
+                    timeout_sec=args.wait_timeout_sec,
+                    poll_interval_sec=args.poll_interval_sec,
+                )
+                copied_artifacts = _sync_pipeline_artifacts(repo, output_dir, pipeline_task_id)
+                pipeline_run_payload = _load_json_if_exists(copied_artifacts.get("pipeline_run.json"))
             summary = {
                 "usecase_id": usecase_id,
                 "raw_dataset_id": raw_dataset_id,
@@ -454,11 +601,37 @@ def main() -> int:
                 "task_type": args.task_type,
                 "output_dir": str(output_dir),
             }
+            if controller_status:
+                summary["controller_status"] = controller_status
+            if pipeline_run_payload:
+                for key in (
+                    "status",
+                    "planned_jobs",
+                    "executed_jobs",
+                    "completed_jobs",
+                    "failed_jobs",
+                    "stopped_jobs",
+                    "running_jobs",
+                    "queued_jobs",
+                    "skipped_due_to_policy",
+                    "pipeline_profile",
+                    "grid_run_id",
+                ):
+                    if key in pipeline_run_payload:
+                        summary[key] = pipeline_run_payload.get(key)
             _write_summary(output_dir, summary)
             print(f"usecase_id: {usecase_id}")
             print(f"raw_dataset_id: {raw_dataset_id}")
             if pipeline_task_id:
                 print(f"pipeline_task_id: {pipeline_task_id}")
+            if controller_status == "timeout":
+                raise RuntimeError(
+                    f"Timed out while waiting for pipeline controller {pipeline_task_id} to finish."
+                )
+            if controller_status in {"failed", "stopped"}:
+                raise RuntimeError(
+                    f"Pipeline controller {pipeline_task_id} finished with status={controller_status}."
+                )
             if args.execution != "local" and not args.skip_ui_verify:
                 try:
                     import clearml  # noqa: F401
@@ -466,7 +639,10 @@ def main() -> int:
                     print("[warn] clearml not installed; skipping UI audit.")
                 else:
                     if _clearml_config_present(repo):
-                        _run_ui_verify(repo, usecase_id, args.project_root)
+                        if args.execution != "agent" or (not wait_for_completion) or controller_status == "completed":
+                            _run_ui_verify(repo, usecase_id, args.project_root)
+                        else:
+                            print("[warn] Pipeline is not finalized yet; skipping UI audit.")
                     else:
                         print("[warn] ClearML config not detected; skipping UI audit.")
         else:
@@ -481,6 +657,7 @@ def main() -> int:
                 usecase_id=usecase_id,
                 project_root=args.project_root,
                 queue_name=args.queue_name,
+                template_task_id=args.template_task_id,
                 task_type=args.task_type,
                 preprocess=args.preprocess,
                 models=args.models,

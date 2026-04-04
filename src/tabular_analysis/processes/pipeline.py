@@ -29,10 +29,10 @@ from ..clearml.ui_logger import log_scalar
 from ..platform_adapter_artifacts import upload_artifact
 from ..platform_adapter_clearml_env import clearml_task_type_controller, is_clearml_enabled
 from ..platform_adapter_pipeline import apply_clearml_task_overrides, clone_pipeline_controller, create_pipeline_controller, enqueue_pipeline_controller, load_pipeline_controller_from_task, pipeline_require_clearml_agent, pipeline_step_task_id_ref
-from ..platform_adapter_task import clearml_task_id, report_markdown, reset_clearml_task_args, set_clearml_task_parameters, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
+from ..platform_adapter_task import clearml_task_id, get_clearml_task_status, report_markdown, reset_clearml_task_args, set_clearml_task_parameters, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
 from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_run_project_name, build_runtime_properties, build_runtime_tags, build_step_run_project_name, build_project_name, resolve_clearml_metadata
-from .pipeline_support import build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, normalize_pipeline_profile, resolve_pipeline_profile
+from .pipeline_support import apply_pipeline_profile_defaults, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, normalize_pipeline_profile, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags
 from ..reporting.pipeline_report import build_pipeline_report_bundle
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 _STAGE_BY_TASK = {'dataset_register': '01_dataset_register', 'preprocess': '02_preprocess', 'train_model': '03_train_model', 'train_ensemble': '04_train_ensemble', 'infer': '04_infer', 'leaderboard': '05_leaderboard'}
@@ -325,12 +325,6 @@ def _hydra_task_overrides() -> list[str]:
         return []
 def _merge_overrides(*items: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for item in items for (key, value) in dict(item).items()}
-def _set_first_present_override(overrides: dict[str, Any], candidates: list[tuple[str, Any]], *, error_message: str) -> dict[str, Any]:
-    for (key, value) in candidates:
-        if value:
-            overrides[key] = value
-            return overrides
-    raise ValueError(error_message)
 def _apply_infer_reference_overrides(overrides: dict[str, Any], *, recommendation_payload: Mapping[str, Any] | None, explicit_model_id: str | None, explicit_train_task_id: str | None, error_message: str) -> dict[str, Any]:
     preferred = resolve_preferred_infer_reference(recommendation_payload)
     explicit = build_infer_reference(model_id=explicit_model_id, train_task_id=explicit_train_task_id)
@@ -805,13 +799,13 @@ def _build_plan_steps(cfg: Any, *, base_output_dir: Path, grid_run_id: str, run_
     return {'dataset_register': dataset_step, 'preprocess': preprocess_steps, 'train': train_steps, 'train_ensemble': train_ensemble_steps, 'leaderboard': leaderboard_step, 'infer': infer_step}
 def _build_pipeline_plan(cfg: Any, grid_run_id: str, *, child_execution: str | None=None) -> dict[str, Any]:
     base_output_dir = Path(getattr(cfg.run, 'output_dir', 'outputs')).expanduser().resolve()
-    pipeline_cfg = getattr(cfg, 'pipeline', None)
-    run_dataset_register = bool(getattr(pipeline_cfg, 'run_dataset_register', False))
-    run_preprocess = bool(getattr(pipeline_cfg, 'run_preprocess', True))
-    run_train = bool(getattr(pipeline_cfg, 'run_train', True))
-    run_train_ensemble = bool(getattr(pipeline_cfg, 'run_train_ensemble', _cfg_value(cfg, 'ensemble.enabled', False)))
-    run_leaderboard = bool(getattr(pipeline_cfg, 'run_leaderboard', True))
-    run_infer = bool(getattr(pipeline_cfg, 'run_infer', False))
+    pipeline_flags = resolve_pipeline_run_flags(cfg)
+    run_dataset_register = pipeline_flags['run_dataset_register']
+    run_preprocess = pipeline_flags['run_preprocess']
+    run_train = pipeline_flags['run_train']
+    run_train_ensemble = pipeline_flags['run_train_ensemble']
+    run_leaderboard = pipeline_flags['run_leaderboard']
+    run_infer = pipeline_flags['run_infer']
     raw_dataset_id = _normalize_str(_cfg_value(cfg, 'data.raw_dataset_id'))
     dataset_path_value = _normalize_str(_cfg_value(cfg, 'data.dataset_path'))
     if run_preprocess and (not run_dataset_register) and (not raw_dataset_id):
@@ -830,7 +824,7 @@ def _build_pipeline_plan(cfg: Any, grid_run_id: str, *, child_execution: str | N
     max_jobs = limits['max_jobs']
     max_models = limits['max_models']
     max_hpo_trials = limits['max_hpo_trials']
-    plan_only = bool(_cfg_value(cfg, 'pipeline.plan_only')) or bool(_cfg_value(cfg, 'pipeline.dry_run')) or bool(_cfg_value(cfg, 'pipeline.plan'))
+    plan_only = resolve_pipeline_plan_only(cfg)
     train_jobs: list[dict[str, Any]] = []
     plan_info = {'raw_jobs': 0, 'planned_jobs': 0, 'skipped_due_to_policy': 0}
     if run_train:
@@ -863,6 +857,11 @@ def _build_pipeline_plan(cfg: Any, grid_run_id: str, *, child_execution: str | N
             seen_preprocess.add(variant)
     queues = _resolve_exec_policy_queues(cfg)
     steps = _build_plan_steps(cfg, base_output_dir=base_output_dir, grid_run_id=grid_run_id, run_dataset_register=run_dataset_register, run_preprocess=run_preprocess, run_train=run_train, run_train_ensemble=run_train_ensemble, run_leaderboard=run_leaderboard, run_infer=run_infer, preprocess_targets=preprocess_targets, train_jobs=train_jobs, base_extra_tags=base_extra_tags, max_models=max_models, queues=queues, ensemble_methods=ensemble_methods, ensemble_overrides=ensemble_overrides)
+    ensemble_jobs = len(steps['train_ensemble']) if run_train_ensemble else 0
+    if ensemble_jobs:
+        plan_info = dict(plan_info)
+        plan_info['raw_jobs'] = int(plan_info.get('raw_jobs', 0)) + ensemble_jobs
+        plan_info['planned_jobs'] = int(plan_info.get('planned_jobs', 0)) + ensemble_jobs
     return {'base_output_dir': base_output_dir, 'run_dataset_register': run_dataset_register, 'run_preprocess': run_preprocess, 'run_train': run_train, 'run_train_ensemble': run_train_ensemble, 'run_leaderboard': run_leaderboard, 'run_infer': run_infer, 'model_set': model_set, 'preprocess_variants': preprocess_variants, 'model_variants': model_variants, 'hpo_enabled': hpo_enabled, 'hpo_params_cfg': hpo_params_cfg, 'limits': limits, 'max_jobs': max_jobs, 'max_models': max_models, 'max_hpo_trials': max_hpo_trials, 'plan_only': plan_only, 'plan_info': plan_info, 'train_jobs': train_jobs, 'preprocess_targets': preprocess_targets, 'run_overrides': run_overrides, 'data_overrides': data_overrides, 'downstream_data_overrides': downstream_data_overrides, 'eval_overrides': eval_overrides, 'base_extra_tags': base_extra_tags, 'queues': queues, 'steps': steps}
 def _collect_step_task_ids(controller: Any) -> dict[str, str]:
     getter = getattr(controller, 'get_processed_nodes', None)
@@ -942,6 +941,109 @@ def _build_infer_step_overrides(*, cfg: Any, clearml_enabled: bool, run_override
     return _apply_infer_reference_overrides(overrides, recommendation_payload=leaderboard_out, explicit_model_id=explicit_model_id, explicit_train_task_id=explicit_train_task_id, error_message='infer requires model_id or train_task_id.')
 def _build_local_pipeline_run_summary(*, cfg: Any, plan: Mapping[str, Any], grid_run_id: str, dataset_register_ref: dict[str, Any] | None, preprocess_refs: list[dict[str, Any]], train_refs: list[dict[str, Any]], train_ensemble_refs: list[dict[str, Any]], leaderboard_ref: dict[str, Any] | None, infer_ref: dict[str, Any] | None, executed_jobs: int) -> dict[str, Any]:
     return {'grid_run_id': grid_run_id, 'plan_only': plan['plan_only'], 'planned_jobs': int(plan['plan_info'].get('planned_jobs', 0)), 'executed_jobs': int(executed_jobs), 'skipped_due_to_policy': int(plan['plan_info'].get('skipped_due_to_policy', 0)), 'dataset_register_ref': dataset_register_ref, 'preprocess_ref': preprocess_refs, 'train_refs': train_refs, 'train_ensemble_refs': train_ensemble_refs, 'leaderboard_ref': leaderboard_ref, 'infer_ref': infer_ref, 'grid': {'preprocess_variants': plan['preprocess_variants'], 'model_variants': plan['model_variants'], 'max_jobs': plan['max_jobs'], 'max_hpo_trials': plan['max_hpo_trials'], 'hpo': {'enabled': plan['hpo_enabled'], 'params': plan['hpo_params_cfg']}}, 'policy': {'limits': dict(plan['limits']), 'selection': _resolve_exec_policy_selection(cfg)}}
+
+
+def _normalize_pipeline_job_status(value: Any) -> str | None:
+    text = (_normalize_str(value) or '').lower()
+    if not text:
+        return None
+    if text in {'completed', 'closed', 'finished', 'published', 'success'}:
+        return 'completed'
+    if text in {'failed', 'error'}:
+        return 'failed'
+    if text in {'stopped', 'aborted'}:
+        return 'stopped'
+    if text in {'queued', 'created', 'pending'}:
+        return 'queued'
+    if text in {'in_progress', 'running'}:
+        return 'running'
+    return text
+
+
+def _resolve_pipeline_ref_status(cfg: Any, ref: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(ref, Mapping):
+        return None
+    task_id = _normalize_str(ref.get('task_id') or ref.get('train_task_id'))
+    if task_id:
+        status = _normalize_pipeline_job_status(get_clearml_task_status(task_id))
+        if status:
+            return status
+    run_dir = _normalize_str(ref.get('run_dir'))
+    if run_dir:
+        out_path = Path(run_dir) / 'out.json'
+        if out_path.exists():
+            out_payload = _load_json(out_path)
+            status = _normalize_pipeline_job_status(out_payload.get('status'))
+            return status or 'completed'
+    return None
+
+
+def _finalize_pipeline_run_summary(
+    cfg: Any,
+    summary: dict[str, Any],
+    *,
+    status: str | None = None,
+    queued_launch: bool = False,
+) -> dict[str, Any]:
+    planned_jobs = int(summary.get('planned_jobs') or 0)
+    skipped_jobs = int(summary.get('skipped_due_to_policy') or 0)
+    if queued_launch:
+        summary['executed_jobs'] = 0
+        summary['completed_jobs'] = 0
+        summary['failed_jobs'] = 0
+        summary['stopped_jobs'] = 0
+        summary['running_jobs'] = 0
+        summary['queued_jobs'] = planned_jobs
+        summary['status'] = 'queued'
+        return summary
+    if bool(summary.get('plan_only')):
+        summary['executed_jobs'] = 0
+        summary['completed_jobs'] = 0
+        summary['failed_jobs'] = 0
+        summary['stopped_jobs'] = 0
+        summary['running_jobs'] = 0
+        summary['queued_jobs'] = 0
+        summary['status'] = _normalize_pipeline_job_status(status) or 'planned'
+        return summary
+    job_refs: list[Mapping[str, Any]] = []
+    for key in ('train_refs', 'train_ensemble_refs'):
+        refs = summary.get(key) or []
+        if isinstance(refs, list):
+            job_refs.extend((ref for ref in refs if isinstance(ref, Mapping)))
+    counts = {'completed': 0, 'failed': 0, 'stopped': 0, 'running': 0, 'queued': 0}
+    launched_jobs = 0
+    for ref in job_refs:
+        job_status = _resolve_pipeline_ref_status(cfg, ref)
+        if not job_status:
+            continue
+        launched_jobs += 1
+        if job_status in counts:
+            counts[job_status] += 1
+    if launched_jobs == 0:
+        launched_jobs = int(summary.get('executed_jobs') or 0)
+        if launched_jobs > 0:
+            counts['completed'] = launched_jobs
+    summary['executed_jobs'] = launched_jobs
+    summary['completed_jobs'] = counts['completed']
+    summary['failed_jobs'] = counts['failed']
+    summary['stopped_jobs'] = counts['stopped']
+    summary['running_jobs'] = counts['running']
+    summary['queued_jobs'] = counts['queued']
+    explicit_status = _normalize_pipeline_job_status(status)
+    if explicit_status in {'failed', 'stopped'}:
+        summary['status'] = explicit_status
+    elif counts['failed'] > 0:
+        summary['status'] = 'failed'
+    elif counts['stopped'] > 0:
+        summary['status'] = 'stopped'
+    elif counts['running'] > 0:
+        summary['status'] = 'running'
+    elif counts['queued'] > 0:
+        summary['status'] = 'queued'
+    else:
+        summary['status'] = explicit_status or 'completed'
+    summary['skipped_jobs'] = skipped_jobs
+    return summary
 def _run_local_pipeline_impl(cfg: Any, grid_run_id: str, *, clearml_enabled: bool) -> dict[str, Any]:
     plan = _build_pipeline_plan(cfg, grid_run_id)
     repo_root = _resolve_repo_root()
@@ -1030,7 +1132,9 @@ def _run_local_pipeline_impl(cfg: Any, grid_run_id: str, *, clearml_enabled: boo
             args = ['task=infer', *_overrides_to_args(overrides)]
             _run_cli_task(args, cwd=repo_root, config_dir=config_dir)
             infer_ref = _build_ref(run_dir=step['run_dir'])
-    return _build_local_pipeline_run_summary(cfg=cfg, plan=plan, grid_run_id=grid_run_id, dataset_register_ref=dataset_register_ref, preprocess_refs=preprocess_refs, train_refs=train_refs, train_ensemble_refs=train_ensemble_refs, leaderboard_ref=leaderboard_ref, infer_ref=infer_ref, executed_jobs=executed_jobs)
+    executed_jobs = len(train_refs) + len(train_ensemble_refs)
+    summary = _build_local_pipeline_run_summary(cfg=cfg, plan=plan, grid_run_id=grid_run_id, dataset_register_ref=dataset_register_ref, preprocess_refs=preprocess_refs, train_refs=train_refs, train_ensemble_refs=train_ensemble_refs, leaderboard_ref=leaderboard_ref, infer_ref=infer_ref, executed_jobs=executed_jobs)
+    return _finalize_pipeline_run_summary(cfg, summary)
 def _resolve_pipeline_queue_name(queues: Mapping[str, Any]) -> str | None:
     queue_name = next((value for value in [_select_queue(queues, 'pipeline'), _select_queue(queues, 'dataset_register'), _select_queue(queues, 'preprocess'), _select_queue(queues, 'train_model'), _select_queue(queues, 'train_ensemble'), _normalize_str(queues.get('train_model_heavy')), _select_queue(queues, 'leaderboard'), _select_queue(queues, 'infer')] if value), None)
     if queue_name:
@@ -1178,19 +1282,6 @@ def _add_clearml_pipeline_steps(*, cfg: Any, plan: Mapping[str, Any], steps: Map
     )
 
 
-def _apply_runtime_pipeline_step_overrides(*, cfg: Any, plan: Mapping[str, Any], controller: Any, use_templates: bool=True) -> None:
-    base_task_kwargs = _make_pipeline_controller_base_task_resolver(cfg=cfg, use_templates=use_templates)
-    step_requests = list(_iter_pipeline_controller_step_requests(cfg=cfg, plan=plan, steps=plan['steps']))
-    for (step, overrides) in step_requests:
-        node = getattr(controller, '_nodes', {}).get(step['step_name'])
-        if node is None:
-            continue
-        task_kwargs = base_task_kwargs(step, overrides)
-        setattr(node, 'parameters', OrderedDict(_build_pipeline_step_parameter_override_payload(overrides)))
-        setattr(node, 'queue', step.get('queue'))
-        setattr(node, 'base_task_id', task_kwargs.get('base_task_id'))
-        setattr(node, 'task_factory_func', task_kwargs.get('base_task_factory'))
-        setattr(node, 'recursively_parse_parameters', True)
 def _reset_pipeline_controller_definition(controller: Any) -> None:
     # Controllers reconstructed from Task objects only deserialize the DAG payload.
     # Re-seed the runtime defaults that ClearML's draft serialization expects.
@@ -1246,6 +1337,7 @@ def _reseed_loaded_pipeline_controller_runtime(
     *,
     runtime_defaults: Mapping[str, Any],
     default_execution_queue: str,
+    preserve_nodes: bool = True,
 ) -> None:
     preserved_nodes = getattr(controller, '_nodes', None)
     preserved_pipeline_args = getattr(controller, '_pipeline_args', None)
@@ -1253,7 +1345,7 @@ def _reseed_loaded_pipeline_controller_runtime(
     preserved_pipeline_args_type = getattr(controller, '_pipeline_args_type', None)
     preserved_args_map = getattr(controller, '_args_map', None)
     _reset_pipeline_controller_definition(controller)
-    if preserved_nodes:
+    if preserve_nodes and preserved_nodes:
         setattr(controller, '_nodes', preserved_nodes)
     setattr(controller, '_default_execution_queue', default_execution_queue)
     setattr(controller, '_pipeline_args', dict(preserved_pipeline_args or _template_pipeline_params(runtime_defaults)))
@@ -1283,8 +1375,9 @@ def _add_clearml_pipeline_template_steps(*, cfg: Any, plan: Mapping[str, Any], s
 
 def build_pipeline_template_draft(*, cfg: Any, controller: Any, pipeline_profile: str) -> dict[str, Any]:
     template_grid_run_id = f'template__{normalize_pipeline_profile(pipeline_profile)}'
-    plan = _build_pipeline_plan(cfg, template_grid_run_id, child_execution='logging')
-    shared_defaults = _build_pipeline_template_runtime_defaults(cfg=cfg, plan=plan, grid_run_id=template_grid_run_id, pipeline_profile=pipeline_profile)
+    template_cfg = apply_pipeline_profile_defaults(_clone_cfg_for_runtime_overrides(cfg), pipeline_profile)
+    plan = _build_pipeline_plan(template_cfg, template_grid_run_id, child_execution='logging')
+    shared_defaults = _build_pipeline_template_runtime_defaults(cfg=template_cfg, plan=plan, grid_run_id=template_grid_run_id, pipeline_profile=pipeline_profile)
     editable_defaults = extract_pipeline_editable_defaults(shared_defaults, pipeline_profile=pipeline_profile)
     _reset_pipeline_controller_definition(controller)
     setattr(
@@ -1334,13 +1427,12 @@ def _apply_pipeline_run_task_identity(*, task_id: str, cfg: Any, pipeline_profil
 
 def _build_pipeline_launch_summary(*, cfg: Any, plan: Mapping[str, Any], grid_run_id: str, controller_task_id: str, template_task_id: str, pipeline_profile: str, queue_name: str | None) -> dict[str, Any]:
     summary = _build_local_pipeline_run_summary(cfg=cfg, plan=plan, grid_run_id=grid_run_id, dataset_register_ref=None, preprocess_refs=[], train_refs=[], train_ensemble_refs=[], leaderboard_ref=None, infer_ref=None, executed_jobs=0)
-    summary['status'] = 'queued'
     summary['pipeline_task_id'] = controller_task_id
     summary['template_task_id'] = template_task_id
     summary['pipeline_profile'] = pipeline_profile
     if queue_name:
         summary['controller_queue'] = queue_name
-    return summary
+    return _finalize_pipeline_run_summary(cfg, summary, status='queued', queued_launch=True)
 
 
 def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str) -> _VisiblePipelineRunContract:
@@ -1429,8 +1521,19 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
         controller,
         runtime_defaults=runtime_defaults,
         default_execution_queue=default_execution_queue,
+        preserve_nodes=False,
     )
-    _apply_runtime_pipeline_step_overrides(cfg=cfg, plan=contract.plan, controller=controller)
+    _add_clearml_pipeline_steps(
+        cfg=cfg,
+        plan=contract.plan,
+        steps=contract.plan['steps'],
+        controller=controller,
+        use_templates=True,
+        run_overrides=contract.plan['run_overrides'],
+        data_overrides=contract.plan['data_overrides'],
+        downstream_data_overrides=contract.plan['downstream_data_overrides'],
+        eval_overrides=contract.plan['eval_overrides'],
+    )
     if not getattr(controller, '_nodes', None):
         raise RuntimeError(
             'Current ClearML task does not contain a serialized pipeline graph. '
@@ -1449,22 +1552,23 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
             infer_ref=None,
             executed_jobs=0,
         )
-        summary['status'] = 'planned'
         summary['pipeline_task_id'] = pipeline_task_id
         summary['pipeline_profile'] = contract.pipeline_profile
-        return summary
+        return _finalize_pipeline_run_summary(cfg, summary, status='planned')
     starter = getattr(controller, 'start_locally', None)
     if not callable(starter):
         raise AttributeError('Pipeline controller does not support start_locally().')
     starter(run_pipeline_steps_locally=False)
+    waiter = getattr(controller, 'wait', None)
+    if callable(waiter):
+        waiter()
     step_task_ids = _collect_step_task_ids(controller)
-    executed_jobs = len(contract.plan['steps']['train'])
+    executed_jobs = len(contract.plan['steps']['train']) + len(contract.plan['steps']['train_ensemble'])
     (dataset_register_ref, preprocess_refs, train_refs, train_ensemble_refs, leaderboard_ref, infer_ref) = _build_clearml_pipeline_refs(plan_only=contract.plan['plan_only'], steps=contract.plan['steps'], step_task_ids=step_task_ids)
     summary = _build_local_pipeline_run_summary(cfg=cfg, plan=contract.plan, grid_run_id=grid_run_id, dataset_register_ref=dataset_register_ref, preprocess_refs=preprocess_refs, train_refs=train_refs, train_ensemble_refs=train_ensemble_refs, leaderboard_ref=leaderboard_ref, infer_ref=infer_ref, executed_jobs=executed_jobs)
-    summary['status'] = 'completed'
     summary['pipeline_task_id'] = pipeline_task_id
     summary['pipeline_profile'] = contract.pipeline_profile
-    return summary
+    return _finalize_pipeline_run_summary(cfg, summary)
 def _build_clearml_pipeline_refs(*, plan_only: bool, steps: Mapping[str, Any], step_task_ids: Mapping[str, str]) -> tuple[Any, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], Any, Any]:
     dataset_register_ref = None
     preprocess_refs: list[dict[str, Any]] = []
@@ -1523,9 +1627,10 @@ def _run_clearml_pipeline_impl(cfg: Any, grid_run_id: str, *, use_templates: boo
             else:
                 starter()
         step_task_ids = _collect_step_task_ids(controller)
-        executed_jobs = len(steps['train'])
+        executed_jobs = len(steps['train']) + len(steps['train_ensemble'])
     (dataset_register_ref, preprocess_refs, train_refs, train_ensemble_refs, leaderboard_ref, infer_ref) = _build_clearml_pipeline_refs(plan_only=plan['plan_only'], steps=steps, step_task_ids=step_task_ids)
-    return _build_local_pipeline_run_summary(cfg=cfg, plan=plan, grid_run_id=grid_run_id, dataset_register_ref=dataset_register_ref, preprocess_refs=preprocess_refs, train_refs=train_refs, train_ensemble_refs=train_ensemble_refs, leaderboard_ref=leaderboard_ref, infer_ref=infer_ref, executed_jobs=executed_jobs)
+    summary = _build_local_pipeline_run_summary(cfg=cfg, plan=plan, grid_run_id=grid_run_id, dataset_register_ref=dataset_register_ref, preprocess_refs=preprocess_refs, train_refs=train_refs, train_ensemble_refs=train_ensemble_refs, leaderboard_ref=leaderboard_ref, infer_ref=infer_ref, executed_jobs=executed_jobs)
+    return _finalize_pipeline_run_summary(cfg, summary)
 def _create_pipeline_controller_runtime_context(cfg: Any) -> TaskContext:
     stage = getattr(getattr(cfg, 'task', None), 'stage', '99_pipeline')
     if not _running_inside_clearml_task():
@@ -1556,6 +1661,8 @@ def run(cfg: Any) -> None:
     if not grid_run_id:
         grid_run_id = uuid.uuid4().hex
         _set_cfg_value(cfg, 'run.grid_run_id', grid_run_id)
+    pipeline_flags = resolve_pipeline_run_flags(cfg)
+    plan_only = resolve_pipeline_plan_only(cfg)
     identity = apply_clearml_identity(cfg, stage=cfg.task.stage)
     execution = _normalize_str(_cfg_value(cfg, 'run.clearml.execution')) or 'local'
     controller_execution = execution == 'pipeline_controller'
@@ -1566,7 +1673,7 @@ def run(cfg: Any) -> None:
         task_type = clearml_task_type_controller() if controller_execution else None
         system_tags = ['pipeline'] if controller_execution else None
         ctx = start_runtime(cfg, stage=cfg.task.stage, task_name='pipeline', tags=identity.tags, properties=identity.user_properties, task_type=task_type, system_tags=system_tags)
-    connect_pipeline(ctx, cfg, grid_run_id=grid_run_id, run_dataset_register=bool(getattr(getattr(cfg, 'pipeline', None), 'run_dataset_register', False)), run_preprocess=bool(getattr(getattr(cfg, 'pipeline', None), 'run_preprocess', True)), run_train=bool(getattr(getattr(cfg, 'pipeline', None), 'run_train', True)), run_train_ensemble=bool(getattr(getattr(cfg, 'pipeline', None), 'run_train_ensemble', _cfg_value(cfg, 'ensemble.enabled', False))), run_leaderboard=bool(getattr(getattr(cfg, 'pipeline', None), 'run_leaderboard', True)), run_infer=bool(getattr(getattr(cfg, 'pipeline', None), 'run_infer', False)), plan_only=bool(_cfg_value(cfg, 'pipeline.plan_only')) or bool(_cfg_value(cfg, 'pipeline.dry_run')) or bool(_cfg_value(cfg, 'pipeline.plan')))
+    connect_pipeline(ctx, cfg, grid_run_id=grid_run_id, plan_only=plan_only, **pipeline_flags)
     pipeline_task_id = clearml_task_id(ctx.task) if ctx.task is not None else None
     if clearml_enabled and execution == 'pipeline_controller':
         if ctx.task is None:
@@ -1580,11 +1687,14 @@ def run(cfg: Any) -> None:
         pipeline_run = _run_local_pipeline_impl(cfg, grid_run_id, clearml_enabled=clearml_enabled)
     pipeline_run_path = ctx.output_dir / 'pipeline_run.json'
     pipeline_run_path.write_text(json.dumps(pipeline_run, ensure_ascii=False, indent=2), encoding='utf-8')
+    run_summary_path = ctx.output_dir / 'run_summary.json'
+    run_summary_path.write_text(json.dumps(pipeline_run, ensure_ascii=False, indent=2), encoding='utf-8')
     if ctx.task is not None:
         upload_artifact(ctx, 'pipeline_run.json', pipeline_run_path)
+        upload_artifact(ctx, 'run_summary.json', run_summary_path)
         num_models = int(pipeline_run.get('planned_jobs') or 0)
-        num_succeeded = int(pipeline_run.get('executed_jobs') or 0)
-        num_failed = max(0, num_models - num_succeeded)
+        num_succeeded = int(pipeline_run.get('completed_jobs') or pipeline_run.get('executed_jobs') or 0)
+        num_failed = int(pipeline_run.get('failed_jobs') or 0) + int(pipeline_run.get('stopped_jobs') or 0)
         log_scalar(ctx.task, 'pipeline', 'num_models', num_models, step=0)
         log_scalar(ctx.task, 'pipeline', 'num_succeeded', num_succeeded, step=0)
         log_scalar(ctx.task, 'pipeline', 'num_failed', num_failed, step=0)
@@ -1603,6 +1713,6 @@ def run(cfg: Any) -> None:
         upload_artifact(ctx, 'report_links.json', report_links_path)
         report_markdown(ctx, title='Pipeline Report', markdown=report_bundle.markdown)
     out = {'pipeline_run': pipeline_run}
-    inputs = {'run_dataset_register': bool(getattr(getattr(cfg, 'pipeline', None), 'run_dataset_register', False)), 'run_preprocess': bool(getattr(getattr(cfg, 'pipeline', None), 'run_preprocess', True)), 'run_train': bool(getattr(getattr(cfg, 'pipeline', None), 'run_train', True)), 'run_leaderboard': bool(getattr(getattr(cfg, 'pipeline', None), 'run_leaderboard', True)), 'run_infer': bool(getattr(getattr(cfg, 'pipeline', None), 'run_infer', False)), 'plan_only': bool(_cfg_value(cfg, 'pipeline.plan_only')) or bool(_cfg_value(cfg, 'pipeline.dry_run')) or bool(_cfg_value(cfg, 'pipeline.plan'))}
-    outputs = {'grid_run_id': grid_run_id, 'pipeline_run_path': str(pipeline_run_path)}
+    inputs = {'run_dataset_register': pipeline_flags['run_dataset_register'], 'run_preprocess': pipeline_flags['run_preprocess'], 'run_train': pipeline_flags['run_train'], 'run_leaderboard': pipeline_flags['run_leaderboard'], 'run_infer': pipeline_flags['run_infer'], 'plan_only': plan_only}
+    outputs = {'grid_run_id': grid_run_id, 'pipeline_run_path': str(pipeline_run_path), 'run_summary_path': str(run_summary_path)}
     emit_outputs_and_manifest(ctx, cfg, process='pipeline', out=out, inputs=inputs, outputs=outputs, hash_payloads={'config_hash': ('config', cfg), 'split_hash': ('split', {}), 'recipe_hash': ('recipe', {})}, clearml_enabled=clearml_enabled)

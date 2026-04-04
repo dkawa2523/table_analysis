@@ -167,18 +167,8 @@ python tools/tests/rehearsal_verify_clearml_ui.py \
 docker compose -f tools/clearml_agent/compose.yaml up -d --build
 ```
 
-必要な環境変数:
-
-```bash
-export CLEARML_HOME_HOST=/path/to/clearml-home
-```
-
-PowerShell:
-
-```powershell
-$env:CLEARML_HOME_HOST="D:\clearml_home"
-docker compose -f tools/clearml_agent/compose.yaml up -d --build
-```
+追加の host mount 変数は不要です。  
+canonical compose は Docker named volume で `/root/.clearml` と `UV_CACHE_DIR=/root/.clearml/uv-cache` を管理します。
 
 ## 8. 出力を見る
 

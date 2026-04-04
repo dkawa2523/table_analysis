@@ -5,10 +5,13 @@ ClearML project naming is config-driven so every task lands in a predictable
 location in the UI.
 
 ## Canonical shape
-`<ROOT>/<solution_root>/<usecase_id>/<process_group>`
+`<ROOT>/<solution_root>/Runs/<usecase_id>/<process_group>`
 
-Visible pipeline controllers use a dedicated root:
-`<ROOT>/<solution_root>/Pipelines`
+Visible pipeline controllers use dedicated roots:
+
+- pipeline template: `<ROOT>/<solution_root>/Pipelines/Templates`
+- pipeline run: `<ROOT>/<solution_root>/Pipelines/Runs/<usecase_id>`
+- step template: `<ROOT>/<solution_root>/Templates/Steps/<process_group>`
 
 - `ROOT`: `run.clearml.project_root`
 - `solution_root`: `run.clearml.project_layout.solution_root`
@@ -22,7 +25,10 @@ Visible pipeline controllers use a dedicated root:
 - `04_Ensembles`
 - `05_Infer`
 - `05_Infer_Children`
-- `Pipelines`
+- `99_Leaderboard`
+- `Pipelines/Templates`
+- `Pipelines/Runs/<usecase_id>`
+- `Templates/Steps/<group>`
 
 ## Source of truth
 - `conf/run/base.yaml`

@@ -21,7 +21,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 確認ポイント:
 
-- visible pipeline template が `LOCAL/TabularAnalysis/Pipelines` にある
+- visible pipeline template が `LOCAL/TabularAnalysis/Pipelines/Templates` にある
 - `pipeline`
 - `train_model_full`
 - `train_ensemble_full`
@@ -44,6 +44,13 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
   - preprocess + single-model train
 - `train_ensemble_full`
   - preprocess + single-model train + 3 ensemble + leaderboard
+
+注意:
+
+- visible pipeline template の DAG は profile ごとに固定です
+- UI から安全に編集する対象は `run.usecase_id`, `data.raw_dataset_id`, `ensemble.top_k` 程度に絞ります
+- `pipeline.model_set` や `pipeline.grid.model_variants` を UI で変えて custom graph を作る運用は行いません
+- custom な task 組み合わせを試すときは developer 向けの CLI / config 変更で扱います
 
 ## 4. CLI から実行する
 
@@ -89,10 +96,12 @@ python -m tabular_analysis.cli task=pipeline \
 
 ### ClearML UI
 
-- Pipeline template / run
-  - `LOCAL/TabularAnalysis/Pipelines`
+- Pipeline template
+  - `LOCAL/TabularAnalysis/Pipelines/Templates`
+- Pipeline run
+  - `LOCAL/TabularAnalysis/Pipelines/Runs/<usecase_id>`
 - child tasks
-  - `LOCAL/TabularAnalysis/<usecase_id>/...`
+  - `LOCAL/TabularAnalysis/Runs/<usecase_id>/...`
 
 ### ローカル出力
 
@@ -102,10 +111,10 @@ python -m tabular_analysis.cli task=pipeline \
 ### 主な成果物
 
 - `pipeline_run.json`
+- `run_summary.json`
 - `report.md`
 - `report.json`
 - `report_links.json`
-- `run_summary.json`
 
 ## 6. 推奨モデルの確認
 
@@ -142,6 +151,14 @@ python -m tabular_analysis.cli task=infer \
 3. controller が `controller` queue に載っているか
 4. `catboost/xgboost` が `heavy-model` に振り分けられているか
 5. child task の tags が runtime 用に更新されているか
+
+## 8.5 rehearsal helper の既定動作
+
+`python tools/rehearsal/run_pipeline_v2.py --execution agent ...` は、既定で remote controller の完了まで待機します。
+
+- enqueue 直後の launch stub では終わりません
+- controller 完了後に `99_pipeline/pipeline_run.json`, `run_summary.json`, `report.json`, `report_links.json`, `report.md` を local output に同期します
+- 待たずに enqueue のみ行いたい場合は `--no-wait` を使います
 
 ## 9. 関連ドキュメント
 

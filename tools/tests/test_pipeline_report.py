@@ -102,9 +102,13 @@ def main() -> int:
     report_path = pipeline_dir / "report.md"
     report_json_path = pipeline_dir / "report.json"
     report_links_path = pipeline_dir / "report_links.json"
+    run_summary_path = pipeline_dir / "run_summary.json"
+    pipeline_run_path = pipeline_dir / "pipeline_run.json"
     _must_exist(report_path)
     _must_exist(report_json_path)
     _must_exist(report_links_path)
+    _must_exist(run_summary_path)
+    _must_exist(pipeline_run_path)
 
     report_text = report_path.read_text(encoding="utf-8")
     for token in ("# Pipeline Summary", "## Conclusion", "## Recommendation", "## Comparability"):
@@ -112,8 +116,16 @@ def main() -> int:
             raise AssertionError(f"report.md missing section: {token}")
 
     report_payload = _load_json(report_json_path)
+    pipeline_run = _load_json(pipeline_run_path)
+    run_summary = _load_json(run_summary_path)
     if not report_payload.get("grid_run_id"):
         raise AssertionError("report.json missing grid_run_id")
+    if pipeline_run.get("status") != "completed":
+        raise AssertionError(f"pipeline_run.json must record completed status for local run: {pipeline_run}")
+    if run_summary.get("status") != pipeline_run.get("status"):
+        raise AssertionError("run_summary.json must mirror pipeline_run.json status")
+    if report_payload.get("status") != pipeline_run.get("status"):
+        raise AssertionError("report.json status must follow pipeline_run.json")
     summary = report_payload.get("summary") or {}
     recommended_id = summary.get("recommended_model_id")
     if not recommended_id:
@@ -126,6 +138,8 @@ def main() -> int:
     comparability = report_payload.get("comparability") or {}
     if "split_hash" not in comparability:
         raise AssertionError("report.json missing comparability.split_hash")
+    if summary.get("completed_jobs") != pipeline_run.get("completed_jobs"):
+        raise AssertionError("report.json completed_jobs must mirror pipeline_run.json")
 
     links = _load_json(report_links_path)
     pipeline_link = links.get("pipeline") or {}

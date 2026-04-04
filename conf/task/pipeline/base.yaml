@@ -2,7 +2,7 @@
 task:
   name: pipeline
   stage: "99_pipeline"
-  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.usecase_id}/${run.clearml.project_layout.group_map.pipeline}"
+  project_name: "${run.clearml.project_root}/${run.clearml.project_layout.solution_root}/${run.clearml.project_layout.pipeline_root_group}/${run.clearml.project_layout.pipeline_runs_group}/${run.usecase_id}"
 
 pipeline:
   # どの工程を実行するか

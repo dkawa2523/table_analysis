@@ -231,10 +231,25 @@ ClearML template は `manage_templates.py` で管理します。
 - `train_ensemble_full`
   - preprocess + single-model train + 3 ensemble + leaderboard
 
+visible pipeline template は profile 固定の DAG です。  
+operator が UI から安全に触る前提は `run.usecase_id`, `data.raw_dataset_id`, `ensemble.top_k` 程度で、`pipeline.model_set` や `pipeline.grid.model_variants` を UI 上で変えて custom DAG を作る運用は想定していません。
+
 visible pipeline template は ClearML 上の次 project に置かれます。
 
 ```text
-<project_root>/TabularAnalysis/Pipelines
+<project_root>/TabularAnalysis/Pipelines/Templates
+```
+
+controller run は次に置かれます。
+
+```text
+<project_root>/TabularAnalysis/Pipelines/Runs/<usecase_id>
+```
+
+child task は次に置かれます。
+
+```text
+<project_root>/TabularAnalysis/Runs/<usecase_id>/<group>
 ```
 
 ### 9.2 queue の役割
