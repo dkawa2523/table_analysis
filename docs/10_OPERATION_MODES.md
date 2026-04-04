@@ -94,7 +94,7 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  +pipeline.model_set=regression_all
+  pipeline.model_set=regression_all
 ```
 
 - `run.clearml.queue_name` は pipeline child routing の正本ではありません。

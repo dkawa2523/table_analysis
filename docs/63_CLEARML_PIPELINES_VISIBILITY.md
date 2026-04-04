@@ -8,9 +8,9 @@ as visible controller tasks under the target project.
 - `manage_templates.py --apply` creates or updates visible pipeline template tasks.
 - Pipeline templates use `TaskTypes.controller`, `process:pipeline`, `task_kind:template`, and `pipeline_profile:<name>`.
 - Runtime `task=pipeline run.clearml.execution=pipeline_controller` clones a visible pipeline template task instead of building an ad hoc hidden controller.
-- Template tasks and run controller tasks are created in the same visible pipeline project.
-- The canonical pipeline project is `<project_root>/TabularAnalysis/Pipelines`.
-- Child tasks live under `<project_root>/TabularAnalysis/Pipelines/<usecase_id>/<process_group>` so the controller and its children stay traceable from one root.
+- Pipeline templates live under `<project_root>/TabularAnalysis/Pipelines/Templates`.
+- Runtime controller clones live under `<project_root>/TabularAnalysis/Pipelines/Runs/<usecase_id>`.
+- Child tasks live under `<project_root>/TabularAnalysis/Runs/<usecase_id>/<process_group>` so the controller run and downstream tasks stay traceable from one root.
 
 ## Operator flow
 1. Run `python tools/clearml_templates/manage_templates.py --apply --project-root <ROOT>`.

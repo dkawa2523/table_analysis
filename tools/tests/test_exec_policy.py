@@ -71,7 +71,7 @@ def main() -> int:
             "data.raw_dataset_id=raw_exec_policy_dataset",
             "pipeline.plan_only=true",
             "pipeline.grid.preprocess_variants=[stdscaler_ohe]",
-            "pipeline.grid.model_variants=[ridge,lasso]",
+            "+pipeline.model_variants=[ridge,lasso]",
             "pipeline.hpo.enabled=true",
             "pipeline.hpo.params.ridge.alpha=[0.1,1.0,10.0]",
             "exec_policy.limits.max_hpo_trials=2",

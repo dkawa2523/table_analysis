@@ -304,7 +304,7 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
         raise AssertionError(f"controller-only default_queue should not be forwarded to Hydra: {loaded}")
     if loaded.get("+pipeline.profile") != "train_ensemble_full":
         raise AssertionError(f"runtime-only pipeline profile should be appended, not overridden: {loaded}")
-    if _extract_cli_keys(["+pipeline.model_set=regression_all", "task=pipeline"]) != {"pipeline.model_set", "task"}:
+    if _extract_cli_keys(["pipeline.model_set=regression_all", "task=pipeline"]) != {"pipeline.model_set", "task"}:
         raise AssertionError("CLI key extraction must treat +override and plain override as the same key")
 
 
@@ -350,15 +350,31 @@ def _assert_explicit_pipeline_variants_override_model_set() -> None:
         {
             "pipeline": {
                 "model_set": "regression_all",
-                "grid": {"model_variants": ["ridge", "lgbm", "xgboost"]},
+                "model_variants": ["ridge", "lgbm", "xgboost"],
+                "grid": {"model_variants": ["ridge"]},
             }
         }
     )
     preprocess_variants, model_variants = pipeline_module._resolve_variants(cfg)
     if model_variants != ["ridge", "lgbm", "xgboost"]:
-        raise AssertionError(f"explicit pipeline.grid.model_variants must override model_set: {model_variants}")
+        raise AssertionError(f"explicit pipeline.model_variants must override model_set: {model_variants}")
     if preprocess_variants != []:
         raise AssertionError(f"unexpected preprocess variants in override regression: {preprocess_variants}")
+
+
+def _assert_model_set_overrides_grid_default_variants() -> None:
+    cfg = OmegaConf.create(
+        {
+            "pipeline": {
+                "model_set": "regression_all",
+                "grid": {"model_variants": ["ridge"]},
+            }
+        }
+    )
+    _, model_variants = pipeline_module._resolve_variants(cfg)
+    expected = pipeline_module._resolve_model_set_variants("regression_all")
+    if model_variants != expected:
+        raise AssertionError(f"pipeline.model_set must win over default grid.model_variants for visible pipeline profiles: {model_variants}")
 
 
 def _assert_pipeline_profile_defaults_clear_stale_model_variants() -> None:
@@ -511,7 +527,8 @@ def _assert_leaderboard_bootstrap_extras_follow_pipeline_model_variants() -> Non
             "pipeline": {
                 "preprocess_variant": "stdscaler_ohe",
                 "model_set": "regression_all",
-                "grid": {"model_variants": ["ridge", "lgbm", "xgboost"], "max_jobs": 50},
+                "model_variants": ["ridge", "lgbm", "xgboost"],
+                "grid": {"model_variants": ["ridge"], "max_jobs": 50},
                 "run_dataset_register": False,
                 "run_preprocess": True,
                 "run_train": True,
@@ -885,11 +902,13 @@ def _assert_visible_template_clone_rejects_graph_shaping_model_override() -> Non
                 "run_leaderboard": True,
                 "run_infer": False,
                 "model_set": "regression_all",
+                "model_variants": ["ridge", "lgbm", "xgboost"],
                 "grid": {
                     "preprocess_variants": ["stdscaler_ohe"],
-                    "model_variants": ["ridge", "lgbm", "xgboost"],
+                    "model_variants": [],
                 },
             },
+            "data": {"raw_dataset_id": "ds-001"},
             "ensemble": {"enabled": False},
             "exec_policy": {"limits": {"max_jobs": 50, "max_models": 50, "max_hpo_trials": 0}},
         }

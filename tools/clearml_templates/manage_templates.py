@@ -464,6 +464,20 @@ def _arg_pairs(args: Iterable[str]) -> list[tuple[str, str]]:
     return pairs
 
 
+def _normalize_internal_compose_overrides(args: Iterable[str]) -> list[str]:
+    normalized: list[str] = []
+    for item in _normalized_args(args):
+        text = str(item)
+        if text.startswith("++"):
+            normalized.append(text[1:])
+            continue
+        if text.startswith("+"):
+            normalized.append(text[1:])
+            continue
+        normalized.append(text)
+    return normalized
+
+
 def _is_pipeline_template(spec: TemplateSpec) -> bool:
     return is_pipeline_template_name(spec.name)
 
@@ -471,8 +485,8 @@ def _is_pipeline_template(spec: TemplateSpec) -> bool:
 def _compose_pipeline_template_cfg(repo_root: Path, spec: TemplateSpec, ctx: PlanContext, *, entry_args: list[str]) -> Any:
     config_dir = repo_root / "conf"
     overrides = [
-        *entry_args,
-        *spec.default_overrides,
+        *_normalize_internal_compose_overrides(entry_args),
+        *_normalize_internal_compose_overrides(spec.default_overrides),
         f"run.clearml.project_root={ctx.project_root}",
         f"run.clearml.template_usecase_id={ctx.usecase_id}",
         f"run.clearml.template_set_id={ctx.template_set_id}",

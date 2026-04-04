@@ -225,14 +225,14 @@ def _build_dataset_register_cmd(
 
 def _resolve_model_overrides(task_type: str, models: str | None, model_set: str | None) -> list[str]:
     if model_set:
-        return [_format_override("+pipeline.model_set", model_set)]
+        return [_format_override("pipeline.model_set", model_set)]
     if not models or models == "small":
         if task_type == "classification":
             return [_format_override("+pipeline.model_variants", ["logistic_regression"])]
         return [_format_override("+pipeline.model_variants", ["ridge", "elasticnet"])]
     if models == "all":
         if task_type == "regression":
-            return [_format_override("+pipeline.model_set", "regression_all")]
+            return [_format_override("pipeline.model_set", "regression_all")]
         return [_format_override("+pipeline.model_variants", ["logistic_regression"])]
     model_list = [item.strip() for item in models.split(",") if item.strip()]
     if not model_list:

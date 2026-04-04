@@ -13,10 +13,12 @@ pipeline:
   run_infer: false
   plan_only: false
   dry_run: false
+  model_set: regression_all
+  model_variants: []
 
   grid:
     preprocess_variants: [stdscaler_ohe]
-    model_variants: [ridge]
+    model_variants: []
     max_jobs: ${exec_policy.limits.max_jobs}
 
   hpo:
