@@ -340,6 +340,22 @@ def _assert_regression_model_set_contract() -> None:
         raise AssertionError(f"svr must not be selectable for classification: {classification_variants}")
 
 
+def _assert_explicit_pipeline_variants_override_model_set() -> None:
+    cfg = OmegaConf.create(
+        {
+            "pipeline": {
+                "model_set": "regression_all",
+                "grid": {"model_variants": ["ridge", "lgbm", "xgboost"]},
+            }
+        }
+    )
+    preprocess_variants, model_variants = pipeline_module._resolve_variants(cfg)
+    if model_variants != ["ridge", "lgbm", "xgboost"]:
+        raise AssertionError(f"explicit pipeline.grid.model_variants must override model_set: {model_variants}")
+    if preprocess_variants != []:
+        raise AssertionError(f"unexpected preprocess variants in override regression: {preprocess_variants}")
+
+
 def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
     class _FakeTaskObject:
         name = "pipeline"
@@ -587,6 +603,7 @@ def main() -> int:
     _assert_task_time_extras()
     _assert_entrypoint_reads_clearml_slash_overrides()
     _assert_regression_model_set_contract()
+    _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_controller_context_attaches_by_task_id()
     _assert_pipeline_step_references_are_not_quoted()
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()

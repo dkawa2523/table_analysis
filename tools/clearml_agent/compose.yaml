@@ -14,7 +14,8 @@ services:
       CLEARML_API_SECRET_KEY: ${CLEARML_API_SECRET_KEY:?set CLEARML_API_SECRET_KEY}
       UV_CACHE_DIR: /root/.clearml/uv-cache
     volumes:
-      - clearml-agent-shared:/root/.clearml
+      - clearml-controller-home:/root/.clearml
+      - clearml-uv-cache:/root/.clearml/uv-cache
     command: ["clearml-agent", "daemon", "--queue", "controller"]
 
   clearml-default:
@@ -31,7 +32,8 @@ services:
       CLEARML_API_SECRET_KEY: ${CLEARML_API_SECRET_KEY:?set CLEARML_API_SECRET_KEY}
       UV_CACHE_DIR: /root/.clearml/uv-cache
     volumes:
-      - clearml-agent-shared:/root/.clearml
+      - clearml-default-home:/root/.clearml
+      - clearml-uv-cache:/root/.clearml/uv-cache
     command: ["clearml-agent", "daemon", "--queue", "default"]
 
   clearml-heavy-model:
@@ -48,7 +50,8 @@ services:
       CLEARML_API_SECRET_KEY: ${CLEARML_API_SECRET_KEY:?set CLEARML_API_SECRET_KEY}
       UV_CACHE_DIR: /root/.clearml/uv-cache
     volumes:
-      - clearml-agent-shared:/root/.clearml
+      - clearml-heavy-model-home:/root/.clearml
+      - clearml-uv-cache:/root/.clearml/uv-cache
     command: ["clearml-agent", "daemon", "--queue", "heavy-model"]
 
 networks:
@@ -57,4 +60,7 @@ networks:
     name: docker_backend
 
 volumes:
-  clearml-agent-shared:
+  clearml-controller-home:
+  clearml-default-home:
+  clearml-heavy-model-home:
+  clearml-uv-cache:

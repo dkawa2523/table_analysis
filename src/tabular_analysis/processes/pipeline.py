@@ -651,13 +651,12 @@ def _resolve_variants(cfg: Any) -> tuple[list[str], list[str]]:
         fallback = _normalize_str(_cfg_value(cfg, 'preprocess_variant.name')) or _normalize_str(_cfg_value(cfg, 'group.preprocess.preprocess_variant.name'))
         if fallback:
             preprocess_variants = [fallback]
+    model_variants = _to_list(_cfg_value(cfg, 'pipeline.model_variants'))
+    if not model_variants:
+        model_variants = _to_list(_cfg_value(cfg, 'pipeline.grid.model_variants'))
     model_set = _normalize_str(_cfg_value(cfg, 'pipeline.model_set'))
-    if model_set:
+    if (not model_variants) and model_set:
         model_variants = _resolve_model_set_variants(model_set)
-    else:
-        model_variants = _to_list(_cfg_value(cfg, 'pipeline.model_variants'))
-        if not model_variants:
-            model_variants = _to_list(_cfg_value(cfg, 'pipeline.grid.model_variants'))
     if not model_variants:
         fallback = _normalize_str(_cfg_value(cfg, 'model_variant.name')) or _normalize_str(_cfg_value(cfg, 'group.model.model_variant.name'))
         if fallback:
