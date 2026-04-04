@@ -273,6 +273,7 @@ def _build_pipeline_cmd(
     project_root: str | None,
     queue_name: str | None,
     template_task_id: str | None,
+    pipeline_profile: str | None,
     task_type: str,
     preprocess: str,
     models: str | None,
@@ -311,6 +312,8 @@ def _build_pipeline_cmd(
     if task_type == "classification":
         cmd.append("eval.task_type=classification")
         cmd.append("eval.primary_metric=accuracy")
+    if pipeline_profile:
+        cmd.append(_format_override("+pipeline.profile", pipeline_profile))
     if plan_only:
         cmd.append("pipeline.plan_only=true")
     cmd.extend(_resolve_preprocess_overrides(preprocess, use_selection=use_selection))
@@ -651,6 +654,12 @@ def main() -> int:
     )
     ap.add_argument("--queue-name", default=None, help="ClearML queue name (agent only)")
     ap.add_argument("--template-task-id", default=None, help="Optional visible pipeline template task id")
+    ap.add_argument(
+        "--pipeline-profile",
+        default=None,
+        choices=["pipeline", "train_model_full", "train_ensemble_full"],
+        help="Optional visible pipeline profile override",
+    )
     ap.add_argument("--task-type", default="regression", choices=["regression", "classification"])
     ap.add_argument("--preprocess", default="stdscaler_ohe", help="Comma-separated preprocess variants")
     ap.add_argument("--models", default="small", help="Comma list or 'small'/'all'")
@@ -760,6 +769,7 @@ def main() -> int:
                 project_root=args.project_root,
                 queue_name=args.queue_name,
                 template_task_id=args.template_task_id,
+                pipeline_profile=args.pipeline_profile,
                 task_type=args.task_type,
                 preprocess=args.preprocess,
                 models=args.models,
@@ -860,6 +870,7 @@ def main() -> int:
                 project_root=args.project_root,
                 queue_name=args.queue_name,
                 template_task_id=args.template_task_id,
+                pipeline_profile=args.pipeline_profile,
                 task_type=args.task_type,
                 preprocess=args.preprocess,
                 models=args.models,

@@ -174,15 +174,51 @@ def build_pipeline_ui_parameter_whitelist(pipeline_profile: str) -> tuple[str, .
 
 def resolve_pipeline_run_flags(cfg: Any | None) -> dict[str, bool]:
     pipeline_cfg = getattr(cfg, 'pipeline', None) if cfg is not None else None
+    profile_text = _normalize_str(_cfg_value(cfg, 'pipeline.profile')) if cfg is not None else ''
+    profile_spec = get_pipeline_profile_spec(profile_text) if profile_text else None
     return {
-        'run_dataset_register': bool(getattr(pipeline_cfg, 'run_dataset_register', False)),
-        'run_preprocess': bool(getattr(pipeline_cfg, 'run_preprocess', True)),
-        'run_train': bool(getattr(pipeline_cfg, 'run_train', True)),
-        'run_train_ensemble': bool(
-            getattr(pipeline_cfg, 'run_train_ensemble', _cfg_value(cfg, 'ensemble.enabled', False))
+        'run_dataset_register': bool(
+            getattr(
+                pipeline_cfg,
+                'run_dataset_register',
+                profile_spec.run_dataset_register if profile_spec is not None else False,
+            )
         ),
-        'run_leaderboard': bool(getattr(pipeline_cfg, 'run_leaderboard', True)),
-        'run_infer': bool(getattr(pipeline_cfg, 'run_infer', False)),
+        'run_preprocess': bool(
+            getattr(
+                pipeline_cfg,
+                'run_preprocess',
+                profile_spec.run_preprocess if profile_spec is not None else True,
+            )
+        ),
+        'run_train': bool(
+            getattr(
+                pipeline_cfg,
+                'run_train',
+                profile_spec.run_train if profile_spec is not None else True,
+            )
+        ),
+        'run_train_ensemble': bool(
+            getattr(
+                pipeline_cfg,
+                'run_train_ensemble',
+                profile_spec.run_train_ensemble if profile_spec is not None else _cfg_value(cfg, 'ensemble.enabled', False),
+            )
+        ),
+        'run_leaderboard': bool(
+            getattr(
+                pipeline_cfg,
+                'run_leaderboard',
+                profile_spec.run_leaderboard if profile_spec is not None else True,
+            )
+        ),
+        'run_infer': bool(
+            getattr(
+                pipeline_cfg,
+                'run_infer',
+                profile_spec.run_infer if profile_spec is not None else False,
+            )
+        ),
     }
 
 

@@ -29,6 +29,7 @@ from tabular_analysis.processes.pipeline_support import (
     apply_pipeline_profile_defaults,
     build_pipeline_template_defaults,
     resolve_pipeline_profile,
+    resolve_pipeline_run_flags,
 )
 from tabular_analysis.registry.models import list_model_variants
 from tools.clearml_templates import manage_templates as manage_templates_module
@@ -492,6 +493,28 @@ def _assert_pipeline_profile_defaults_clear_stale_selection() -> None:
         raise AssertionError(f"pipeline profile defaults must clear stale model selection: {updated}")
     if list(updated.ensemble.selection.enabled_methods) != []:
         raise AssertionError(f"pipeline profile defaults must clear stale ensemble selection: {updated}")
+
+
+def _assert_pipeline_profile_sets_run_flags() -> None:
+    cfg = OmegaConf.create(
+        {
+            "pipeline": {
+                "profile": "train_ensemble_full",
+            },
+            "ensemble": {"enabled": False},
+        }
+    )
+    flags = resolve_pipeline_run_flags(cfg)
+    expected = {
+        "run_dataset_register": False,
+        "run_preprocess": True,
+        "run_train": True,
+        "run_train_ensemble": True,
+        "run_leaderboard": True,
+        "run_infer": False,
+    }
+    if flags != expected:
+        raise AssertionError(f"pipeline profile must supply the canonical run flags: {flags}")
 
 
 def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
@@ -1408,6 +1431,7 @@ def main() -> int:
     _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_profile_defaults_clear_stale_model_variants()
     _assert_pipeline_profile_defaults_clear_stale_selection()
+    _assert_pipeline_profile_sets_run_flags()
     _assert_pipeline_controller_context_attaches_by_task_id()
     _assert_pipeline_controller_context_attaches_by_pipeline_task_id_override()
     _assert_rehearsal_rebuild_pipeline_outputs_from_clearml()
