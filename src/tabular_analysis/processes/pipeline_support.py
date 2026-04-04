@@ -18,6 +18,7 @@ class PipelineProfileSpec:
     run_leaderboard: bool
     run_infer: bool
     model_set: str
+    ensemble_methods: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ PIPELINE_PROFILE_SPECS: dict[str, PipelineProfileSpec] = {
         run_leaderboard=True,
         run_infer=False,
         model_set='regression_all',
+        ensemble_methods=(),
     ),
     'train_model_full': PipelineProfileSpec(
         name='train_model_full',
@@ -70,6 +72,7 @@ PIPELINE_PROFILE_SPECS: dict[str, PipelineProfileSpec] = {
         run_leaderboard=False,
         run_infer=False,
         model_set='regression_all',
+        ensemble_methods=(),
     ),
     'train_ensemble_full': PipelineProfileSpec(
         name='train_ensemble_full',
@@ -80,6 +83,7 @@ PIPELINE_PROFILE_SPECS: dict[str, PipelineProfileSpec] = {
         run_leaderboard=True,
         run_infer=False,
         model_set='regression_all',
+        ensemble_methods=('mean_topk', 'weighted', 'stacking'),
     ),
 }
 
@@ -340,6 +344,9 @@ def apply_pipeline_profile_defaults(cfg: Any, pipeline_profile: str) -> Any:
     _set('pipeline.selection.enabled_preprocess_variants', [])
     _set('pipeline.selection.enabled_model_variants', [])
     _set('ensemble.enabled', spec.run_train_ensemble)
+    _set('ensemble.methods', list(spec.ensemble_methods))
+    if spec.ensemble_methods:
+        _set('ensemble.method', spec.ensemble_methods[0])
     _set('ensemble.selection.enabled_methods', [])
     return cfg
 

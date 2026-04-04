@@ -491,6 +491,8 @@ def _assert_pipeline_profile_defaults_clear_stale_selection() -> None:
         raise AssertionError(f"pipeline profile defaults must clear stale preprocess selection: {updated}")
     if list(updated.pipeline.selection.enabled_model_variants) != []:
         raise AssertionError(f"pipeline profile defaults must clear stale model selection: {updated}")
+    if list(updated.ensemble.methods) != ["mean_topk", "weighted", "stacking"]:
+        raise AssertionError(f"train_ensemble_full must restore the canonical ensemble method mother set: {updated}")
     if list(updated.ensemble.selection.enabled_methods) != []:
         raise AssertionError(f"pipeline profile defaults must clear stale ensemble selection: {updated}")
 
