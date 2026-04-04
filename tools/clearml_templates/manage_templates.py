@@ -429,6 +429,31 @@ def _save_lock(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _build_lock_template_entry(
+    existing: Mapping[str, Any] | None,
+    *,
+    task_id: str,
+    project_name: str,
+    task_name: str,
+    entrypoint: str,
+    now: str,
+) -> dict[str, Any]:
+    payload = {
+        "task_id": task_id,
+        "project_name": project_name,
+        "task_name": task_name,
+        "entrypoint": entrypoint,
+        "updated_at": now,
+    }
+    existing_payload = dict(existing or {})
+    stable_keys = ("task_id", "project_name", "task_name", "entrypoint")
+    if all(str(existing_payload.get(key, "")) == str(payload[key]) for key in stable_keys):
+        previous_updated_at = str(existing_payload.get("updated_at", "")).strip()
+        if previous_updated_at:
+            payload["updated_at"] = previous_updated_at
+    return payload
+
+
 def _lock_context_payload(ctx: PlanContext) -> dict[str, Any]:
     return {
         "project_root": ctx.project_root,
@@ -739,13 +764,14 @@ def _upsert_standard_template(
         )
         ensure_clearml_task_requirements(task_id, resolved.expected_requirements)
         print(f"Created template {spec.name}: {task_id}")
-    lock_templates[spec.name] = {
-        "task_id": task_id,
-        "project_name": spec.project_name,
-        "task_name": spec.task_name_template,
-        "entrypoint": spec.entrypoint,
-        "updated_at": now,
-    }
+    lock_templates[spec.name] = _build_lock_template_entry(
+        existing=existing if isinstance(existing, dict) else None,
+        task_id=task_id,
+        project_name=spec.project_name,
+        task_name=spec.task_name_template,
+        entrypoint=spec.entrypoint,
+        now=now,
+    )
 
 
 def _upsert_pipeline_template(
@@ -822,13 +848,14 @@ def _upsert_pipeline_template(
     ensure_clearml_task_properties(task_id, resolved.expected_properties)
     build_pipeline_template_draft(cfg=cfg, controller=controller, pipeline_profile=spec.name)
     _ensure_pipeline_template_project(task_id, spec.project_name)
-    lock_templates[spec.name] = {
-        "task_id": task_id,
-        "project_name": spec.project_name,
-        "task_name": spec.task_name_template,
-        "entrypoint": spec.entrypoint,
-        "updated_at": now,
-    }
+    lock_templates[spec.name] = _build_lock_template_entry(
+        existing=existing if isinstance(existing, dict) else None,
+        task_id=task_id,
+        project_name=spec.project_name,
+        task_name=spec.task_name_template,
+        entrypoint=spec.entrypoint,
+        now=now,
+    )
 
 
 def _apply_templates(

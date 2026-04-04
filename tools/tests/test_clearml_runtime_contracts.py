@@ -1406,6 +1406,36 @@ def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
             raise AssertionError(f"pipeline template draft missing {required}: {sorted(step_names)}")
 
 
+def _assert_lock_entry_preserves_updated_at_without_identity_change() -> None:
+    existing = {
+        "task_id": "task-123",
+        "project_name": "LOCAL/TabularAnalysis/Pipelines/Templates",
+        "task_name": "pipeline",
+        "entrypoint": "python tools/clearml_entrypoint.py task=pipeline",
+        "updated_at": "2026-04-04T17:33:36Z",
+    }
+    payload = manage_templates_module._build_lock_template_entry(
+        existing,
+        task_id="task-123",
+        project_name="LOCAL/TabularAnalysis/Pipelines/Templates",
+        task_name="pipeline",
+        entrypoint="python tools/clearml_entrypoint.py task=pipeline",
+        now="2026-04-05T00:00:00Z",
+    )
+    if payload.get("updated_at") != "2026-04-04T17:33:36Z":
+        raise AssertionError(f"lock entry should preserve updated_at when identity is unchanged: {payload}")
+    changed = manage_templates_module._build_lock_template_entry(
+        existing,
+        task_id="task-999",
+        project_name="LOCAL/TabularAnalysis/Pipelines/Templates",
+        task_name="pipeline",
+        entrypoint="python tools/clearml_entrypoint.py task=pipeline",
+        now="2026-04-05T00:00:00Z",
+    )
+    if changed.get("updated_at") != "2026-04-05T00:00:00Z":
+        raise AssertionError(f"lock entry should refresh updated_at when identity changes: {changed}")
+
+
 def _assert_uv_lock_exposes_split_model_extras() -> None:
     text = (_REPO / "uv.lock").read_text(encoding="utf-8")
     for required in (
@@ -1452,6 +1482,7 @@ def main() -> int:
     _assert_visible_template_clone_rejects_graph_shaping_model_override()
     _assert_visible_template_clone_allows_selection_subset()
     _assert_pipeline_template_draft_uses_profile_model_set()
+    _assert_lock_entry_preserves_updated_at_without_identity_change()
     _assert_uv_lock_exposes_split_model_extras()
     print("OK: clearml runtime contracts")
     return 0

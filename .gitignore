@@ -50,6 +50,8 @@ work/rehearsal/out*/
 work/rehearsal/out_runner/
 work/rehearsal/tmp/
 work/rehearsal/rehearsal_log.md
+work/_debug_pipeline/
+work/template_clone_smoke/
 work/_alerting/
 work/_env_snapshot/
 work/_exec_policy/
