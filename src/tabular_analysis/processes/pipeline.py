@@ -32,7 +32,7 @@ from ..platform_adapter_pipeline import apply_clearml_task_overrides, clone_pipe
 from ..platform_adapter_task import clearml_task_id, get_clearml_task_status, report_markdown, reset_clearml_task_args, set_clearml_task_parameters, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
 from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_run_project_name, build_runtime_properties, build_runtime_tags, build_step_run_project_name, build_project_name, resolve_clearml_metadata
-from .pipeline_support import apply_pipeline_profile_defaults, build_pipeline_step_specs, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, normalize_pipeline_profile, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection
+from .pipeline_support import apply_pipeline_profile_defaults, build_pipeline_step_specs, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, get_pipeline_profile_spec, normalize_pipeline_profile, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection
 from ..reporting.pipeline_report import build_pipeline_report_bundle
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 _STAGE_BY_TASK = {'dataset_register': '01_dataset_register', 'preprocess': '02_preprocess', 'train_model': '03_train_model', 'train_ensemble': '04_train_ensemble', 'infer': '04_infer', 'leaderboard': '05_leaderboard'}
@@ -455,6 +455,11 @@ def _resolve_ensemble_methods(cfg: Any) -> list[str]:
             seen.add(item)
             ordered.append(item)
         return ordered
+    explicit_profile = _normalize_str(_cfg_value(cfg, 'pipeline.profile'))
+    if explicit_profile:
+        spec = get_pipeline_profile_spec(explicit_profile)
+        if spec.ensemble_methods:
+            return [str(item) for item in spec.ensemble_methods]
     method = _normalize_str(_cfg_value(cfg, 'ensemble.method')) or 'mean_topk'
     return [method]
 

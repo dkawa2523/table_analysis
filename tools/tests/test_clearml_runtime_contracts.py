@@ -517,6 +517,9 @@ def _assert_pipeline_profile_sets_run_flags() -> None:
     }
     if flags != expected:
         raise AssertionError(f"pipeline profile must supply the canonical run flags: {flags}")
+    methods = pipeline_module._resolve_ensemble_methods(cfg)
+    if methods != ["mean_topk", "weighted", "stacking"]:
+        raise AssertionError(f"train_ensemble_full profile must provide the canonical ensemble methods: {methods}")
 
 
 def _assert_pipeline_controller_context_attaches_by_task_id() -> None:
