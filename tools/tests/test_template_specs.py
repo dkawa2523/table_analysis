@@ -161,6 +161,8 @@ def _validate_spec(repo: Path) -> None:
             _assert_contains(tags, f"pipeline_profile:{name}")
             if "run.clearml.execution=pipeline_controller" not in [str(item) for item in overrides]:
                 raise AssertionError(f"pipeline template {name} must use run.clearml.execution=pipeline_controller")
+            if any(str(item).startswith("+pipeline.model_set=") for item in overrides):
+                raise AssertionError(f"pipeline template {name} must not carry stale +pipeline.model_set overrides")
 
         for key in ("usecase_id", "process", "schema_version", "project_root", "template_set_id", "task_kind"):
             if key not in props:

@@ -614,12 +614,17 @@ def _resolve_template_spec(
     expected_properties = dict(spec.properties_minimal)
     if _is_pipeline_template(spec):
         expected_properties.update(build_pipeline_template_properties(spec.name, cfg=resolved_cfg))
+    overrides = (
+        _normalize_internal_compose_overrides([*entry_args, *spec.default_overrides])
+        if _is_pipeline_template(spec)
+        else _normalized_args([*entry_args, *spec.default_overrides])
+    )
     return ResolvedTemplateSpec(
         spec=spec,
         module=module,
         script=script,
         entry_args=entry_args,
-        overrides=_normalized_args([*entry_args, *spec.default_overrides]),
+        overrides=overrides,
         expected_requirements=list(spec.requirements),
         expected_tags=expected_tags,
         expected_properties=expected_properties,

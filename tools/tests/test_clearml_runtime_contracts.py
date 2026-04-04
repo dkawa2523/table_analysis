@@ -20,6 +20,7 @@ from tabular_analysis.clearml import templates as template_module
 from tabular_analysis.common.clearml_bootstrap import resolve_required_uv_extras
 from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.ops import clearml_identity as clearml_identity_module
+from tabular_analysis import platform_adapter_task_ops as task_ops_module
 from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
 from tabular_analysis.processes.pipeline_support import (
@@ -311,6 +312,47 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
         raise AssertionError(f"runtime-only pipeline profile should be appended, not overridden: {loaded}")
     if _extract_cli_keys(["pipeline.model_set=regression_all", "task=pipeline"]) != {"pipeline.model_set", "task"}:
         raise AssertionError("CLI key extraction must treat +override and plain override as the same key")
+
+
+def _assert_reset_clearml_task_args_replaces_stale_args() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.params = {
+                "Args/+pipeline.model_set": "regression_all",
+                "Args/pipeline.model_set": "regression_all",
+                "Args/run.usecase_id": "old",
+                "General/name": "pipeline",
+            }
+            self.updated: dict[str, object] | None = None
+
+        def set_parameters(self, payload: dict[str, object]) -> None:
+            self.updated = dict(payload)
+            self.params = dict(payload)
+
+    fake = _FakeTask()
+    originals = {
+        "_get_clearml_task": task_ops_module._get_clearml_task,
+        "_task_parameters": task_ops_module._task_parameters,
+    }
+    try:
+        task_ops_module._get_clearml_task = lambda _task_id: fake
+        task_ops_module._task_parameters = lambda _task: dict(fake.params)
+        changed = task_ops_module.reset_clearml_task_args(
+            "task-123",
+            ["pipeline.model_set=regression_all", "run.usecase_id=new"],
+        )
+    finally:
+        task_ops_module._get_clearml_task = originals["_get_clearml_task"]
+        task_ops_module._task_parameters = originals["_task_parameters"]
+    if not changed:
+        raise AssertionError("reset_clearml_task_args should report changes for stale Args payloads")
+    updated = fake.updated or {}
+    if "Args/+pipeline.model_set" in updated:
+        raise AssertionError(f"reset_clearml_task_args must remove stale appended keys: {updated}")
+    if updated.get("Args/pipeline.model_set") != "regression_all":
+        raise AssertionError(f"reset_clearml_task_args must keep plain pipeline.model_set only: {updated}")
+    if updated.get("Args/run.usecase_id") != "new":
+        raise AssertionError(f"reset_clearml_task_args must replace runtime args deterministically: {updated}")
 
 
 def _assert_regression_model_set_contract() -> None:
@@ -1047,6 +1089,7 @@ def main() -> int:
     _assert_runtime_tag_filter_contract()
     _assert_task_time_extras()
     _assert_entrypoint_reads_clearml_slash_overrides()
+    _assert_reset_clearml_task_args_replaces_stale_args()
     _assert_regression_model_set_contract()
     _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_profile_defaults_clear_stale_model_variants()
