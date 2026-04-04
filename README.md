@@ -392,7 +392,7 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  +pipeline.preprocess_variant=stdscaler_ohe \
+  pipeline.preprocess_variant=stdscaler_ohe \
   pipeline.model_set=regression_all
 ```
 
@@ -404,7 +404,7 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  +pipeline.preprocess_variant=stdscaler_ohe \
+  pipeline.preprocess_variant=stdscaler_ohe \
   pipeline.model_set=regression_all \
   pipeline.run_train_ensemble=true \
   ensemble.enabled=true \

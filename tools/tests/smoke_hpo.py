@@ -130,7 +130,7 @@ def main() -> int:
             f"data.raw_dataset_id={raw_dataset_id}",
             "data.target_column=target",
             "pipeline.grid.preprocess_variants=[stdscaler_ohe]",
-            "pipeline.grid.model_variants=[ridge]",
+            "pipeline.model_variants=[ridge]",
             "pipeline.hpo.enabled=true",
             "pipeline.hpo.params.ridge.alpha=[0.1,1.0,10.0]",
             "eval.cv_folds=0",

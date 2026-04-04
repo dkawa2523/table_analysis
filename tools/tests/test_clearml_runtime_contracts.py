@@ -297,11 +297,16 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
     _store_loaded_override(loaded, "data/raw_dataset_id", "template_raw_dataset")
     _store_loaded_override(loaded, "data.raw_dataset_id", "runtime_dataset")
     _store_loaded_override(loaded, "default_queue", "default")
+    _store_loaded_override(loaded, "pipeline/model_set", "regression_all")
     _store_loaded_override(loaded, "pipeline/profile", "train_ensemble_full")
     if loaded.get("data.raw_dataset_id") != "runtime_dataset":
         raise AssertionError(f"dotted override must win over slash placeholder: {loaded}")
     if "default_queue" in loaded:
         raise AssertionError(f"controller-only default_queue should not be forwarded to Hydra: {loaded}")
+    if loaded.get("pipeline.model_set") != "regression_all":
+        raise AssertionError(f"pipeline.model_set must remain a plain override after config promotion: {loaded}")
+    if "+pipeline.model_set" in loaded:
+        raise AssertionError(f"pipeline.model_set must not be re-appended with + after config promotion: {loaded}")
     if loaded.get("+pipeline.profile") != "train_ensemble_full":
         raise AssertionError(f"runtime-only pipeline profile should be appended, not overridden: {loaded}")
     if _extract_cli_keys(["pipeline.model_set=regression_all", "task=pipeline"]) != {"pipeline.model_set", "task"}:

@@ -228,16 +228,16 @@ def _resolve_model_overrides(task_type: str, models: str | None, model_set: str 
         return [_format_override("pipeline.model_set", model_set)]
     if not models or models == "small":
         if task_type == "classification":
-            return [_format_override("+pipeline.model_variants", ["logistic_regression"])]
-        return [_format_override("+pipeline.model_variants", ["ridge", "elasticnet"])]
+            return [_format_override("pipeline.model_variants", ["logistic_regression"])]
+        return [_format_override("pipeline.model_variants", ["ridge", "elasticnet"])]
     if models == "all":
         if task_type == "regression":
             return [_format_override("pipeline.model_set", "regression_all")]
-        return [_format_override("+pipeline.model_variants", ["logistic_regression"])]
+        return [_format_override("pipeline.model_variants", ["logistic_regression"])]
     model_list = [item.strip() for item in models.split(",") if item.strip()]
     if not model_list:
         return []
-    return [_format_override("+pipeline.model_variants", model_list)]
+    return [_format_override("pipeline.model_variants", model_list)]
 
 
 def _resolve_preprocess_overrides(preprocess: str) -> list[str]:
@@ -245,8 +245,8 @@ def _resolve_preprocess_overrides(preprocess: str) -> list[str]:
     if not items:
         return []
     if len(items) == 1:
-        return [_format_override("+pipeline.preprocess_variant", items[0])]
-    return [_format_override("+pipeline.preprocess_variants", items)]
+        return [_format_override("pipeline.preprocess_variant", items[0])]
+    return [_format_override("pipeline.preprocess_variants", items)]
 
 
 def _build_pipeline_cmd(

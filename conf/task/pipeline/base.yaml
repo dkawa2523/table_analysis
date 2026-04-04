@@ -14,6 +14,8 @@ pipeline:
   run_infer: false
   plan_only: false
   dry_run: false
+  preprocess_variant: null
+  preprocess_variants: []
   model_set: regression_all
   model_variants: []
 

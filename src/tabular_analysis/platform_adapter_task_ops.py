@@ -496,19 +496,20 @@ def reset_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
     desired = _parse_task_args(args)
     task = _get_clearml_task(task_id)
     normalized = {str(key): '' if value is None else str(value) for (key, value) in desired.items()}
-    getter = getattr(task, 'get_parameters_as_dict', None)
-    if callable(getter):
-        try:
-            params = getter(cast=False)
-        except _RECOVERABLE_ERRORS:
-            params = None
-        if isinstance(params, Mapping):
-            params = dict(params)
-            params['Args'] = dict(normalized)
-            setter = getattr(task, 'set_parameters_as_dict', None)
-            if callable(setter):
-                setter(params)
-                return True
+    setter = getattr(task, 'set_parameters_as_dict', None)
+    if callable(setter):
+        getter = getattr(task, 'get_parameters_as_dict', None)
+        payload: dict[str, Any] = {}
+        if callable(getter):
+            try:
+                existing = getter(cast=False)
+            except _RECOVERABLE_ERRORS:
+                existing = None
+            if isinstance(existing, Mapping):
+                payload.update(existing)
+        payload['Args'] = dict(normalized)
+        setter(payload)
+        return True
     params = _task_parameters(task)
     updated = {k: v for (k, v) in params.items() if not (isinstance(k, str) and k.startswith('Args/'))}
     for (key, value) in normalized.items():
@@ -516,10 +517,6 @@ def reset_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
     setter = getattr(task, 'set_parameters', None)
     if callable(setter):
         setter(updated)
-        return True
-    setter = getattr(task, 'set_parameters_as_dict', None)
-    if callable(setter):
-        setter({'Args': dict(normalized)})
         return True
     raise PlatformAdapterError('ClearML Task.set_parameters is not available.')
 def apply_clearml_task_overrides(target: Any, overrides: Iterable[str]) -> bool:

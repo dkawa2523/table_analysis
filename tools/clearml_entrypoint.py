@@ -94,7 +94,6 @@ _SKIPPED_LOADED_OVERRIDE_KEYS = {
 }
 
 _APPENDED_LOADED_OVERRIDE_KEYS = {
-    "pipeline.model_set",
     "pipeline.profile",
 }
 

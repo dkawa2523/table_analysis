@@ -94,6 +94,7 @@ def main() -> int:
             f"run.output_dir={out_root}",
             f"data.dataset_path={csv_path}",
             "data.target_column=target",
+            "pipeline.model_variants=[ridge,lasso]",
         ],
         cwd=repo,
     )
