@@ -681,6 +681,25 @@ def _get_clearml_project_system_tags(project_name: str | None) -> list[str]:
         return []
 
 
+def _create_clearml_project_record(project_name: str) -> str | None:
+    if not project_name:
+        return None
+    try:
+        from clearml.backend_api.session import Session
+        session = Session()
+        response = session.send_request(
+            service='projects',
+            action='create',
+            json={'name': str(project_name)},
+        )
+    except _RECOVERABLE_ERRORS as exc:
+        raise PlatformAdapterError(f'ClearML project create failed: {exc}') from exc
+    if not getattr(response, 'ok', False):
+        raise PlatformAdapterError(f'ClearML project create returned non-ok response for {project_name!r}.')
+    (project_id, _) = _load_clearml_project_record(project_name)
+    return project_id
+
+
 def _ensure_clearml_project_system_tags(project_name: str | None, add_tags: Iterable[str] | None=None, *, remove_tags: Iterable[str] | None=None) -> None:
     if not project_name:
         return
@@ -689,6 +708,8 @@ def _ensure_clearml_project_system_tags(project_name: str | None, add_tags: Iter
     if not add_list and (not remove_set):
         return
     (project_id, project) = _load_clearml_project_record(project_name)
+    if not project_id:
+        project_id = _create_clearml_project_record(str(project_name))
     if not project_id:
         raise PlatformAdapterError(f"ClearML project not found: {project_name!r}")
     system_tags = _get_clearml_project_system_tags(project_name)

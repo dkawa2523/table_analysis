@@ -28,6 +28,7 @@ from tabular_analysis.clearml.pipeline_templates import (
     is_pipeline_template_name,
 )
 from tabular_analysis.common.hydra_config import compose_config
+from tabular_analysis.processes.pipeline_support import build_pipeline_ui_parameter_whitelist
 from tabular_analysis.platform_adapter_clearml_env import clearml_script_mismatches, resolve_clearml_script_spec
 from tabular_analysis.platform_adapter_core import _ensure_clearml_project_system_tags, _get_clearml_project_system_tags
 from tabular_analysis.platform_adapter_pipeline import (
@@ -72,6 +73,11 @@ class PlanContext:
     template_set_id: str
     solution_root: str
     pipeline_root_group: str
+    pipeline_templates_group: str
+    pipeline_runs_group: str
+    templates_root_group: str
+    step_templates_group: str
+    runs_root_group: str
     group_map: dict[str, str]
 
 
@@ -109,11 +115,21 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
     layout_cfg_path = repo_root / "conf" / "clearml" / "project_layout.yaml"
     solution_root = "TabularAnalysis"
     pipeline_root_group = "Pipelines"
+    pipeline_templates_group = "Templates"
+    pipeline_runs_group = "Runs"
+    templates_root_group = "Templates"
+    step_templates_group = "Steps"
+    runs_root_group = "Runs"
     group_map: dict[str, str] = {}
     if layout_cfg_path.exists():
         layout_cfg = OmegaConf.load(layout_cfg_path)
         solution_root = str(getattr(layout_cfg, "solution_root", None) or solution_root)
         pipeline_root_group = str(getattr(layout_cfg, "pipeline_root_group", None) or pipeline_root_group)
+        pipeline_templates_group = str(getattr(layout_cfg, "pipeline_templates_group", None) or pipeline_templates_group)
+        pipeline_runs_group = str(getattr(layout_cfg, "pipeline_runs_group", None) or pipeline_runs_group)
+        templates_root_group = str(getattr(layout_cfg, "templates_root_group", None) or templates_root_group)
+        step_templates_group = str(getattr(layout_cfg, "step_templates_group", None) or step_templates_group)
+        runs_root_group = str(getattr(layout_cfg, "runs_root_group", None) or runs_root_group)
         raw_group_map = getattr(layout_cfg, "group_map", None)
         if raw_group_map is not None:
             rendered_group_map = OmegaConf.to_container(raw_group_map, resolve=False)
@@ -127,6 +143,11 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
             template_set_id="default",
             solution_root=solution_root,
             pipeline_root_group=pipeline_root_group,
+            pipeline_templates_group=pipeline_templates_group,
+            pipeline_runs_group=pipeline_runs_group,
+            templates_root_group=templates_root_group,
+            step_templates_group=step_templates_group,
+            runs_root_group=runs_root_group,
             group_map=group_map,
         )
     cfg = OmegaConf.load(run_cfg_path)
@@ -138,6 +159,11 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
         template_set_id=str(template_ctx.template_set_id),
         solution_root=solution_root,
         pipeline_root_group=pipeline_root_group,
+        pipeline_templates_group=pipeline_templates_group,
+        pipeline_runs_group=pipeline_runs_group,
+        templates_root_group=templates_root_group,
+        step_templates_group=step_templates_group,
+        runs_root_group=runs_root_group,
         group_map=group_map,
     )
 
@@ -183,6 +209,11 @@ def _load_templates(spec_path: Path, ctx: PlanContext) -> list[TemplateSpec]:
         "template_set_id": ctx.template_set_id,
         "solution_root": ctx.solution_root,
         "pipeline_root_group": ctx.pipeline_root_group,
+        "pipeline_templates_group": ctx.pipeline_templates_group,
+        "pipeline_runs_group": ctx.pipeline_runs_group,
+        "templates_root_group": ctx.templates_root_group,
+        "step_templates_group": ctx.step_templates_group,
+        "runs_root_group": ctx.runs_root_group,
         "group_map": ctx.group_map,
     }
     specs: list[TemplateSpec] = []
@@ -244,6 +275,22 @@ def _detect_repo_url(repo_root: Path) -> str | None:
     return None
 
 
+def _detect_repo_branch(repo_root: Path) -> str | None:
+    proc = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=str(repo_root),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    value = proc.stdout.strip()
+    if not value or value.upper() == "HEAD":
+        return None
+    return value
+
+
 def _clearml_config_present(repo_root: Path) -> bool:
     env_path = os.getenv("CLEARML_CONFIG_FILE")
     if env_path:
@@ -275,6 +322,11 @@ def _plan_output(spec_path: Path, ctx: PlanContext, templates: list[TemplateSpec
             "template_set_id": ctx.template_set_id,
             "solution_root": ctx.solution_root,
             "pipeline_root_group": ctx.pipeline_root_group,
+            "pipeline_templates_group": ctx.pipeline_templates_group,
+            "pipeline_runs_group": ctx.pipeline_runs_group,
+            "templates_root_group": ctx.templates_root_group,
+            "step_templates_group": ctx.step_templates_group,
+            "runs_root_group": ctx.runs_root_group,
             "group_map": ctx.group_map,
         },
         "templates": [
@@ -312,6 +364,12 @@ def _plan_output(spec_path: Path, ctx: PlanContext, templates: list[TemplateSpec
         f"- schema_version: `{ctx.schema_version}`",
         f"- template_set_id: `{ctx.template_set_id}`",
         f"- solution_root: `{ctx.solution_root}`",
+        f"- pipeline_root_group: `{ctx.pipeline_root_group}`",
+        f"- pipeline_templates_group: `{ctx.pipeline_templates_group}`",
+        f"- pipeline_runs_group: `{ctx.pipeline_runs_group}`",
+        f"- templates_root_group: `{ctx.templates_root_group}`",
+        f"- step_templates_group: `{ctx.step_templates_group}`",
+        f"- runs_root_group: `{ctx.runs_root_group}`",
         "",
         "## Templates",
     ]
@@ -440,6 +498,54 @@ def _task_user_properties(task: Any) -> dict[str, Any]:
     return {}
 
 
+def _task_parameters(task: Any) -> dict[str, Any]:
+    getter = getattr(task, "get_parameters_as_dict", None)
+    if callable(getter):
+        try:
+            payload = getter(cast=False)
+        except TypeError:
+            payload = getter()
+        except Exception:
+            payload = None
+        if isinstance(payload, Mapping):
+            return {str(key): value for key, value in payload.items()}
+    getter = getattr(task, "get_parameters", None)
+    if callable(getter):
+        try:
+            payload = getter()
+        except Exception:
+            payload = None
+        if isinstance(payload, Mapping):
+            return {str(key): value for key, value in payload.items()}
+    return {}
+
+
+def _iter_parameter_paths(payload: Any, *, prefix: str = "") -> Iterable[str]:
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            next_prefix = f"{prefix}/{key}" if prefix else str(key)
+            yield from _iter_parameter_paths(value, prefix=next_prefix)
+        return
+    if prefix:
+        yield prefix
+
+
+def _pipeline_parameter_keys(task: Any) -> set[str]:
+    keys: set[str] = set()
+    for text in _iter_parameter_paths(_task_parameters(task)):
+        text = str(text)
+        if text.startswith("Args/"):
+            keys.add(text.split("/", 1)[1].replace(".", "/"))
+            continue
+        if text.startswith("pipeline/"):
+            keys.add(text.split("/", 1)[1].replace(".", "/"))
+            continue
+        if text.startswith("pipeline."):
+            keys.add(text.split(".", 1)[1].replace(".", "/"))
+            continue
+    return keys
+
+
 def _resolve_template_spec(
     spec: TemplateSpec,
     *,
@@ -510,15 +616,28 @@ def _upsert_standard_template(
     spec = resolved.spec
     existing = lock_templates.get(spec.name) if isinstance(lock_templates, dict) else None
     existing_id = existing.get("task_id") if isinstance(existing, dict) else None
+    recreate = False
     task_id: str | None = None
     if existing_id:
         try:
             clearml_task_exists(str(existing_id))
+            task = _load_clearml_task(str(existing_id))
+            actual_project = clearml_task_project_name(task)
+            if str(actual_project or "") != spec.project_name:
+                recreate = True
+                _deprecate_template_task(str(existing_id))
+                print(f"Recreate template {spec.name}: project drift {actual_project!r} -> {spec.project_name!r}")
+            else:
+                task_id = str(existing_id)
+        except Exception:
+            print(f"Existing task id not found, recreating: {spec.name}")
+    if task_id:
+        try:
             changes: list[str] = []
-            if reset_clearml_task_args(str(existing_id), resolved.overrides):
+            if reset_clearml_task_args(task_id, resolved.overrides):
                 changes.append("args")
             if ensure_clearml_task_script(
-                str(existing_id),
+                task_id,
                 repo=resolved.script_spec.repository,
                 branch=resolved.script_spec.branch,
                 entry_point=resolved.script_spec.entry_point,
@@ -527,20 +646,19 @@ def _upsert_standard_template(
                 diff="",
             ):
                 changes.append("script")
-            if ensure_clearml_task_requirements(str(existing_id), resolved.expected_requirements):
+            if ensure_clearml_task_requirements(task_id, resolved.expected_requirements):
                 changes.append("requirements")
-            if ensure_clearml_task_tags(str(existing_id), resolved.expected_tags):
+            if ensure_clearml_task_tags(task_id, resolved.expected_tags):
                 changes.append("tags")
-            if ensure_clearml_task_properties(str(existing_id), resolved.expected_properties):
+            if ensure_clearml_task_properties(task_id, resolved.expected_properties):
                 changes.append("properties")
-            task_id = str(existing_id)
             if changes:
                 print(f"Update template {spec.name}: {', '.join(changes)}")
             else:
-                print(f"Reuse template {spec.name}: {existing_id}")
+                print(f"Reuse template {spec.name}: {task_id}")
         except Exception:
-            print(f"Existing task id not found, recreating: {spec.name}")
-    if not task_id:
+            recreate = True
+    if not task_id or recreate:
         task_id = create_clearml_task(
             project_name=spec.project_name,
             task_name=spec.task_name_template,
@@ -659,7 +777,12 @@ def _apply_templates(
     lock_templates = lock.get("templates", {})
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    for spec in templates:
+    ordered_templates = [
+        *[spec for spec in templates if not _is_pipeline_template(spec)],
+        *[spec for spec in templates if _is_pipeline_template(spec)],
+    ]
+
+    for spec in ordered_templates:
         resolved = _resolve_template_spec(
             spec,
             ctx=ctx,
@@ -680,6 +803,8 @@ def _apply_templates(
                 lock_templates=lock_templates,
                 now=now,
             )
+        lock["templates"] = lock_templates
+        _save_lock(lock_path, lock)
 
     lock["templates"] = lock_templates
     _save_lock(lock_path, lock)
@@ -735,6 +860,17 @@ def _validate_templates(
             project_system_tags = set(_get_clearml_project_system_tags(spec.project_name))
             if "pipeline" not in project_system_tags:
                 errors.append(f"{spec.name}: project system tags missing 'pipeline' for {spec.project_name!r}")
+            actual_param_keys = _pipeline_parameter_keys(task)
+            expected_param_keys = {
+                str(key).replace(".", "/")
+                for key in build_pipeline_ui_parameter_whitelist(spec.name)
+            }
+            missing_param_keys = sorted(expected_param_keys - actual_param_keys)
+            if missing_param_keys:
+                errors.append(
+                    f"{spec.name}: missing editable pipeline parameters "
+                    f"{missing_param_keys}"
+                )
         actual_tags = set(clearml_task_tags(task))
         missing_tags = [tag for tag in resolved.expected_tags if tag not in actual_tags]
         if missing_tags:
@@ -787,6 +923,11 @@ def main() -> int:
         template_set_id=str(args.template_set_id or defaults.template_set_id),
         solution_root=str(defaults.solution_root),
         pipeline_root_group=str(defaults.pipeline_root_group),
+        pipeline_templates_group=str(defaults.pipeline_templates_group),
+        pipeline_runs_group=str(defaults.pipeline_runs_group),
+        templates_root_group=str(defaults.templates_root_group),
+        step_templates_group=str(defaults.step_templates_group),
+        runs_root_group=str(defaults.runs_root_group),
         group_map=dict(defaults.group_map),
     )
 
@@ -803,8 +944,11 @@ def main() -> int:
         return 0
 
     repo_url = args.repo or _detect_repo_url(repo_root)
+    branch_name = args.branch or _detect_repo_branch(repo_root)
     version_mode = _load_code_ref_mode(repo_root, args.code_ref_mode)
     print(f"code_ref_mode: {version_mode}")
+    if branch_name:
+        print(f"code_ref_branch: {branch_name}")
     if args.apply:
         _apply_templates(
             templates,
@@ -812,7 +956,7 @@ def main() -> int:
             repo_root=repo_root,
             lock_path=Path(args.lock),
             repo=repo_url,
-            branch=args.branch,
+            branch=branch_name,
             version_mode=version_mode,
         )
         return 0
@@ -824,7 +968,7 @@ def main() -> int:
             repo_root=repo_root,
             lock_path=Path(args.lock),
             repo=repo_url,
-            branch=args.branch,
+            branch=branch_name,
             version_mode=version_mode,
         )
         return 0 if ok else 1

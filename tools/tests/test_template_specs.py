@@ -74,13 +74,22 @@ def _load_group_map(repo: Path) -> dict[str, str]:
     return {str(key): str(value) for key, value in group_map.items()}
 
 
-def _load_pipeline_root_group(repo: Path) -> str:
+def _load_layout_tokens(repo: Path) -> dict[str, str]:
     layout_path = repo / "conf" / "clearml" / "project_layout.yaml"
     if not layout_path.exists():
-        return "Pipelines"
+        return {
+            "pipeline_root_group": "Pipelines",
+            "pipeline_templates_group": "Templates",
+            "templates_root_group": "Templates",
+            "step_templates_group": "Steps",
+        }
     payload = _load_yaml(layout_path)
-    value = payload.get("pipeline_root_group")
-    return str(value) if value else "Pipelines"
+    return {
+        "pipeline_root_group": str(payload.get("pipeline_root_group") or "Pipelines"),
+        "pipeline_templates_group": str(payload.get("pipeline_templates_group") or "Templates"),
+        "templates_root_group": str(payload.get("templates_root_group") or "Templates"),
+        "step_templates_group": str(payload.get("step_templates_group") or "Steps"),
+    }
 
 
 def _assert_contains(items: list[str], prefix: str) -> None:
@@ -115,7 +124,7 @@ def _validate_spec(repo: Path) -> None:
 
     stage_map = _load_stage_map(repo)
     group_map = _load_group_map(repo)
-    pipeline_root_group = _load_pipeline_root_group(repo)
+    layout_tokens = _load_layout_tokens(repo)
     for name, spec in templates.items():
         if not isinstance(spec, dict):
             raise AssertionError(f"template {name} must be a mapping")
@@ -147,13 +156,13 @@ def _validate_spec(repo: Path) -> None:
         expected_process = "pipeline" if name in PIPELINE_TEMPLATE_NAMES else str(name)
         _assert_contains(tags, f"process:{expected_process}")
         _assert_contains(tags, "schema:")
+        _assert_contains(tags, "task_kind:template")
         if name in PIPELINE_TEMPLATE_NAMES:
-            _assert_contains(tags, "task_kind:template")
             _assert_contains(tags, f"pipeline_profile:{name}")
             if "run.clearml.execution=pipeline_controller" not in [str(item) for item in overrides]:
                 raise AssertionError(f"pipeline template {name} must use run.clearml.execution=pipeline_controller")
 
-        for key in ("usecase_id", "process", "schema_version"):
+        for key in ("usecase_id", "process", "schema_version", "project_root", "template_set_id", "task_kind"):
             if key not in props:
                 raise AssertionError(f"template {name} missing properties_minimal.{key}")
         if name in PIPELINE_TEMPLATE_NAMES:
@@ -166,11 +175,28 @@ def _validate_spec(repo: Path) -> None:
 
         project_key = "pipeline" if name in PIPELINE_TEMPLATE_NAMES else name
         if name in PIPELINE_TEMPLATE_NAMES:
-            expected_tokens = [pipeline_root_group, "{pipeline_root_group}"]
+            expected_tokens = [
+                layout_tokens["pipeline_root_group"],
+                layout_tokens["pipeline_templates_group"],
+                "{pipeline_root_group}",
+                "{pipeline_templates_group}",
+            ]
         else:
             stage = stage_map.get(project_key)
             project_group = group_map.get(project_key)
-            expected_tokens = [token for token in (project_group, stage, f"{{group_map[{project_key}]}}") if token]
+            expected_tokens = [
+                token
+                for token in (
+                    layout_tokens["templates_root_group"],
+                    layout_tokens["step_templates_group"],
+                    project_group,
+                    stage,
+                    f"{{group_map[{project_key}]}}",
+                    "{templates_root_group}",
+                    "{step_templates_group}",
+                )
+                if token
+            ]
         if expected_tokens and not any(token in project_name for token in expected_tokens) and "{group_map[" not in project_name:
             raise AssertionError(f"template {name} project_name should include one of {expected_tokens}")
 

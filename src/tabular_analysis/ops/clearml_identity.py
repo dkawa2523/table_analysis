@@ -161,23 +161,106 @@ def _filter_properties(values: Mapping[str, Any]) -> dict[str, Any]:
             continue
         filtered[str(key)] = value
     return filtered
-def build_project_name(project_root: str, usecase_id: str, stage: str, *, process: str | None=None, layout: Mapping[str, Any] | None=None, cfg: Any | None=None) -> str:
-    layout_cfg = dict(layout or _resolve_project_layout(cfg))
-    solution_root = _normalize_str(layout_cfg.get('solution_root')) or 'TabularAnalysis'
-    separator = _normalize_str(layout_cfg.get('separator')) or '/'
+
+
+def _layout_string(layout_cfg: Mapping[str, Any], key: str, default: str) -> str:
+    return _normalize_str(layout_cfg.get(key)) or default
+
+
+def _resolve_process_group(layout_cfg: Mapping[str, Any], *, process: str | None, stage: str | None) -> str:
     group_map = layout_cfg.get('group_map') if isinstance(layout_cfg.get('group_map'), Mapping) else {}
-    misc_group = _normalize_str(layout_cfg.get('misc_group')) or '99_Misc'
+    misc_group = _layout_string(layout_cfg, 'misc_group', '99_Misc')
     process_name = _normalize_str(process) or _infer_process_from_stage(stage)
     group = None
     if process_name and isinstance(group_map, Mapping):
         group = _normalize_str(group_map.get(process_name))
-    if not group and isinstance(group_map, Mapping):
+    if not group and isinstance(group_map, Mapping) and stage:
         group = _normalize_str(group_map.get(stage))
-    group = group or misc_group or _normalize_str(stage) or 'unknown'
+    return group or misc_group or _normalize_str(stage) or 'unknown'
+
+
+def _join_project_parts(*parts: str, separator: str) -> str:
+    return separator.join([str(part).strip(separator) for part in parts if str(part).strip(separator)])
+
+
+def build_pipeline_template_project_name(
+    project_root: str,
+    *,
+    layout: Mapping[str, Any] | None = None,
+    cfg: Any | None = None,
+) -> str:
+    layout_cfg = dict(layout or _resolve_project_layout(cfg))
+    separator = _layout_string(layout_cfg, 'separator', '/')
+    solution_root = _layout_string(layout_cfg, 'solution_root', 'TabularAnalysis')
+    pipeline_root_group = _layout_string(layout_cfg, 'pipeline_root_group', 'Pipelines')
+    pipeline_templates_group = _layout_string(layout_cfg, 'pipeline_templates_group', 'Templates')
+    root = _normalize_str(project_root) or 'MFG'
+    return _join_project_parts(root, solution_root, pipeline_root_group, pipeline_templates_group, separator=separator)
+
+
+def build_pipeline_run_project_name(
+    project_root: str,
+    usecase_id: str,
+    *,
+    layout: Mapping[str, Any] | None = None,
+    cfg: Any | None = None,
+) -> str:
+    layout_cfg = dict(layout or _resolve_project_layout(cfg))
+    separator = _layout_string(layout_cfg, 'separator', '/')
+    solution_root = _layout_string(layout_cfg, 'solution_root', 'TabularAnalysis')
+    pipeline_root_group = _layout_string(layout_cfg, 'pipeline_root_group', 'Pipelines')
+    pipeline_runs_group = _layout_string(layout_cfg, 'pipeline_runs_group', 'Runs')
     root = _normalize_str(project_root) or 'MFG'
     usecase_value = _normalize_str(usecase_id) or 'unknown'
-    root = root.rstrip(separator)
-    return separator.join([root, solution_root, usecase_value, group])
+    return _join_project_parts(root, solution_root, pipeline_root_group, pipeline_runs_group, usecase_value, separator=separator)
+
+
+def build_step_template_project_name(
+    project_root: str,
+    process: str,
+    *,
+    stage: str | None = None,
+    layout: Mapping[str, Any] | None = None,
+    cfg: Any | None = None,
+) -> str:
+    layout_cfg = dict(layout or _resolve_project_layout(cfg))
+    separator = _layout_string(layout_cfg, 'separator', '/')
+    solution_root = _layout_string(layout_cfg, 'solution_root', 'TabularAnalysis')
+    templates_root_group = _layout_string(layout_cfg, 'templates_root_group', 'Templates')
+    step_templates_group = _layout_string(layout_cfg, 'step_templates_group', 'Steps')
+    group = _resolve_process_group(layout_cfg, process=process, stage=stage)
+    root = _normalize_str(project_root) or 'MFG'
+    return _join_project_parts(root, solution_root, templates_root_group, step_templates_group, group, separator=separator)
+
+
+def build_step_run_project_name(
+    project_root: str,
+    usecase_id: str,
+    stage: str,
+    *,
+    process: str | None = None,
+    layout: Mapping[str, Any] | None = None,
+    cfg: Any | None = None,
+) -> str:
+    layout_cfg = dict(layout or _resolve_project_layout(cfg))
+    separator = _layout_string(layout_cfg, 'separator', '/')
+    solution_root = _layout_string(layout_cfg, 'solution_root', 'TabularAnalysis')
+    runs_root_group = _layout_string(layout_cfg, 'runs_root_group', 'Runs')
+    group = _resolve_process_group(layout_cfg, process=process, stage=stage)
+    root = _normalize_str(project_root) or 'MFG'
+    usecase_value = _normalize_str(usecase_id) or 'unknown'
+    return _join_project_parts(root, solution_root, runs_root_group, usecase_value, group, separator=separator)
+
+
+def build_project_name(project_root: str, usecase_id: str, stage: str, *, process: str | None=None, layout: Mapping[str, Any] | None=None, cfg: Any | None=None) -> str:
+    return build_step_run_project_name(
+        project_root,
+        usecase_id,
+        stage,
+        process=process,
+        layout=layout,
+        cfg=cfg,
+    )
 
 
 def build_pipeline_project_name(
@@ -186,12 +269,7 @@ def build_pipeline_project_name(
     layout: Mapping[str, Any] | None = None,
     cfg: Any | None = None,
 ) -> str:
-    layout_cfg = dict(layout or _resolve_project_layout(cfg))
-    solution_root = _normalize_str(layout_cfg.get('solution_root')) or 'TabularAnalysis'
-    pipeline_root_group = _normalize_str(layout_cfg.get('pipeline_root_group')) or 'Pipelines'
-    separator = _normalize_str(layout_cfg.get('separator')) or '/'
-    root = (_normalize_str(project_root) or 'MFG').rstrip(separator)
-    return separator.join([root, solution_root, pipeline_root_group])
+    return build_pipeline_template_project_name(project_root, layout=layout, cfg=cfg)
 
 
 def build_pipeline_child_project_name(
@@ -203,20 +281,14 @@ def build_pipeline_child_project_name(
     layout: Mapping[str, Any] | None = None,
     cfg: Any | None = None,
 ) -> str:
-    layout_cfg = dict(layout or _resolve_project_layout(cfg))
-    separator = _normalize_str(layout_cfg.get('separator')) or '/'
-    pipeline_root = build_pipeline_project_name(project_root, layout=layout_cfg)
-    usecase_value = _normalize_str(usecase_id) or 'unknown'
-    process_name = _normalize_str(process) or _infer_process_from_stage(stage)
-    group_map = layout_cfg.get('group_map') if isinstance(layout_cfg.get('group_map'), Mapping) else {}
-    misc_group = _normalize_str(layout_cfg.get('misc_group')) or '99_Misc'
-    group = None
-    if process_name and isinstance(group_map, Mapping):
-        group = _normalize_str(group_map.get(process_name))
-    if not group and isinstance(group_map, Mapping):
-        group = _normalize_str(group_map.get(stage))
-    group = group or misc_group or _normalize_str(stage) or 'unknown'
-    return separator.join([pipeline_root.rstrip(separator), usecase_value, group])
+    return build_step_run_project_name(
+        project_root,
+        usecase_id,
+        stage,
+        process=process,
+        layout=layout,
+        cfg=cfg,
+    )
 
 
 def resolve_template_context(
@@ -241,25 +313,232 @@ def resolve_template_context(
 
 
 def build_template_project_name(context: ClearMLTemplateContext, process: str, *, cfg: Any | None=None) -> str:
-    return build_project_name(
+    return build_step_template_project_name(
         context.project_root,
-        context.usecase_id,
         process,
-        process=process,
+        stage=process,
         layout=context.layout,
         cfg=cfg,
     )
 
 
-def build_template_tags(process: str, *, context: ClearMLTemplateContext) -> list[str]:
-    return [
-        'template:true',
-        f'usecase:{context.usecase_id}',
-        f'process:{process}',
-        _build_schema_tag(context.schema_version, default='v1'),
-        f'template_set:{context.template_set_id}',
+def _dedupe_tags(values: Iterable[Any]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = _normalize_str(item)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        deduped.append(text)
+    return deduped
+
+
+def _filter_runtime_extra_tags(values: Iterable[Any]) -> list[str]:
+    blocked_prefixes = (
+        'template:',
+        'template_set:',
+        'task_kind:',
+        'usecase:',
+        'process:',
+        'schema:',
+        'pipeline_profile:',
+        'grid:',
+        'preprocess:',
+        'model:',
+        'ensemble_method:',
+        'ensemble:',
+    )
+    allowed: list[str] = []
+    for item in values:
+        text = _normalize_str(item)
+        if not text or text == 'pipeline':
+            continue
+        if text == 'solution:tabular-analysis':
+            continue
+        if any(text.startswith(prefix) for prefix in blocked_prefixes):
+            continue
+        allowed.append(text)
+    return _dedupe_tags(allowed)
+
+
+def build_task_contract_tags(
+    *,
+    process: str,
+    schema_version: str,
+    task_kind: str,
+    usecase_id: str,
+    template_set_id: str | None = None,
+    pipeline_profile: str | None = None,
+    grid_run_id: str | None = None,
+    preprocess_variant: str | None = None,
+    model_variant: str | None = None,
+    ensemble_method: str | None = None,
+    extra_tags: Iterable[Any] | None = None,
+) -> list[str]:
+    tags = [
         'solution:tabular-analysis',
+        _build_schema_tag(schema_version, default='v1'),
+        f'task_kind:{task_kind}',
+        f'process:{process}',
     ]
+    if task_kind == 'template':
+        tags.extend(['template:true', f'template_set:{template_set_id or "default"}'])
+    tags.append(f'usecase:{usecase_id}')
+    if process == 'pipeline' or pipeline_profile:
+        tags.append('pipeline')
+    if pipeline_profile:
+        tags.append(f'pipeline_profile:{pipeline_profile}')
+    if grid_run_id:
+        tags.append(f'grid:{grid_run_id}')
+    if preprocess_variant:
+        tags.append(f'preprocess:{preprocess_variant}')
+    if model_variant:
+        tags.append(f'model:{model_variant}')
+        if preprocess_variant:
+            tags.append(f'grid_cell:{preprocess_variant}__{model_variant}')
+    if ensemble_method:
+        tags.append(f'ensemble_method:{ensemble_method}')
+    return _dedupe_tags([*tags, *list(extra_tags or [])])
+
+
+def build_task_contract_properties(
+    *,
+    process: str,
+    schema_version: str,
+    task_kind: str,
+    usecase_id: str,
+    project_root: str,
+    template_set_id: str,
+    pipeline_profile: str | None = None,
+    default_queue: str | None = None,
+    heavy_queue: str | None = None,
+    grid_run_id: str | None = None,
+    parent_pipeline_task_id: str | None = None,
+    base_template_task_id: str | None = None,
+    preprocess_variant: str | None = None,
+    model_variant: str | None = None,
+    ensemble_method: str | None = None,
+    dataset_id: str | None = None,
+    infer_model_id: str | None = None,
+    infer_train_task_id: str | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        'usecase_id': usecase_id,
+        'process': process,
+        'schema_version': schema_version,
+        'project_root': project_root,
+        'template_set_id': template_set_id,
+        'task_kind': task_kind,
+        'pipeline_profile': pipeline_profile,
+        'default_queue': default_queue,
+        'heavy_queue': heavy_queue,
+        'grid_run_id': grid_run_id,
+        'parent_pipeline_task_id': parent_pipeline_task_id,
+        'base_template_task_id': base_template_task_id,
+        'preprocess_variant': preprocess_variant,
+        'model_variant': model_variant,
+        'ensemble_method': ensemble_method,
+        'dataset_id': dataset_id,
+        'infer_model_id': infer_model_id,
+        'infer_train_task_id': infer_train_task_id,
+    }
+    if extra:
+        payload.update(dict(extra))
+    return _filter_properties(payload)
+
+
+def build_template_tags(process: str, *, context: ClearMLTemplateContext) -> list[str]:
+    return build_task_contract_tags(
+        process=process,
+        schema_version=context.schema_version,
+        task_kind='template',
+        usecase_id=context.usecase_id,
+        template_set_id=context.template_set_id,
+    )
+
+
+def build_template_properties(process: str, *, context: ClearMLTemplateContext, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    return build_task_contract_properties(
+        process=process,
+        schema_version=context.schema_version,
+        task_kind='template',
+        usecase_id=context.usecase_id,
+        project_root=context.project_root,
+        template_set_id=context.template_set_id,
+        extra=extra,
+    )
+
+
+def build_runtime_tags(
+    *,
+    process: str,
+    schema_version: str,
+    usecase_id: str,
+    pipeline_profile: str | None = None,
+    grid_run_id: str | None = None,
+    preprocess_variant: str | None = None,
+    model_variant: str | None = None,
+    ensemble_method: str | None = None,
+    extra_tags: Iterable[Any] | None = None,
+) -> list[str]:
+    return build_task_contract_tags(
+        process=process,
+        schema_version=schema_version,
+        task_kind='run',
+        usecase_id=usecase_id,
+        pipeline_profile=pipeline_profile,
+        grid_run_id=grid_run_id,
+        preprocess_variant=preprocess_variant,
+        model_variant=model_variant,
+        ensemble_method=ensemble_method,
+        extra_tags=_filter_runtime_extra_tags(extra_tags or []),
+    )
+
+
+def build_runtime_properties(
+    *,
+    process: str,
+    schema_version: str,
+    usecase_id: str,
+    project_root: str,
+    template_set_id: str,
+    pipeline_profile: str | None = None,
+    default_queue: str | None = None,
+    heavy_queue: str | None = None,
+    grid_run_id: str | None = None,
+    parent_pipeline_task_id: str | None = None,
+    base_template_task_id: str | None = None,
+    preprocess_variant: str | None = None,
+    model_variant: str | None = None,
+    ensemble_method: str | None = None,
+    dataset_id: str | None = None,
+    infer_model_id: str | None = None,
+    infer_train_task_id: str | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return build_task_contract_properties(
+        process=process,
+        schema_version=schema_version,
+        task_kind='run',
+        usecase_id=usecase_id,
+        project_root=project_root,
+        template_set_id=template_set_id,
+        pipeline_profile=pipeline_profile,
+        default_queue=default_queue,
+        heavy_queue=heavy_queue,
+        grid_run_id=grid_run_id,
+        parent_pipeline_task_id=parent_pipeline_task_id,
+        base_template_task_id=base_template_task_id,
+        preprocess_variant=preprocess_variant,
+        model_variant=model_variant,
+        ensemble_method=ensemble_method,
+        dataset_id=dataset_id,
+        infer_model_id=infer_model_id,
+        infer_train_task_id=infer_train_task_id,
+        extra=extra,
+    )
 
 
 def resolve_clearml_runtime_context(

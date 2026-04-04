@@ -19,6 +19,7 @@ from tabular_analysis.clearml import pipeline_templates as pipeline_template_mod
 from tabular_analysis.clearml import templates as template_module
 from tabular_analysis.common.clearml_bootstrap import resolve_required_uv_extras
 from tabular_analysis.common.clearml_config import read_clearml_api_section
+from tabular_analysis.ops import clearml_identity as clearml_identity_module
 from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
 from tabular_analysis.registry.models import list_model_variants
@@ -82,7 +83,15 @@ def _assert_strict_template_lookup() -> None:
     try:
         template_module.list_clearml_tasks_by_tags = lambda tags, project_name=None: calls.append(list(tags)) or [task]
         template_module.clearml_task_status_from_obj = lambda task_obj: "created"
-        template_module.clearml_task_tags = lambda task_obj: ["template:true", "usecase:TabularAnalysis", "process:infer", "schema:v1", "template_set:default", "solution:tabular-analysis"]
+        template_module.clearml_task_tags = lambda task_obj: [
+            "template:true",
+            "task_kind:template",
+            "usecase:TabularAnalysis",
+            "process:infer",
+            "schema:v1",
+            "template_set:default",
+            "solution:tabular-analysis",
+        ]
         template_module.clearml_task_script = lambda task_obj: {"entry_point": "tools/clearml_entrypoint.py"}
         template_module.clearml_task_id = lambda task_obj: "template-123"
         template_module.clearml_script_mismatches = lambda expected, actual: False
@@ -132,6 +141,7 @@ def _assert_visible_pipeline_template_lookup() -> None:
             "schema:v1",
             "template_set:default",
             "solution:tabular-analysis",
+            "pipeline",
             "task_kind:template",
             "pipeline_profile:pipeline",
         ]
@@ -155,7 +165,7 @@ def _assert_visible_pipeline_template_lookup() -> None:
         if len(calls) != 1:
             raise AssertionError(f"pipeline template lookup should be strict and single-pass: {calls}")
         tags = calls[0]
-        for required in ("process:pipeline", "task_kind:template", "pipeline_profile:pipeline", "template_set:default", "schema:v1"):
+        for required in ("process:pipeline", "pipeline", "task_kind:template", "pipeline_profile:pipeline", "template_set:default", "schema:v1"):
             if required not in tags:
                 raise AssertionError(f"visible pipeline lookup missing {required}: {tags}")
     finally:
@@ -166,6 +176,74 @@ def _assert_visible_pipeline_template_lookup() -> None:
         pipeline_template_module.clearml_task_id = original["id"]
         pipeline_template_module.clearml_script_mismatches = original["mismatch"]
         pipeline_template_module.resolve_clearml_script_spec = original["spec"]
+
+
+def _assert_project_layout_contract() -> None:
+    cfg = OmegaConf.create(
+        {
+            "run": {
+                "clearml": {
+                    "project_root": "LOCAL",
+                    "template_usecase_id": "TabularAnalysis",
+                    "template_set_id": "default",
+                    "project_layout": {
+                        "solution_root": "TabularAnalysis",
+                        "pipeline_root_group": "Pipelines",
+                        "pipeline_templates_group": "Templates",
+                        "pipeline_runs_group": "Runs",
+                        "templates_root_group": "Templates",
+                        "step_templates_group": "Steps",
+                        "runs_root_group": "Runs",
+                        "separator": "/",
+                        "group_map": {
+                            "dataset_register": "01_Datasets",
+                            "preprocess": "02_Preprocess",
+                            "train_model": "03_TrainModels",
+                            "train_ensemble": "04_Ensembles",
+                            "infer": "05_Infer",
+                            "infer_child": "05_Infer_Children",
+                            "leaderboard": "99_Leaderboard",
+                        },
+                    },
+                },
+                "schema_version": "v1",
+                "usecase_id": "demo_usecase",
+            }
+        }
+    )
+    context = clearml_identity_module.resolve_template_context(cfg)
+    if clearml_identity_module.build_template_project_name(context, "preprocess", cfg=cfg) != "LOCAL/TabularAnalysis/Templates/Steps/02_Preprocess":
+        raise AssertionError("step template project should resolve under Templates/Steps")
+    if clearml_identity_module.build_project_name("LOCAL", "demo_usecase", "02_preprocess", process="preprocess", cfg=cfg) != "LOCAL/TabularAnalysis/Runs/demo_usecase/02_Preprocess":
+        raise AssertionError("step run project should resolve under Runs/<usecase>")
+    if clearml_identity_module.build_pipeline_template_project_name("LOCAL", cfg=cfg) != "LOCAL/TabularAnalysis/Pipelines/Templates":
+        raise AssertionError("pipeline template project should resolve under Pipelines/Templates")
+    if clearml_identity_module.build_pipeline_run_project_name("LOCAL", "demo_usecase", cfg=cfg) != "LOCAL/TabularAnalysis/Pipelines/Runs/demo_usecase":
+        raise AssertionError("pipeline run project should resolve under Pipelines/Runs/<usecase>")
+
+
+def _assert_runtime_tag_filter_contract() -> None:
+    tags = clearml_identity_module.build_runtime_tags(
+        process="pipeline",
+        schema_version="v1",
+        usecase_id="demo_usecase",
+        pipeline_profile="pipeline",
+        grid_run_id="grid123",
+        extra_tags=[
+            "template:true",
+            "template_set:default",
+            "usecase:TabularAnalysis",
+            "process:pipeline",
+            "solution:tabular-analysis",
+            "custom:keep",
+        ],
+    )
+    for blocked in ("template:true", "template_set:default", "usecase:TabularAnalysis"):
+        if blocked in tags:
+            raise AssertionError(f"runtime tags must drop template-only carryover: {tags}")
+    for required in ("task_kind:run", "usecase:demo_usecase", "pipeline", "pipeline_profile:pipeline", "grid:grid123", "custom:keep"):
+        if required not in tags:
+            raise AssertionError(f"runtime tags missing {required}: {tags}")
 
 
 def _assert_task_time_extras() -> None:
@@ -405,6 +483,8 @@ def main() -> int:
     _assert_batch_execution_mode()
     _assert_strict_template_lookup()
     _assert_visible_pipeline_template_lookup()
+    _assert_project_layout_contract()
+    _assert_runtime_tag_filter_contract()
     _assert_task_time_extras()
     _assert_entrypoint_reads_clearml_slash_overrides()
     _assert_regression_model_set_contract()

@@ -2,7 +2,7 @@ version: 1
 
 templates:
   dataset_register:
-    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[dataset_register]}"
+    project_name: "{project_root}/{solution_root}/{templates_root_group}/{step_templates_group}/{group_map[dataset_register]}"
     task_name_template: "dataset_register"
     entrypoint: "python tools/clearml_entrypoint.py task=dataset_register"
     default_overrides:
@@ -14,6 +14,7 @@ templates:
       - "uv>=0.5.0"
     tags:
       - "template:true"
+      - "task_kind:template"
       - "template_set:{template_set_id}"
       - "usecase:{usecase_id}"
       - "process:dataset_register"
@@ -23,9 +24,12 @@ templates:
       usecase_id: "{usecase_id}"
       process: "dataset_register"
       schema_version: "{schema_version}"
+      project_root: "{project_root}"
+      template_set_id: "{template_set_id}"
+      task_kind: "template"
 
   preprocess:
-    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[preprocess]}"
+    project_name: "{project_root}/{solution_root}/{templates_root_group}/{step_templates_group}/{group_map[preprocess]}"
     task_name_template: "preprocess"
     entrypoint: "python tools/clearml_entrypoint.py task=preprocess"
     default_overrides:
@@ -37,6 +41,7 @@ templates:
       - "uv>=0.5.0"
     tags:
       - "template:true"
+      - "task_kind:template"
       - "template_set:{template_set_id}"
       - "usecase:{usecase_id}"
       - "process:preprocess"
@@ -46,9 +51,12 @@ templates:
       usecase_id: "{usecase_id}"
       process: "preprocess"
       schema_version: "{schema_version}"
+      project_root: "{project_root}"
+      template_set_id: "{template_set_id}"
+      task_kind: "template"
 
   train_model:
-    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[train_model]}"
+    project_name: "{project_root}/{solution_root}/{templates_root_group}/{step_templates_group}/{group_map[train_model]}"
     task_name_template: "train_model"
     entrypoint: "python tools/clearml_entrypoint.py task=train_model"
     default_overrides:
@@ -60,6 +68,7 @@ templates:
       - "uv>=0.5.0"
     tags:
       - "template:true"
+      - "task_kind:template"
       - "template_set:{template_set_id}"
       - "usecase:{usecase_id}"
       - "process:train_model"
@@ -69,9 +78,12 @@ templates:
       usecase_id: "{usecase_id}"
       process: "train_model"
       schema_version: "{schema_version}"
+      project_root: "{project_root}"
+      template_set_id: "{template_set_id}"
+      task_kind: "template"
 
   train_ensemble:
-    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[train_ensemble]}"
+    project_name: "{project_root}/{solution_root}/{templates_root_group}/{step_templates_group}/{group_map[train_ensemble]}"
     task_name_template: "train_ensemble"
     entrypoint: "python tools/clearml_entrypoint.py task=train_ensemble"
     default_overrides:
@@ -83,6 +95,7 @@ templates:
       - "uv>=0.5.0"
     tags:
       - "template:true"
+      - "task_kind:template"
       - "template_set:{template_set_id}"
       - "usecase:{usecase_id}"
       - "process:train_ensemble"
@@ -92,9 +105,12 @@ templates:
       usecase_id: "{usecase_id}"
       process: "train_ensemble"
       schema_version: "{schema_version}"
+      project_root: "{project_root}"
+      template_set_id: "{template_set_id}"
+      task_kind: "template"
 
   train_model_full:
-    project_name: "{project_root}/{solution_root}/{pipeline_root_group}"
+    project_name: "{project_root}/{solution_root}/{pipeline_root_group}/{pipeline_templates_group}"
     task_name_template: "train_model_full"
     entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
     default_overrides:
@@ -125,11 +141,13 @@ templates:
       usecase_id: "{usecase_id}"
       process: "pipeline"
       schema_version: "{schema_version}"
+      project_root: "{project_root}"
+      template_set_id: "{template_set_id}"
       task_kind: "template"
       pipeline_profile: "train_model_full"
 
   train_ensemble_full:
-    project_name: "{project_root}/{solution_root}/{pipeline_root_group}"
+    project_name: "{project_root}/{solution_root}/{pipeline_root_group}/{pipeline_templates_group}"
     task_name_template: "train_ensemble_full"
     entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
     default_overrides:
@@ -163,11 +181,13 @@ templates:
       usecase_id: "{usecase_id}"
       process: "pipeline"
       schema_version: "{schema_version}"
+      project_root: "{project_root}"
+      template_set_id: "{template_set_id}"
       task_kind: "template"
       pipeline_profile: "train_ensemble_full"
 
   infer:
-    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[infer]}"
+    project_name: "{project_root}/{solution_root}/{templates_root_group}/{step_templates_group}/{group_map[infer]}"
     task_name_template: "infer"
     entrypoint: "python tools/clearml_entrypoint.py task=infer"
     default_overrides:
@@ -179,6 +199,7 @@ templates:
       - "uv>=0.5.0"
     tags:
       - "template:true"
+      - "task_kind:template"
       - "template_set:{template_set_id}"
       - "usecase:{usecase_id}"
       - "process:infer"
@@ -188,9 +209,12 @@ templates:
       usecase_id: "{usecase_id}"
       process: "infer"
       schema_version: "{schema_version}"
+      project_root: "{project_root}"
+      template_set_id: "{template_set_id}"
+      task_kind: "template"
 
   leaderboard:
-    project_name: "{project_root}/{solution_root}/{usecase_id}/{group_map[leaderboard]}"
+    project_name: "{project_root}/{solution_root}/{templates_root_group}/{step_templates_group}/{group_map[leaderboard]}"
     task_name_template: "leaderboard"
     entrypoint: "python tools/clearml_entrypoint.py task=leaderboard"
     default_overrides:
@@ -202,6 +226,7 @@ templates:
       - "uv>=0.5.0"
     tags:
       - "template:true"
+      - "task_kind:template"
       - "template_set:{template_set_id}"
       - "usecase:{usecase_id}"
       - "process:leaderboard"
@@ -211,9 +236,12 @@ templates:
       usecase_id: "{usecase_id}"
       process: "leaderboard"
       schema_version: "{schema_version}"
+      project_root: "{project_root}"
+      template_set_id: "{template_set_id}"
+      task_kind: "template"
 
   pipeline:
-    project_name: "{project_root}/{solution_root}/{pipeline_root_group}"
+    project_name: "{project_root}/{solution_root}/{pipeline_root_group}/{pipeline_templates_group}"
     task_name_template: "pipeline"
     entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
     default_overrides:
@@ -244,5 +272,7 @@ templates:
       usecase_id: "{usecase_id}"
       process: "pipeline"
       schema_version: "{schema_version}"
+      project_root: "{project_root}"
+      template_set_id: "{template_set_id}"
       task_kind: "template"
       pipeline_profile: "pipeline"

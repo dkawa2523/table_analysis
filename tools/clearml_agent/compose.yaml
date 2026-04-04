@@ -5,10 +5,13 @@ services:
       dockerfile: Dockerfile
     image: table-analysis-clearml-agent:latest
     container_name: clearml-services
-    init: true
     restart: unless-stopped
     environment:
-      CLEARML_CONFIG_FILE: /root/.clearml/clearml.conf
+      CLEARML_API_HOST: ${CLEARML_API_HOST:-http://apiserver:8008}
+      CLEARML_FILES_HOST: ${CLEARML_FILES_HOST:-http://clearml-fileserver:8081}
+      CLEARML_WEB_HOST: ${CLEARML_WEB_HOST:-http://webserver:80}
+      CLEARML_API_ACCESS_KEY: ${CLEARML_API_ACCESS_KEY:?set CLEARML_API_ACCESS_KEY}
+      CLEARML_API_SECRET_KEY: ${CLEARML_API_SECRET_KEY:?set CLEARML_API_SECRET_KEY}
       UV_CACHE_DIR: /root/.clearml/uv-cache
     volumes:
       - type: bind
@@ -19,12 +22,15 @@ services:
   clearml-default:
     image: table-analysis-clearml-agent:latest
     container_name: clearml-default
-    init: true
     restart: unless-stopped
     depends_on:
       - clearml-services
     environment:
-      CLEARML_CONFIG_FILE: /root/.clearml/clearml.conf
+      CLEARML_API_HOST: ${CLEARML_API_HOST:-http://apiserver:8008}
+      CLEARML_FILES_HOST: ${CLEARML_FILES_HOST:-http://clearml-fileserver:8081}
+      CLEARML_WEB_HOST: ${CLEARML_WEB_HOST:-http://webserver:80}
+      CLEARML_API_ACCESS_KEY: ${CLEARML_API_ACCESS_KEY:?set CLEARML_API_ACCESS_KEY}
+      CLEARML_API_SECRET_KEY: ${CLEARML_API_SECRET_KEY:?set CLEARML_API_SECRET_KEY}
       UV_CACHE_DIR: /root/.clearml/uv-cache
     volumes:
       - type: bind
@@ -35,15 +41,23 @@ services:
   clearml-heavy-model:
     image: table-analysis-clearml-agent:latest
     container_name: clearml-heavy-model
-    init: true
     restart: unless-stopped
     depends_on:
       - clearml-services
     environment:
-      CLEARML_CONFIG_FILE: /root/.clearml/clearml.conf
+      CLEARML_API_HOST: ${CLEARML_API_HOST:-http://apiserver:8008}
+      CLEARML_FILES_HOST: ${CLEARML_FILES_HOST:-http://clearml-fileserver:8081}
+      CLEARML_WEB_HOST: ${CLEARML_WEB_HOST:-http://webserver:80}
+      CLEARML_API_ACCESS_KEY: ${CLEARML_API_ACCESS_KEY:?set CLEARML_API_ACCESS_KEY}
+      CLEARML_API_SECRET_KEY: ${CLEARML_API_SECRET_KEY:?set CLEARML_API_SECRET_KEY}
       UV_CACHE_DIR: /root/.clearml/uv-cache
     volumes:
       - type: bind
         source: ${CLEARML_HOME_HOST:?set CLEARML_HOME_HOST}
         target: /root/.clearml
     command: ["clearml-agent", "daemon", "--queue", "heavy-model"]
+
+networks:
+  default:
+    external: true
+    name: docker_backend

@@ -1,6 +1,11 @@
 # @package run.clearml.project_layout
 solution_root: "TabularAnalysis"
 pipeline_root_group: "Pipelines"
+pipeline_templates_group: "Templates"
+pipeline_runs_group: "Runs"
+templates_root_group: "Templates"
+step_templates_group: "Steps"
+runs_root_group: "Runs"
 separator: "/"
 group_map:
   dataset_register: "01_Datasets"
@@ -9,6 +14,5 @@ group_map:
   train_ensemble: "04_Ensembles"
   infer: "05_Infer"
   infer_child: "05_Infer_Children"
-  leaderboard: "00_Pipelines"
-  pipeline: "00_Pipelines"
+  leaderboard: "99_Leaderboard"
 misc_group: "99_Misc"

@@ -110,9 +110,12 @@ def clone_pipeline_controller(*, source_task_id: str, task_name: str | None=None
         )
     except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
         raise PlatformAdapterError(f'Failed to clone pipeline controller: {exc}') from exc
+    task = _resolve_clearml_task(controller)
     if project_name:
         _ensure_clearml_project_system_tags(project_name, ['pipeline'], remove_tags=['hidden'])
-    task = _resolve_clearml_task(controller)
+        setter = getattr(task, 'set_project', None)
+        if callable(setter):
+            setter(project_name=str(project_name))
     _apply_clearml_task_type(task, clearml_task_type_controller())
     _apply_clearml_system_tags(task, ['pipeline'])
     return controller
