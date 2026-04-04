@@ -32,7 +32,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 python tools/rehearsal/run_pipeline_v2.py \
   --execution agent \
-  --queue-name services \
+  --queue-name controller \
   --task-type regression \
   --preprocess stdscaler_ohe \
   --models ridge,elasticnet \
@@ -42,7 +42,7 @@ python tools/rehearsal/run_pipeline_v2.py \
 
 注意:
 
-- `pipeline_controller` の正規 queue は `services`
+- `pipeline_controller` の正規 queue は `controller`
 - child task は `default` / `heavy-model` に流れる
 
 ## 4. template の同期
@@ -113,7 +113,6 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
-  run.clearml.queue_name=services \
   data.raw_dataset_id=<RAW_DATASET_ID> \
   +pipeline.preprocess_variant=stdscaler_ohe \
   +pipeline.model_set=regression_all
@@ -126,7 +125,6 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
-  run.clearml.queue_name=services \
   data.raw_dataset_id=<RAW_DATASET_ID> \
   +pipeline.preprocess_variant=stdscaler_ohe \
   +pipeline.model_set=regression_all \

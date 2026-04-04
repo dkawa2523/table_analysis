@@ -66,7 +66,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 確認点:
 
-- controller は `services`
+- controller は `controller`
 - heavy model は `heavy-model`
 - light child は `default`
 

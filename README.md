@@ -241,7 +241,7 @@ visible pipeline template は ClearML 上の次 project に置かれます。
 
 現在の canonical queue 分割:
 
-- `services`
+- `controller`
   - pipeline controller 専用
 - `default`
   - preprocess、軽量 train、leaderboard、ensemble、infer
@@ -254,16 +254,9 @@ visible pipeline template は ClearML 上の次 project に置かれます。
 docker compose -f tools/clearml_agent/compose.yaml up -d --build
 ```
 
-必要な環境変数:
-
-```bash
-export CLEARML_HOME_HOST=/path/to/clearml-home
-```
-
 Compose は次を前提にしています。
 
-- `init: true`
-- shared `/root/.clearml`
+- Docker named volume の shared `/root/.clearml`
 - `UV_CACHE_DIR=/root/.clearml/uv-cache`
 
 詳細は [docs/68_CLEARML_AGENT_TROUBLESHOOTING.md](docs/68_CLEARML_AGENT_TROUBLESHOOTING.md) を参照してください。
@@ -383,7 +376,6 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
-  run.clearml.queue_name=services \
   data.raw_dataset_id=<RAW_DATASET_ID> \
   +pipeline.preprocess_variant=stdscaler_ohe \
   +pipeline.model_set=regression_all
@@ -396,7 +388,6 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
-  run.clearml.queue_name=services \
   data.raw_dataset_id=<RAW_DATASET_ID> \
   +pipeline.preprocess_variant=stdscaler_ohe \
   +pipeline.model_set=regression_all \

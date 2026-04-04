@@ -36,7 +36,7 @@
 
 現在の標準:
 
-- `services`
+- `controller`
   - pipeline controller
 - `default`
   - preprocess、light train、leaderboard、ensemble、infer
@@ -68,7 +68,6 @@
 python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
-  run.clearml.queue_name=services \
   exec_policy.queues.default=default \
   exec_policy.queues.train_model_heavy=heavy-model \
   exec_policy.queues.heavy_model_variants=[catboost,xgboost] \

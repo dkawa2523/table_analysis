@@ -9,9 +9,10 @@ limits:
   max_hpo_trials: 0
 
 queues:
-  # Default queue (falls back to run.clearml.queue_name).
-  default: ${run.clearml.queue_name}
-  pipeline: ${exec_policy.queues.default}
+  # Default child-task queue.
+  default: default
+  # Pipeline controllers always use the dedicated controller queue.
+  pipeline: controller
   dataset_register: ${exec_policy.queues.default}
   preprocess: ${exec_policy.queues.default}
   train_model: ${exec_policy.queues.default}

@@ -7,10 +7,10 @@
 
 - `CLEARML_CONFIG_FILE` が有効
 - ClearML UI に接続できる
-- `services`、`default`、`heavy-model` queue が存在する
+- `controller`、`default`、`heavy-model` queue が存在する
 - agent は `tools/clearml_agent/compose.yaml` を正本として起動している
 - agent の `/root/.clearml` は Docker named volume を使う
-  - Windows bind mount は task repository / venv / uv cache が `p9_client_rpc` 待ちになりやすいので避ける
+- Windows bind mount は task repository / venv / uv cache が `p9_client_rpc` 待ちになりやすいので避ける
 
 ## 2. template を同期する
 
@@ -65,7 +65,6 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
-  run.clearml.queue_name=services \
   data.raw_dataset_id=<RAW_DATASET_ID> \
   +pipeline.preprocess_variant=stdscaler_ohe \
   +pipeline.model_set=regression_all
@@ -78,7 +77,6 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
-  run.clearml.queue_name=services \
   data.raw_dataset_id=<RAW_DATASET_ID> \
   +pipeline.preprocess_variant=stdscaler_ohe \
   +pipeline.model_set=regression_all \
@@ -141,7 +139,7 @@ python -m tabular_analysis.cli task=infer \
 
 1. `manage_templates --validate`
 2. queue に worker がいるか
-3. controller が `services` に載っているか
+3. controller が `controller` queue に載っているか
 4. `catboost/xgboost` が `heavy-model` に振り分けられているか
 5. child task の tags が runtime 用に更新されているか
 

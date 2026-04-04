@@ -122,7 +122,7 @@ project の canonical 形:
 
 現在の標準 queue:
 
-- `services`
+- `controller`
   - pipeline controller 専用
 - `default`
   - preprocess、軽量学習、leaderboard、ensemble、infer

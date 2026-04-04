@@ -21,7 +21,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 - queue に worker がいない
 - queue 名が違う
-- `services/default/heavy-model` の役割がずれている
+- `controller/default/heavy-model` の役割がずれている
 
 ### pipeline が Pipelines タブに出ない
 

@@ -34,7 +34,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 - Avoid Windows bind mounts for `/root/.clearml`. They can push agent processes into `p9_client_rpc` waits and stall controller runs.
 - Start agents with `--init` (or Docker `init: true`) so zombie processes do not accumulate.
 - Canonical queue split is:
-  - `services`: pipeline controllers only
+  - `controller`: pipeline controllers only
   - `default`: preprocess, light train models, leaderboard, ensembles
   - `heavy-model`: `catboost` and `xgboost`
 

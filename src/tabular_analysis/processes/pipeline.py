@@ -1317,7 +1317,7 @@ def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str) -> _Vi
         )
     )
     metadata['project_name'] = _visible_pipeline_project(cfg)
-    queue_name = _select_queue(plan['queues'], 'pipeline') or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name')) or 'services'
+    queue_name = _select_queue(plan['queues'], 'pipeline') or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name')) or 'controller'
     return _VisiblePipelineRunContract(
         plan=plan,
         pipeline_profile=pipeline_profile,

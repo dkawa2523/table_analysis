@@ -449,7 +449,7 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
             },
             pipeline_profile="train_ensemble_full",
             metadata={},
-            queue_name="services",
+            queue_name="controller",
         )
         pipeline_module.clearml_task_id = lambda task: "controller-123"
         pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"run.grid_run_id": "grid-001"}
@@ -521,7 +521,7 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
             },
             pipeline_profile="pipeline",
             metadata={},
-            queue_name="services",
+            queue_name="controller",
         )
         pipeline_module.clearml_task_id = lambda task: "controller-plan-only"
         pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"run.grid_run_id": "grid-plan-only"}

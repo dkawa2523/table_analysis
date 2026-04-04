@@ -84,7 +84,7 @@ python -m tabular_analysis.cli task=train_model \
 
 - visible pipeline template を clone して controller として実行する
 - operator 向けの正本
-- `services/default/heavy-model` の queue 分割前提
+- `controller/default/heavy-model` の queue 分割前提
 
 例:
 
@@ -93,7 +93,6 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
-  run.clearml.queue_name=services \
   data.raw_dataset_id=<RAW_DATASET_ID> \
   +pipeline.model_set=regression_all
 ```
@@ -102,7 +101,7 @@ python -m tabular_analysis.cli task=pipeline \
 
 標準の queue 分割:
 
-- `services`
+- `controller`
   - controller
 - `default`
   - preprocess、light train、leaderboard、ensemble、infer

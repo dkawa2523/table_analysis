@@ -87,7 +87,7 @@ pipeline は最低でも次を出します。
 ## queue ルール
 
 - controller
-  - `services`
+  - `controller`
 - light train / preprocess / leaderboard / ensemble
   - `default`
 - heavy train

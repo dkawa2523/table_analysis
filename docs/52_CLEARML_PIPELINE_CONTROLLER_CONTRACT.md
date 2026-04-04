@@ -47,7 +47,7 @@ template 用 tag や stale usecase は残しません。
 ## queue 契約
 
 - controller
-  - `services`
+  - `controller`
 - light child
   - `default`
 - heavy child

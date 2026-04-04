@@ -1,10 +1,10 @@
 services:
-  clearml-services:
+  clearml-controller:
     build:
       context: .
       dockerfile: Dockerfile
     image: table-analysis-clearml-agent:latest
-    container_name: clearml-services
+    container_name: clearml-controller
     restart: unless-stopped
     environment:
       CLEARML_API_HOST: ${CLEARML_API_HOST:-http://apiserver:8008}
@@ -15,14 +15,14 @@ services:
       UV_CACHE_DIR: /root/.clearml/uv-cache
     volumes:
       - clearml-agent-shared:/root/.clearml
-    command: ["clearml-agent", "daemon", "--queue", "services"]
+    command: ["clearml-agent", "daemon", "--queue", "controller"]
 
   clearml-default:
     image: table-analysis-clearml-agent:latest
     container_name: clearml-default
     restart: unless-stopped
     depends_on:
-      - clearml-services
+      - clearml-controller
     environment:
       CLEARML_API_HOST: ${CLEARML_API_HOST:-http://apiserver:8008}
       CLEARML_FILES_HOST: ${CLEARML_FILES_HOST:-http://clearml-fileserver:8081}
@@ -39,7 +39,7 @@ services:
     container_name: clearml-heavy-model
     restart: unless-stopped
     depends_on:
-      - clearml-services
+      - clearml-controller
     environment:
       CLEARML_API_HOST: ${CLEARML_API_HOST:-http://apiserver:8008}
       CLEARML_FILES_HOST: ${CLEARML_FILES_HOST:-http://clearml-fileserver:8081}

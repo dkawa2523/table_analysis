@@ -45,7 +45,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 python tools/rehearsal/run_pipeline_v2.py \
   --execution agent \
-  --queue-name services \
+  --queue-name controller \
   --task-type regression \
   --preprocess stdscaler_ohe \
   --models ridge,elasticnet \
