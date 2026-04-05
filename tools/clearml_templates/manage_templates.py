@@ -42,7 +42,11 @@ from tabular_analysis.processes.pipeline_support import (
     normalize_pipeline_profile,
     resolve_pipeline_controller_queue_name,
 )
-from tabular_analysis.platform_adapter_clearml_env import clearml_script_mismatches, resolve_clearml_script_spec
+from tabular_analysis.platform_adapter_clearml_env import (
+    clearml_script_mismatches,
+    resolve_clearml_script_spec,
+    resolve_version_props,
+)
 from tabular_analysis.platform_adapter_core import _ensure_clearml_project_system_tags, _get_clearml_project_system_tags
 from tabular_analysis.platform_adapter_pipeline import (
     create_pipeline_seed_controller,
@@ -611,7 +615,11 @@ def _pipeline_seed_script_mismatches(spec: Any, script: Mapping[str, Any]) -> li
     raw = clearml_script_mismatches(spec, script)
     if isinstance(raw, bool):
         return ["script mismatch"] if raw else []
-    return [str(error) for error in raw]
+    return [
+        error
+        for error in raw
+        if not str(error).startswith("version_num mismatch:")
+    ]
 
 
 def _seed_runtime_defaults(seed_definition: Mapping[str, Any]) -> dict[str, Any]:
@@ -929,6 +937,10 @@ def _resolve_template_spec(
     expected_properties = dict(spec.properties_minimal)
     if _is_pipeline_template(spec):
         expected_properties.update(build_pipeline_template_properties(spec.name, cfg=resolved_cfg))
+        expected_properties["code_version"] = resolve_version_props(
+            resolved_cfg,
+            clearml_enabled=True,
+        ).get("code_version", "unknown")
     overrides = (
         _normalize_internal_compose_overrides([*entry_args, *spec.default_overrides])
         if _is_pipeline_template(spec)

@@ -12,7 +12,11 @@ from ..ops.clearml_identity import (
     build_task_contract_tags,
     resolve_template_context,
 )
-from ..platform_adapter_clearml_env import clearml_script_mismatches, resolve_clearml_script_spec
+from ..platform_adapter_clearml_env import (
+    clearml_script_mismatches,
+    resolve_clearml_script_spec,
+    resolve_version_props,
+)
 from ..platform_adapter_task import (
     clearml_task_id,
     clearml_task_script,
@@ -34,7 +38,11 @@ def _pipeline_seed_script_mismatches(spec: Any, script: dict[str, Any]) -> list[
     raw = clearml_script_mismatches(spec, script)
     if isinstance(raw, bool):
         return ["script mismatch"] if raw else []
-    return [str(error) for error in raw]
+    return [
+        error
+        for error in raw
+        if not str(error).startswith("version_num mismatch:")
+    ]
 
 
 def _task_runtime(task: Any) -> dict[str, Any]:
@@ -63,6 +71,20 @@ def _task_artifact_names(task: Any) -> set[str]:
         except Exception:
             return names
     return names
+
+
+def _task_code_version(task: Any) -> str:
+    getter = getattr(task, "get_parameters", None)
+    if not callable(getter):
+        return ""
+    try:
+        params = getter()
+    except Exception:
+        return ""
+    if not isinstance(params, dict):
+        return ""
+    value = params.get("properties/code_version")
+    return _normalize_str(value) or ""
 
 
 def build_pipeline_seed_project_name(cfg: Any, *, pipeline_profile: str | None = None) -> str:
@@ -221,6 +243,9 @@ def resolve_pipeline_seed_task_id(
         task_name_override='pipeline',
         canonicalize_pipeline=False,
     )
+    expected_code_version = _normalize_str(
+        resolve_version_props(cfg, clearml_enabled=True).get("code_version")
+    ) or ""
     tasks = list_clearml_tasks_by_tags(required_tags, project_name=project_name)
     for task in tasks:
         task_tags = clearml_task_tags(task)
@@ -234,6 +259,10 @@ def resolve_pipeline_seed_task_id(
             continue
         if _pipeline_seed_script_mismatches(expected_spec, clearml_task_script(task)):
             continue
+        if expected_code_version:
+            actual_code_version = _task_code_version(task)
+            if actual_code_version != expected_code_version:
+                continue
         runtime = _task_runtime(task)
         pipeline_hash = str(runtime.get('_pipeline_hash') or '').strip()
         if not pipeline_hash or pipeline_hash.startswith('None:'):

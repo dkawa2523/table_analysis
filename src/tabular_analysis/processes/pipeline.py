@@ -1537,6 +1537,13 @@ def _current_pipeline_task_is_seed(task: Any) -> bool:
     return '/.pipelines/' in project_name
 
 
+def _current_pipeline_task_is_seed_materialization(task: Any, cfg: Any) -> bool:
+    if not _current_pipeline_task_is_seed(task):
+        return False
+    raw_dataset_id = _normalize_str(_cfg_value(cfg, 'data.raw_dataset_id'))
+    return resolve_pipeline_plan_only(cfg) and is_pipeline_placeholder_raw_dataset_id(raw_dataset_id)
+
+
 def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str, allow_placeholder_raw_dataset: bool = False) -> _VisiblePipelineRunContract:
     validate_pipeline_operator_inputs(cfg, allow_placeholder_raw_dataset=allow_placeholder_raw_dataset)
     plan = _build_pipeline_plan(cfg, grid_run_id, child_execution='logging')
@@ -1672,10 +1679,11 @@ def _enqueue_pipeline_seed_run(*, cfg: Any, grid_run_id: str) -> dict[str, Any]:
 def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run_id: str) -> dict[str, Any]:
     if ctx.task is None:
         raise RuntimeError('Current pipeline controller task is missing.')
+    is_seed_materialization = _current_pipeline_task_is_seed_materialization(ctx.task, cfg)
     contract = _resolve_visible_pipeline_run_contract(
         cfg=cfg,
         grid_run_id=grid_run_id,
-        allow_placeholder_raw_dataset=_current_pipeline_task_is_seed(ctx.task),
+        allow_placeholder_raw_dataset=is_seed_materialization,
     )
     pipeline_task_id = clearml_task_id(ctx.task)
     runtime_defaults = _build_pipeline_template_runtime_defaults(
@@ -1685,7 +1693,7 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
         pipeline_profile=contract.pipeline_profile,
         pipeline_task_id=pipeline_task_id,
     )
-    if pipeline_task_id:
+    if pipeline_task_id and not is_seed_materialization:
         runtime_defaults = _apply_visible_pipeline_run_defaults(target=ctx.task, task_id=pipeline_task_id, cfg=cfg, contract=contract, grid_run_id=grid_run_id)
     controller = load_pipeline_controller_from_task(source_task=ctx.task)
     default_execution_queue = (

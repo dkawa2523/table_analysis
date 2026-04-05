@@ -148,10 +148,12 @@ def _assert_visible_pipeline_seed_lookup() -> None:
         "artifacts": pipeline_template_module._task_artifact_names,
         "mismatch": pipeline_template_module.clearml_script_mismatches,
         "spec": pipeline_template_module.resolve_clearml_script_spec,
+        "versions": pipeline_template_module.resolve_version_props,
     }
 
     class _FakeTask:
-        pass
+        def get_parameters(self) -> dict[str, str]:
+            return {"properties/code_version": "current-version"}
 
     task = _FakeTask()
 
@@ -180,6 +182,7 @@ def _assert_visible_pipeline_seed_lookup() -> None:
         }
         pipeline_template_module.clearml_script_mismatches = lambda expected, actual: False
         pipeline_template_module.resolve_clearml_script_spec = lambda *args, **kwargs: {"entry_point": "tools/clearml_entrypoint.py"}
+        pipeline_template_module.resolve_version_props = lambda cfg, clearml_enabled=True: {"code_version": "current-version"}
         task_id = pipeline_template_module.resolve_pipeline_seed_task_id(
             {
                 "run": {
@@ -209,6 +212,7 @@ def _assert_visible_pipeline_seed_lookup() -> None:
         pipeline_template_module._task_artifact_names = original["artifacts"]
         pipeline_template_module.clearml_script_mismatches = original["mismatch"]
         pipeline_template_module.resolve_clearml_script_spec = original["spec"]
+        pipeline_template_module.resolve_version_props = original["versions"]
 
 
 def _assert_visible_pipeline_seed_lookup_rejects_stale_version() -> None:
@@ -222,10 +226,12 @@ def _assert_visible_pipeline_seed_lookup_rejects_stale_version() -> None:
         "artifacts": pipeline_template_module._task_artifact_names,
         "mismatch": pipeline_template_module.clearml_script_mismatches,
         "spec": pipeline_template_module.resolve_clearml_script_spec,
+        "versions": pipeline_template_module.resolve_version_props,
     }
 
     class _FakeTask:
-        pass
+        def get_parameters(self) -> dict[str, str]:
+            return {"properties/code_version": "stale-version"}
 
     task = _FakeTask()
 
@@ -252,11 +258,12 @@ def _assert_visible_pipeline_seed_lookup_rejects_stale_version() -> None:
             "manifest.json",
             "config_resolved.yaml",
         }
-        pipeline_template_module.clearml_script_mismatches = (
-            lambda expected, actual: ["version_num mismatch: stale -> current"]
-        )
+        pipeline_template_module.clearml_script_mismatches = lambda expected, actual: False
         pipeline_template_module.resolve_clearml_script_spec = (
             lambda *args, **kwargs: {"entry_point": "tools/clearml_entrypoint.py"}
+        )
+        pipeline_template_module.resolve_version_props = (
+            lambda cfg, clearml_enabled=True: {"code_version": "current-version"}
         )
         try:
             pipeline_template_module.resolve_pipeline_seed_task_id(
@@ -283,6 +290,7 @@ def _assert_visible_pipeline_seed_lookup_rejects_stale_version() -> None:
         pipeline_template_module._task_artifact_names = original["artifacts"]
         pipeline_template_module.clearml_script_mismatches = original["mismatch"]
         pipeline_template_module.resolve_clearml_script_spec = original["spec"]
+        pipeline_template_module.resolve_version_props = original["versions"]
 
 
 def _assert_project_layout_contract() -> None:
