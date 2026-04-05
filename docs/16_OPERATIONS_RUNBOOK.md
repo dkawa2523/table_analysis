@@ -35,7 +35,8 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 3. 必要な card を開いて `NEW RUN` を選ぶ
 4. `Configuration > OperatorInputs` を先に確認し、`run.usecase_id` と `data.raw_dataset_id` の想定値を把握する
 5. `data.raw_dataset_id` が placeholder のままなら、対応する `Hyperparameters` 側の値を既存 raw dataset id へ置き換える
-6. 実行する
+6. `run.usecase_id` を明示しない場合は seed 既定値 `TabularAnalysis` のままでもよく、その場合は runtime が `run.usecase_id_policy` に従って一意な値へ自動採番する
+7. 実行する
 
 ### seed profile の使い分け
 
@@ -51,6 +52,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 - seed pipeline の DAG は profile ごとに固定です
 - 標準 pipeline は `data.raw_dataset_id` 指定前提で、`dataset_register` は準備系導線です
 - UI から安全に編集する対象は `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants` に絞ります
+- `run.usecase_id` は毎回固有にするのが推奨です。未編集で seed 既定値 `TabularAnalysis` のまま起動した場合も、actual run では自動採番されるため古い task と混ざりにくくなります
 - `train_ensemble_full` だけは追加で `ensemble.selection.enabled_methods`, `ensemble.top_k` を編集対象にします
 - `pipeline.model_set` や `pipeline.grid.model_variants` を UI で変えて custom graph を作る運用は行いません
 - custom な task 組み合わせを試すときは developer 向けの CLI / config 変更で扱います

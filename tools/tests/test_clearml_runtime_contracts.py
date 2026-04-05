@@ -1221,7 +1221,11 @@ def _assert_ui_clone_cfg_normalization_clears_seed_only_defaults() -> None:
         {
             "data": {"raw_dataset_id": "dataset-123"},
             "pipeline": {"plan_only": True, "dry_run": True, "plan": True},
-            "run": {"grid_run_id": "seed__train_ensemble_full"},
+            "run": {
+                "grid_run_id": "seed__train_ensemble_full",
+                "usecase_id": "TabularAnalysis",
+                "clearml": {"template_usecase_id": "TabularAnalysis"},
+            },
         }
     )
     pipeline_module._normalize_ui_cloned_pipeline_cfg(cfg)
@@ -1229,12 +1233,20 @@ def _assert_ui_clone_cfg_normalization_clears_seed_only_defaults() -> None:
         raise AssertionError(f"actual UI clone should clear seed-only plan flags: {OmegaConf.to_container(cfg, resolve=False)}")
     if cfg.run.grid_run_id != "":
         raise AssertionError(f"actual UI clone should drop the inherited seed grid id: {OmegaConf.to_container(cfg, resolve=False)}")
+    if cfg.run.usecase_id != "":
+        raise AssertionError(
+            "actual UI clone should clear the seed default usecase_id so runtime identity can auto-generate a unique one"
+        )
 
     seed_cfg = OmegaConf.create(
         {
             "data": {"raw_dataset_id": "REPLACE_WITH_EXISTING_RAW_DATASET_ID"},
             "pipeline": {"plan_only": True},
-            "run": {"grid_run_id": "seed__train_ensemble_full"},
+            "run": {
+                "grid_run_id": "seed__train_ensemble_full",
+                "usecase_id": "TabularAnalysis",
+                "clearml": {"template_usecase_id": "TabularAnalysis"},
+            },
         }
     )
     pipeline_module._normalize_ui_cloned_pipeline_cfg(seed_cfg)
@@ -1242,6 +1254,23 @@ def _assert_ui_clone_cfg_normalization_clears_seed_only_defaults() -> None:
         raise AssertionError("seed placeholder runs must keep plan_only intact")
     if seed_cfg.run.grid_run_id != "seed__train_ensemble_full":
         raise AssertionError("seed placeholder runs must keep the seed grid id intact")
+    if seed_cfg.run.usecase_id != "TabularAnalysis":
+        raise AssertionError("seed placeholder runs must keep the template usecase_id intact")
+
+    explicit_cfg = OmegaConf.create(
+        {
+            "data": {"raw_dataset_id": "dataset-123"},
+            "pipeline": {"plan_only": False},
+            "run": {
+                "grid_run_id": "seed__train_ensemble_full",
+                "usecase_id": "ui_train_ensemble_full_20260405_2200",
+                "clearml": {"template_usecase_id": "TabularAnalysis"},
+            },
+        }
+    )
+    pipeline_module._normalize_ui_cloned_pipeline_cfg(explicit_cfg)
+    if explicit_cfg.run.usecase_id != "ui_train_ensemble_full_20260405_2200":
+        raise AssertionError("explicit UI usecase_id must be preserved")
 
 
 def _assert_pipeline_run_task_identity_moves_seed_clone_to_run_project() -> None:

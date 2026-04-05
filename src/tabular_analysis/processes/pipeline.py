@@ -436,10 +436,20 @@ def _visible_pipeline_project(cfg: Any) -> str:
     )
 
 
+def _ui_clone_should_autogenerate_usecase_id(cfg: Any) -> bool:
+    usecase_id = _normalize_str(_cfg_value(cfg, 'run.usecase_id'))
+    if not usecase_id:
+        return False
+    template_usecase_id = _normalize_str(_cfg_value(cfg, 'run.clearml.template_usecase_id')) or 'TabularAnalysis'
+    return usecase_id == template_usecase_id
+
+
 def _normalize_ui_cloned_pipeline_cfg(cfg: Any) -> None:
     raw_dataset_id = _normalize_str(_cfg_value(cfg, 'data.raw_dataset_id'))
     if not raw_dataset_id or is_pipeline_placeholder_raw_dataset_id(raw_dataset_id):
         return
+    if _ui_clone_should_autogenerate_usecase_id(cfg):
+        _set_cfg_value(cfg, 'run.usecase_id', '')
     if resolve_pipeline_plan_only(cfg):
         _set_cfg_value(cfg, 'pipeline.plan_only', False)
         _set_cfg_value(cfg, 'pipeline.dry_run', False)
