@@ -841,6 +841,24 @@ def _pipeline_parameter_keys(task: Any) -> set[str]:
     return keys
 
 
+def _pipeline_disallowed_arg_keys(task: Any) -> set[str]:
+    disallowed = {
+        "ops/clearml_policy",
+        "ops/usecase_id_policy",
+        "ops.clearml_policy",
+        "ops.usecase_id_policy",
+    }
+    hits: set[str] = set()
+    for text in _iter_parameter_paths(_task_parameters(task)):
+        value = str(text)
+        if not value.startswith("Args/"):
+            continue
+        arg_key = value.split("/", 1)[1]
+        if arg_key in disallowed:
+            hits.add(arg_key)
+    return hits
+
+
 def _deprecated_pipeline_project_name(project_name: str) -> str:
     text = str(project_name).rstrip("/")
     for (source, target) in (
@@ -1105,6 +1123,9 @@ def _pipeline_seed_drift_reasons(
     missing_param_keys = sorted(expected_param_keys - actual_param_keys)
     if missing_param_keys:
         reasons.append(f"missing editable params {missing_param_keys}")
+    disallowed_arg_keys = sorted(_pipeline_disallowed_arg_keys(task))
+    if disallowed_arg_keys:
+        reasons.append(f"stale policy args {disallowed_arg_keys}")
     runtime = _task_runtime(task)
     pipeline_hash = str(runtime.get("_pipeline_hash") or "").strip()
     if not pipeline_hash:
@@ -1136,6 +1157,10 @@ def _pipeline_seed_drift_reasons(
             if missing_operator_keys:
                 reasons.append(f"missing OperatorInputs keys {missing_operator_keys}")
     return reasons
+
+
+def _pipeline_seed_requires_recreate(reasons: Iterable[str]) -> bool:
+    return any("stale policy args" in str(reason) for reason in reasons)
 
 
 def _restore_pipeline_seed_task(
@@ -1353,7 +1378,8 @@ def _upsert_pipeline_seed(
     if existing_id:
         try:
             task = _load_clearml_task(str(existing_id))
-            if not _pipeline_seed_drift_reasons(task, task_id=str(existing_id), resolved=resolved):
+            reasons = _pipeline_seed_drift_reasons(task, task_id=str(existing_id), resolved=resolved)
+            if not reasons:
                 print(f"Reuse pipeline seed {spec.name}: {existing_id}")
                 lock_templates[spec.name] = _build_lock_template_entry(
                     existing=existing if isinstance(existing, dict) else None,
@@ -1365,9 +1391,14 @@ def _upsert_pipeline_seed(
                     kind="seed",
                 )
                 return
-            reset_clearml_task(str(existing_id), force=True)
-            controller = load_pipeline_controller_from_task(source_task_id=str(existing_id))
-            task_id = str(existing_id)
+            if _pipeline_seed_requires_recreate(reasons):
+                actual_project = clearml_task_project_name(task)
+                _deprecate_pipeline_task(str(existing_id), actual_project=str(actual_project or ""))
+                print(f"Recreate pipeline seed {spec.name}: {', '.join(reasons)}")
+            else:
+                reset_clearml_task(str(existing_id), force=True)
+                controller = load_pipeline_controller_from_task(source_task_id=str(existing_id))
+                task_id = str(existing_id)
         except Exception:
             try:
                 _deprecate_pipeline_task(str(existing_id))

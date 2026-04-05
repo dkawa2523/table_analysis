@@ -220,11 +220,35 @@ def _ensure_override(overrides: list[str], key: str, value: Any) -> None:
 
 
 def _hydra_task_overrides() -> list[str]:
+    def _normalize_group_override(text: str) -> str:
+        item = str(text).strip()
+        if not item or '=' not in item:
+            return item
+        (raw_key, value) = item.split('=', 1)
+        prefix = '+' if raw_key.startswith('+') else ''
+        key = raw_key.lstrip('+')
+        for group_prefix in ('ops.', 'group.'):
+            if key.startswith(group_prefix):
+                key = key.replace('.', '/', 1)
+                break
+        return f'{prefix}{key}={value}'
+
     try:
         from hydra.core.hydra_config import HydraConfig
 
         task_overrides = getattr(getattr(HydraConfig.get(), 'overrides', None), 'task', None) or []
-        return [str(item) for item in task_overrides if item]
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in task_overrides:
+            if not item:
+                continue
+            candidate = _normalize_group_override(str(item))
+            key = candidate.split('=', 1)[0].strip().lstrip('+~')
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(candidate)
+        return normalized
     except (ImportError, AttributeError, TypeError, ValueError):
         return []
 
@@ -255,9 +279,6 @@ def _collect_run_overrides(cfg: Any, grid_run_id: str, *, child_execution: str |
     overrides['run.usecase_id'] = getattr(run_cfg, 'usecase_id', None)
     overrides['run.schema_version'] = getattr(run_cfg, 'schema_version', None)
     overrides['run.retrain_run_id'] = getattr(run_cfg, 'retrain_run_id', None)
-    policy_cfg = getattr(run_cfg, 'usecase_id_policy', None)
-    if getattr(policy_cfg, 'name', None):
-        overrides['ops/usecase_id_policy'] = getattr(policy_cfg, 'name')
     clearml_cfg = getattr(run_cfg, 'clearml', None)
     if clearml_cfg is not None:
         overrides['run.clearml.enabled'] = bool(getattr(clearml_cfg, 'enabled', False))
@@ -289,9 +310,6 @@ def _collect_run_overrides(cfg: Any, grid_run_id: str, *, child_execution: str |
         extra_tags = getattr(clearml_cfg, 'extra_tags', None)
         if extra_tags:
             overrides['run.clearml.extra_tags'] = list(extra_tags)
-        clearml_policy = getattr(clearml_cfg, 'policy', None)
-        if getattr(clearml_policy, 'name', None):
-            overrides['ops/clearml_policy'] = getattr(clearml_policy, 'name')
     return overrides
 def _collect_data_overrides(cfg: Any) -> dict[str, Any]:
     data_cfg = getattr(cfg, 'data', None)
@@ -1629,6 +1647,26 @@ def _run_clearml_pipeline_impl(cfg: Any, grid_run_id: str, *, use_templates: boo
     (dataset_register_ref, preprocess_refs, train_refs, train_ensemble_refs, leaderboard_ref, infer_ref) = _build_clearml_pipeline_refs(plan_only=plan['plan_only'], steps=steps, step_task_ids=step_task_ids)
     summary = _build_local_pipeline_run_summary(cfg=cfg, plan=plan, grid_run_id=grid_run_id, dataset_register_ref=dataset_register_ref, preprocess_refs=preprocess_refs, train_refs=train_refs, train_ensemble_refs=train_ensemble_refs, leaderboard_ref=leaderboard_ref, infer_ref=infer_ref, executed_jobs=executed_jobs)
     return _finalize_pipeline_run_summary(cfg, summary)
+
+
+def _sanitize_pipeline_controller_task_after_run(*, cfg: Any, task: Any, grid_run_id: str, pipeline_task_id: str | None) -> None:
+    if task is None or not pipeline_task_id:
+        return
+    allow_placeholder = _current_pipeline_task_is_seed_materialization(task, cfg)
+    contract = _resolve_visible_pipeline_run_contract(
+        cfg=cfg,
+        grid_run_id=grid_run_id,
+        allow_placeholder_raw_dataset=allow_placeholder,
+    )
+    _apply_visible_pipeline_run_defaults(
+        target=task,
+        task_id=pipeline_task_id,
+        cfg=cfg,
+        contract=contract,
+        grid_run_id=grid_run_id,
+    )
+
+
 def _create_pipeline_controller_runtime_context(cfg: Any) -> TaskContext:
     stage = getattr(getattr(cfg, 'task', None), 'stage', '99_pipeline')
     pipeline_task_id = _normalize_str(_cfg_value(cfg, 'run.clearml.pipeline_task_id'))
@@ -1733,3 +1771,13 @@ def run(cfg: Any) -> None:
     }
     outputs = {'grid_run_id': grid_run_id, 'pipeline_run_path': str(pipeline_run_path), 'run_summary_path': str(run_summary_path)}
     emit_outputs_and_manifest(ctx, cfg, process='pipeline', out=out, inputs=inputs, outputs=outputs, hash_payloads={'config_hash': ('config', cfg), 'split_hash': ('split', {}), 'recipe_hash': ('recipe', {})}, clearml_enabled=clearml_enabled)
+    if clearml_enabled and execution == 'pipeline_controller':
+        try:
+            _sanitize_pipeline_controller_task_after_run(
+                cfg=cfg,
+                task=ctx.task,
+                grid_run_id=grid_run_id,
+                pipeline_task_id=pipeline_task_id,
+            )
+        except Exception as exc:
+            print(f'[warn] failed to sanitize pipeline controller task parameters: {exc}')

@@ -516,6 +516,91 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
         raise AssertionError("CLI key extraction must treat +override and plain override as the same key")
 
 
+def _assert_pipeline_hydra_override_normalization() -> None:
+    class _FakeHydraConfig:
+        @staticmethod
+        def get() -> object:
+            return type(
+                "_FakeHydra",
+                (),
+                {
+                    "overrides": type(
+                        "_FakeOverrides",
+                        (),
+                        {
+                            "task": [
+                                "ops.clearml_policy=test_minimal",
+                                "ops/clearml_policy=test_minimal",
+                                "+group.custom=demo",
+                                "+group/custom=demo",
+                                "run.usecase_id=my_run",
+                            ]
+                        },
+                    )()
+                },
+            )()
+
+    import sys
+    import types
+
+    hydra_pkg = types.ModuleType("hydra")
+    hydra_core_pkg = types.ModuleType("hydra.core")
+    hydra_config_pkg = types.ModuleType("hydra.core.hydra_config")
+    hydra_config_pkg.HydraConfig = _FakeHydraConfig
+    original_hydra = sys.modules.get("hydra")
+    original_hydra_core = sys.modules.get("hydra.core")
+    original = sys.modules.get("hydra.core.hydra_config")
+    sys.modules["hydra"] = hydra_pkg
+    sys.modules["hydra.core"] = hydra_core_pkg
+    sys.modules["hydra.core.hydra_config"] = hydra_config_pkg
+    try:
+        normalized = pipeline_module._hydra_task_overrides()
+    finally:
+        if original_hydra is not None:
+            sys.modules["hydra"] = original_hydra
+        else:
+            sys.modules.pop("hydra", None)
+        if original_hydra_core is not None:
+            sys.modules["hydra.core"] = original_hydra_core
+        else:
+            sys.modules.pop("hydra.core", None)
+        if original is not None:
+            sys.modules["hydra.core.hydra_config"] = original
+        else:
+            sys.modules.pop("hydra.core.hydra_config", None)
+    if normalized.count("ops/clearml_policy=test_minimal") != 1:
+        raise AssertionError(f"group overrides must normalize to slash form exactly once: {normalized}")
+    if normalized.count("+group/custom=demo") != 1:
+        raise AssertionError(f"appended group overrides must normalize to slash form exactly once: {normalized}")
+    if any(item.startswith("ops.clearml_policy=") for item in normalized):
+        raise AssertionError(f"dotted ops overrides must be removed: {normalized}")
+
+
+def _assert_pipeline_run_overrides_drop_policy_groups() -> None:
+    cfg = OmegaConf.create(
+        {
+            "run": {
+                "usecase_id": "demo",
+                "schema_version": "v1",
+                "retrain_run_id": None,
+                "usecase_id_policy": {"name": "test_dataset_timestamp"},
+                "clearml": {
+                    "enabled": True,
+                    "execution": "pipeline_controller",
+                    "project_root": "LOCAL2",
+                    "queue_name": "controller",
+                    "clone_from_task_id": None,
+                    "extra_tags": ["tag-a"],
+                    "policy": {"name": "test_minimal"},
+                },
+            }
+        }
+    )
+    overrides = pipeline_module._collect_run_overrides(cfg, "grid-demo")
+    if "ops/usecase_id_policy" in overrides or "ops/clearml_policy" in overrides:
+        raise AssertionError(f"pipeline run overrides must not persist policy group overrides into Args: {overrides}")
+
+
 def _assert_reset_clearml_task_args_replaces_stale_args() -> None:
     class _FakeTask:
         def __init__(self) -> None:
@@ -2443,6 +2528,8 @@ def main() -> int:
     _assert_runtime_tag_filter_contract()
     _assert_task_time_extras()
     _assert_entrypoint_reads_clearml_slash_overrides()
+    _assert_pipeline_hydra_override_normalization()
+    _assert_pipeline_run_overrides_drop_policy_groups()
     _assert_reset_clearml_task_args_replaces_stale_args()
     _assert_set_clearml_task_parameters_normalizes_encoded_section_keys()
     _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads()
