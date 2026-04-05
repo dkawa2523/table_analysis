@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _normalize_str
+from .templates import _locked_template_entry
 from ..ops.clearml_identity import (
     build_pipeline_seed_project_name as _build_pipeline_seed_project_name,
     build_runtime_properties,
@@ -279,6 +280,11 @@ def resolve_pipeline_seed_task_id(
         task_id = clearml_task_id(task)
         if task_id:
             return task_id
+    if not tasks:
+        locked_entry = _locked_template_entry(profile)
+        locked_task_id = _normalize_str(locked_entry.get('task_id'))
+        if locked_task_id:
+            return locked_task_id
     raise RuntimeError(
         'Pipeline seed task not found for '
         f'project={project_name}, pipeline_profile={profile}, required_tags={required_tags}. '

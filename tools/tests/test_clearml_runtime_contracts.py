@@ -137,6 +137,44 @@ def _assert_strict_template_lookup() -> None:
         template_module.resolve_clearml_script_spec = original["spec"]
 
 
+def _assert_template_lookup_falls_back_to_lock_task_id() -> None:
+    original = {
+        "list": template_module.list_clearml_tasks_by_tags,
+        "status": template_module.clearml_task_status_from_obj,
+        "tags": template_module.clearml_task_tags,
+        "script": template_module.clearml_task_script,
+        "id": template_module.clearml_task_id,
+        "mismatch": template_module.clearml_script_mismatches,
+        "spec": template_module.resolve_clearml_script_spec,
+        "lock": template_module._locked_template_entry,
+    }
+
+    try:
+        template_module.list_clearml_tasks_by_tags = lambda tags, project_name=None: []
+        template_module.clearml_task_status_from_obj = lambda task_obj: "created"
+        template_module.clearml_task_tags = lambda task_obj: []
+        template_module.clearml_task_script = lambda task_obj: {}
+        template_module.clearml_task_id = lambda task_obj: None
+        template_module.clearml_script_mismatches = lambda expected, actual: False
+        template_module.resolve_clearml_script_spec = lambda *args, **kwargs: {"entry_point": "tools/clearml_entrypoint.py"}
+        template_module._locked_template_entry = lambda process: {"task_id": "locked-template-123"} if str(process) == "preprocess" else {}
+        task_id = template_module.resolve_template_task_id(
+            {"run": {"clearml": {"project_root": "LOCAL2", "template_set_id": "default"}}, "task": {"name": "preprocess"}},
+            "preprocess",
+        )
+        if task_id != "locked-template-123":
+            raise AssertionError(f"template resolver should fall back to lock task id: {task_id}")
+    finally:
+        template_module.list_clearml_tasks_by_tags = original["list"]
+        template_module.clearml_task_status_from_obj = original["status"]
+        template_module.clearml_task_tags = original["tags"]
+        template_module.clearml_task_script = original["script"]
+        template_module.clearml_task_id = original["id"]
+        template_module.clearml_script_mismatches = original["mismatch"]
+        template_module.resolve_clearml_script_spec = original["spec"]
+        template_module._locked_template_entry = original["lock"]
+
+
 def _assert_visible_pipeline_seed_lookup() -> None:
     calls: list[list[str]] = []
     original = {
@@ -214,6 +252,53 @@ def _assert_visible_pipeline_seed_lookup() -> None:
         pipeline_template_module.clearml_script_mismatches = original["mismatch"]
         pipeline_template_module.resolve_clearml_script_spec = original["spec"]
         pipeline_template_module.resolve_version_props = original["versions"]
+
+
+def _assert_pipeline_seed_lookup_falls_back_to_lock_task_id() -> None:
+    original = {
+        "list": pipeline_template_module.list_clearml_tasks_by_tags,
+        "status": pipeline_template_module.clearml_task_status_from_obj,
+        "tags": pipeline_template_module.clearml_task_tags,
+        "script": pipeline_template_module.clearml_task_script,
+        "id": pipeline_template_module.clearml_task_id,
+        "runtime": pipeline_template_module._task_runtime,
+        "artifacts": pipeline_template_module._task_artifact_names,
+        "mismatch": pipeline_template_module.clearml_script_mismatches,
+        "spec": pipeline_template_module.resolve_clearml_script_spec,
+        "versions": pipeline_template_module.resolve_version_props,
+        "lock": pipeline_template_module._locked_template_entry,
+    }
+
+    try:
+        pipeline_template_module.list_clearml_tasks_by_tags = lambda tags, project_name=None: []
+        pipeline_template_module.clearml_task_status_from_obj = lambda task_obj: "completed"
+        pipeline_template_module.clearml_task_tags = lambda task_obj: []
+        pipeline_template_module.clearml_task_script = lambda task_obj: {}
+        pipeline_template_module.clearml_task_id = lambda task_obj: None
+        pipeline_template_module._task_runtime = lambda task_obj: {}
+        pipeline_template_module._task_artifact_names = lambda task_obj: set()
+        pipeline_template_module.clearml_script_mismatches = lambda expected, actual: False
+        pipeline_template_module.resolve_clearml_script_spec = lambda *args, **kwargs: {"entry_point": "tools/clearml_entrypoint.py"}
+        pipeline_template_module.resolve_version_props = lambda cfg, clearml_enabled=True: {"code_version": "current-version"}
+        pipeline_template_module._locked_template_entry = lambda name: {"task_id": "locked-seed-123"} if str(name) == "train_ensemble_full" else {}
+        task_id = pipeline_template_module.resolve_pipeline_seed_task_id(
+            {"run": {"clearml": {"project_root": "LOCAL2"}}},
+            pipeline_profile="train_ensemble_full",
+        )
+        if task_id != "locked-seed-123":
+            raise AssertionError(f"pipeline seed resolver should fall back to lock task id: {task_id}")
+    finally:
+        pipeline_template_module.list_clearml_tasks_by_tags = original["list"]
+        pipeline_template_module.clearml_task_status_from_obj = original["status"]
+        pipeline_template_module.clearml_task_tags = original["tags"]
+        pipeline_template_module.clearml_task_script = original["script"]
+        pipeline_template_module.clearml_task_id = original["id"]
+        pipeline_template_module._task_runtime = original["runtime"]
+        pipeline_template_module._task_artifact_names = original["artifacts"]
+        pipeline_template_module.clearml_script_mismatches = original["mismatch"]
+        pipeline_template_module.resolve_clearml_script_spec = original["spec"]
+        pipeline_template_module.resolve_version_props = original["versions"]
+        pipeline_template_module._locked_template_entry = original["lock"]
 
 
 def _assert_visible_pipeline_seed_lookup_rejects_stale_version() -> None:
@@ -2350,7 +2435,9 @@ def main() -> int:
     _assert_batch_execution_mode()
     _assert_rehearsal_sync_cfg_keeps_clearml_enabled()
     _assert_strict_template_lookup()
+    _assert_template_lookup_falls_back_to_lock_task_id()
     _assert_visible_pipeline_seed_lookup()
+    _assert_pipeline_seed_lookup_falls_back_to_lock_task_id()
     _assert_visible_pipeline_seed_lookup_rejects_stale_version()
     _assert_project_layout_contract()
     _assert_runtime_tag_filter_contract()
