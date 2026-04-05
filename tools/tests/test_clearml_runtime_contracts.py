@@ -211,6 +211,80 @@ def _assert_visible_pipeline_seed_lookup() -> None:
         pipeline_template_module.resolve_clearml_script_spec = original["spec"]
 
 
+def _assert_visible_pipeline_seed_lookup_rejects_stale_version() -> None:
+    original = {
+        "list": pipeline_template_module.list_clearml_tasks_by_tags,
+        "status": pipeline_template_module.clearml_task_status_from_obj,
+        "tags": pipeline_template_module.clearml_task_tags,
+        "script": pipeline_template_module.clearml_task_script,
+        "id": pipeline_template_module.clearml_task_id,
+        "runtime": pipeline_template_module._task_runtime,
+        "artifacts": pipeline_template_module._task_artifact_names,
+        "mismatch": pipeline_template_module.clearml_script_mismatches,
+        "spec": pipeline_template_module.resolve_clearml_script_spec,
+    }
+
+    class _FakeTask:
+        pass
+
+    task = _FakeTask()
+
+    try:
+        pipeline_template_module.list_clearml_tasks_by_tags = lambda tags, project_name=None: [task]
+        pipeline_template_module.clearml_task_status_from_obj = lambda task_obj: "completed"
+        pipeline_template_module.clearml_task_tags = lambda task_obj: [
+            "usecase:TabularAnalysis",
+            "process:pipeline",
+            "schema:v1",
+            "template_set:default",
+            "solution:tabular-analysis",
+            "pipeline",
+            "task_kind:seed",
+            "pipeline_profile:pipeline",
+        ]
+        pipeline_template_module.clearml_task_script = lambda task_obj: {"entry_point": "tools/clearml_entrypoint.py"}
+        pipeline_template_module.clearml_task_id = lambda task_obj: "pipeline-seed-123"
+        pipeline_template_module._task_runtime = lambda task_obj: {"_pipeline_hash": "seed-hash"}
+        pipeline_template_module._task_artifact_names = lambda task_obj: {
+            "pipeline_run.json",
+            "run_summary.json",
+            "report.json",
+            "manifest.json",
+            "config_resolved.yaml",
+        }
+        pipeline_template_module.clearml_script_mismatches = (
+            lambda expected, actual: ["version_num mismatch: stale -> current"]
+        )
+        pipeline_template_module.resolve_clearml_script_spec = (
+            lambda *args, **kwargs: {"entry_point": "tools/clearml_entrypoint.py"}
+        )
+        try:
+            pipeline_template_module.resolve_pipeline_seed_task_id(
+                {
+                    "run": {
+                        "clearml": {
+                            "template_usecase_id": "TabularAnalysis",
+                            "template_set_id": "default",
+                        }
+                    }
+                },
+                pipeline_profile="pipeline",
+            )
+        except RuntimeError:
+            return
+        raise AssertionError("stale pipeline seed version should not be accepted")
+    finally:
+        pipeline_template_module.list_clearml_tasks_by_tags = original["list"]
+        pipeline_template_module.clearml_task_status_from_obj = original["status"]
+        pipeline_template_module.clearml_task_tags = original["tags"]
+        pipeline_template_module.clearml_task_script = original["script"]
+        pipeline_template_module.clearml_task_id = original["id"]
+        pipeline_template_module._task_runtime = original["runtime"]
+        pipeline_template_module._task_artifact_names = original["artifacts"]
+        pipeline_template_module.clearml_script_mismatches = original["mismatch"]
+        pipeline_template_module.resolve_clearml_script_spec = original["spec"]
+
+
 def _assert_project_layout_contract() -> None:
     cfg = OmegaConf.create(
         {
@@ -2014,6 +2088,7 @@ def main() -> int:
     _assert_rehearsal_sync_cfg_keeps_clearml_enabled()
     _assert_strict_template_lookup()
     _assert_visible_pipeline_seed_lookup()
+    _assert_visible_pipeline_seed_lookup_rejects_stale_version()
     _assert_project_layout_contract()
     _assert_runtime_tag_filter_contract()
     _assert_task_time_extras()

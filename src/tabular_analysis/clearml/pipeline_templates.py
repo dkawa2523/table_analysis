@@ -34,11 +34,7 @@ def _pipeline_seed_script_mismatches(spec: Any, script: dict[str, Any]) -> list[
     raw = clearml_script_mismatches(spec, script)
     if isinstance(raw, bool):
         return ["script mismatch"] if raw else []
-    return [
-        error
-        for error in raw
-        if not str(error).startswith("version_num mismatch:")
-    ]
+    return [str(error) for error in raw]
 
 
 def _task_runtime(task: Any) -> dict[str, Any]:

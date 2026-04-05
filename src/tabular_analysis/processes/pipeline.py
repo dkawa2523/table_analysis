@@ -1498,8 +1498,47 @@ def _build_pipeline_launch_summary(*, cfg: Any, plan: Mapping[str, Any], grid_ru
     return _finalize_pipeline_run_summary(cfg, summary, status='queued', queued_launch=True)
 
 
-def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str) -> _VisiblePipelineRunContract:
-    validate_pipeline_operator_inputs(cfg, allow_placeholder_raw_dataset=False)
+def _task_project_name(task: Any) -> str:
+    getter = getattr(task, 'get_project_name', None)
+    if callable(getter):
+        try:
+            return _normalize_str(getter()) or ''
+        except Exception:
+            return ''
+    return _normalize_str(getattr(task, 'project', None)) or ''
+
+
+def _task_tag_values(task: Any) -> list[str]:
+    getter = getattr(task, 'get_tags', None)
+    if callable(getter):
+        try:
+            values = getter()
+        except Exception:
+            values = None
+        if isinstance(values, (list, tuple, set)):
+            return [str(value) for value in values if value is not None]
+        if values is not None:
+            return [str(values)]
+    values = getattr(task, 'tags', None)
+    if isinstance(values, (list, tuple, set)):
+        return [str(value) for value in values if value is not None]
+    if values is not None:
+        return [str(values)]
+    return []
+
+
+def _current_pipeline_task_is_seed(task: Any) -> bool:
+    if task is None:
+        return False
+    tags = set(_task_tag_values(task))
+    if 'task_kind:seed' in tags:
+        return True
+    project_name = _task_project_name(task).replace('\\', '/')
+    return '/.pipelines/' in project_name
+
+
+def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str, allow_placeholder_raw_dataset: bool = False) -> _VisiblePipelineRunContract:
+    validate_pipeline_operator_inputs(cfg, allow_placeholder_raw_dataset=allow_placeholder_raw_dataset)
     plan = _build_pipeline_plan(cfg, grid_run_id, child_execution='logging')
     pipeline_profile = _resolve_pipeline_template_profile(cfg, plan)
     _assert_visible_pipeline_graph_contract(cfg=cfg, plan=plan, pipeline_profile=pipeline_profile)
@@ -1633,7 +1672,11 @@ def _enqueue_pipeline_seed_run(*, cfg: Any, grid_run_id: str) -> dict[str, Any]:
 def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run_id: str) -> dict[str, Any]:
     if ctx.task is None:
         raise RuntimeError('Current pipeline controller task is missing.')
-    contract = _resolve_visible_pipeline_run_contract(cfg=cfg, grid_run_id=grid_run_id)
+    contract = _resolve_visible_pipeline_run_contract(
+        cfg=cfg,
+        grid_run_id=grid_run_id,
+        allow_placeholder_raw_dataset=_current_pipeline_task_is_seed(ctx.task),
+    )
     pipeline_task_id = clearml_task_id(ctx.task)
     runtime_defaults = _build_pipeline_template_runtime_defaults(
         cfg=cfg,

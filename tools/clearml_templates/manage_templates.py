@@ -611,11 +611,7 @@ def _pipeline_seed_script_mismatches(spec: Any, script: Mapping[str, Any]) -> li
     raw = clearml_script_mismatches(spec, script)
     if isinstance(raw, bool):
         return ["script mismatch"] if raw else []
-    return [
-        error
-        for error in raw
-        if not str(error).startswith("version_num mismatch:")
-    ]
+    return [str(error) for error in raw]
 
 
 def _seed_runtime_defaults(seed_definition: Mapping[str, Any]) -> dict[str, Any]:
