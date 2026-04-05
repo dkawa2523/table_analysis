@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from .platform_adapter_core import PlatformAdapterError, _CLEARML_TASK_CACHE, _RECOVERABLE_ERRORS, _apply_clearml_files_host_substitution, _apply_clearml_task_args, _dedupe_tags, _existing_user_properties, _normalize_files_host, _normalize_requirement_lines, _resolve_clearml_task, _set_clearml_task_script, is_clearml_enabled
 def _get_clearml_task(task_id: str) -> Any:
     cached = _CLEARML_TASK_CACHE.get(task_id)
@@ -298,6 +298,29 @@ def set_clearml_task_entry_point(task_id: str, entry_point: str) -> None:
             payload[key] = value
     payload['entry_point'] = entry_point
     _set_clearml_task_script(task, payload)
+
+
+def _normalize_parameter_key(text: str) -> str:
+    return unquote(str(text).strip())
+
+
+def _normalize_parameter_payload(value: Any) -> Any:
+    if not isinstance(value, Mapping):
+        return value
+    normalized: dict[str, Any] = {}
+    priorities: dict[str, int] = {}
+    for (key, item) in value.items():
+        raw_key = str(key)
+        normalized_key = _normalize_parameter_key(raw_key)
+        priority = 10 if "%" in raw_key else 20
+        existing_priority = priorities.get(normalized_key, -1)
+        if existing_priority > priority:
+            continue
+        normalized[normalized_key] = _normalize_parameter_payload(item)
+        priorities[normalized_key] = priority
+    return normalized
+
+
 def set_clearml_task_parameters(task_id: str, parameters: Mapping[str, Any], *, section: str='Args') -> bool:
     if not parameters:
         return False
@@ -325,7 +348,11 @@ def set_clearml_task_parameters(task_id: str, parameters: Mapping[str, Any], *, 
             existing = None
     payload: dict[str, Any] = {}
     if isinstance(existing, Mapping):
-        payload.update(existing)
+        normalized_existing = _normalize_parameter_payload(existing)
+        if isinstance(normalized_existing, Mapping):
+            payload.update(normalized_existing)
+        else:
+            payload.update(existing)
     section_values: dict[str, Any] = {}
     if isinstance(payload.get(section), Mapping):
         section_values.update(dict(payload.get(section)))

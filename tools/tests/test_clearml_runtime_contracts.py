@@ -470,6 +470,67 @@ def _assert_reset_clearml_task_args_replaces_stale_args() -> None:
         raise AssertionError(f"reset_clearml_task_args must replace runtime args deterministically: {updated}")
 
 
+def _assert_set_clearml_task_parameters_normalizes_encoded_section_keys() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.payload = {
+                "clearml": {
+                    "run%2Eusecase_id": "TabularAnalysis",
+                    "run.usecase_id": "test_demo_20260405_2200",
+                },
+                "dataset": {
+                    "data%2Eraw_dataset_id": "REPLACE_WITH_EXISTING_RAW_DATASET_ID",
+                    "data.raw_dataset_id": "dataset-123",
+                },
+                "selection": {
+                    "pipeline%2Eselection%2Eenabled_model_variants": "[\"ridge\"]",
+                },
+            }
+            self.updated: dict[str, object] | None = None
+
+        def get_parameters_as_dict(self, cast: bool = False) -> dict[str, object]:
+            return dict(self.payload)
+
+        def set_parameters_as_dict(self, payload: dict[str, object]) -> None:
+            self.updated = dict(payload)
+            self.payload = dict(payload)
+
+    fake = _FakeTask()
+    originals = {
+        "_get_clearml_task": task_ops_module._get_clearml_task,
+    }
+    try:
+        task_ops_module._get_clearml_task = lambda _task_id: fake
+        changed = task_ops_module.set_clearml_task_parameters(
+            "task-123",
+            {"pipeline.profile": "train_ensemble_full"},
+            section="pipeline",
+        )
+    finally:
+        task_ops_module._get_clearml_task = originals["_get_clearml_task"]
+    if not changed:
+        raise AssertionError("set_clearml_task_parameters should report changes for encoded section cleanup")
+    updated = fake.updated or {}
+    clearml_section = updated.get("clearml") or {}
+    dataset_section = updated.get("dataset") or {}
+    selection_section = updated.get("selection") or {}
+    pipeline_section = updated.get("pipeline") or {}
+    if "run%2Eusecase_id" in clearml_section:
+        raise AssertionError(f"encoded clearml key must be removed: {updated}")
+    if clearml_section.get("run.usecase_id") != "test_demo_20260405_2200":
+        raise AssertionError(f"plain clearml key must win over encoded seed placeholder: {updated}")
+    if "data%2Eraw_dataset_id" in dataset_section:
+        raise AssertionError(f"encoded dataset key must be removed: {updated}")
+    if dataset_section.get("data.raw_dataset_id") != "dataset-123":
+        raise AssertionError(f"plain dataset key must be preserved: {updated}")
+    if "pipeline%2Eselection%2Eenabled_model_variants" in selection_section:
+        raise AssertionError(f"encoded selection key must be removed: {updated}")
+    if selection_section.get("pipeline.selection.enabled_model_variants") != "[\"ridge\"]":
+        raise AssertionError(f"selection section must keep the decoded key: {updated}")
+    if pipeline_section.get("pipeline.profile") != "train_ensemble_full":
+        raise AssertionError(f"target section update must still be applied: {updated}")
+
+
 def _assert_regression_model_set_contract() -> None:
     payload = OmegaConf.to_container(
         OmegaConf.load(_REPO / "conf" / "pipeline" / "model_sets" / "regression_all.yaml"),
@@ -2131,6 +2192,7 @@ def main() -> int:
     _assert_task_time_extras()
     _assert_entrypoint_reads_clearml_slash_overrides()
     _assert_reset_clearml_task_args_replaces_stale_args()
+    _assert_set_clearml_task_parameters_normalizes_encoded_section_keys()
     _assert_regression_model_set_contract()
     _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_profile_defaults_clear_stale_model_variants()

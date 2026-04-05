@@ -22,3 +22,7 @@ as visible controller tasks under their canonical seed and run projects.
 7. Run the cloned task, or launch the same profile from CLI with `run.clearml.execution=pipeline_controller`.
 8. Verify that the seed card remains visible in `.pipelines/<profile>` and the run controller remains visible in `Pipelines/Runs/<usecase_id>`.
 
+## Parameter display notes
+- Current seeds and newly created `NEW RUN` controllers normalize legacy percent-encoded keys such as `run%2Eusecase_id` into plain dotted keys.
+- Older historical runs can still show `%2E` noise in Hyperparameters because ClearML stores the cloned payload as-is; this is expected drift, not a current runtime failure.
+
