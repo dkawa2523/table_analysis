@@ -2,13 +2,13 @@
 
 ## まず確認する順番
 
-1. template を apply / validate したか
+1. seed / template を apply / validate したか
 2. queue に healthy worker がいるか
 3. task script の repo / branch / entrypoint は正しいか
 4. project / tags / metadata は想定どおりか
 5. optional dependency は足りているか
 
-## template refresh
+## seed / template refresh
 
 ```bash
 python tools/clearml_templates/manage_templates.py --apply --project-root LOCAL
@@ -25,9 +25,9 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 ### pipeline が Pipelines タブに出ない
 
-- visible pipeline template がない
-- pipeline project に `pipeline` system tag がない
-- template が `TaskTypes.controller` でない
+- `LOCAL/TabularAnalysis/.pipelines/<profile>` に seed pipeline card がない
+- seed pipeline の `process:pipeline` / `task_kind:seed` / `pipeline_profile:<name>` が崩れている
+- seed pipeline が `TaskTypes.controller` でない
 
 ### child task の tags が汚れている
 

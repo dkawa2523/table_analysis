@@ -24,7 +24,7 @@ python tools/rehearsal/run_pipeline_v2.py \
   --project-root LOCAL
 ```
 
-## 3. visible pipeline template を使う controller 実行
+## 3. seed pipeline を使う controller 実行
 
 ```bash
 python tools/clearml_templates/manage_templates.py --apply --project-root LOCAL
@@ -102,7 +102,7 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.execution=logging \
   run.clearml.project_root=LOCAL \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  pipeline.preprocess_variant=stdscaler_ohe \
+  pipeline.selection.enabled_preprocess_variants=[stdscaler_ohe] \
   pipeline.model_set=regression_all
 ```
 
@@ -114,7 +114,7 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  pipeline.preprocess_variant=stdscaler_ohe \
+  pipeline.selection.enabled_preprocess_variants=[stdscaler_ohe] \
   pipeline.model_set=regression_all
 ```
 
@@ -125,12 +125,11 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
+  +pipeline.profile=train_ensemble_full \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  pipeline.preprocess_variant=stdscaler_ohe \
+  pipeline.selection.enabled_preprocess_variants=[stdscaler_ohe] \
   pipeline.model_set=regression_all \
-  pipeline.run_train_ensemble=true \
-  ensemble.enabled=true \
-  ensemble.methods=[mean_topk,weighted,stacking]
+  ensemble.selection.enabled_methods=[mean_topk,weighted,stacking]
 ```
 
 ## infer

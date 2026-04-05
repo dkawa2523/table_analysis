@@ -78,6 +78,7 @@ def _load_layout_tokens(repo: Path) -> dict[str, str]:
     layout_path = repo / "conf" / "clearml" / "project_layout.yaml"
     if not layout_path.exists():
         return {
+            "pipeline_seed_namespace": ".pipelines",
             "pipeline_root_group": "Pipelines",
             "pipeline_templates_group": "Templates",
             "templates_root_group": "Templates",
@@ -85,6 +86,7 @@ def _load_layout_tokens(repo: Path) -> dict[str, str]:
         }
     payload = _load_yaml(layout_path)
     return {
+        "pipeline_seed_namespace": str(payload.get("pipeline_seed_namespace") or ".pipelines"),
         "pipeline_root_group": str(payload.get("pipeline_root_group") or "Pipelines"),
         "pipeline_templates_group": str(payload.get("pipeline_templates_group") or "Templates"),
         "templates_root_group": str(payload.get("templates_root_group") or "Templates"),
@@ -156,22 +158,23 @@ def _validate_spec(repo: Path) -> None:
         expected_process = "pipeline" if name in PIPELINE_TEMPLATE_NAMES else str(name)
         _assert_contains(tags, f"process:{expected_process}")
         _assert_contains(tags, "schema:")
-        _assert_contains(tags, "task_kind:template")
+        expected_task_kind = "seed" if name in PIPELINE_TEMPLATE_NAMES else "template"
+        _assert_contains(tags, f"task_kind:{expected_task_kind}")
         if name in PIPELINE_TEMPLATE_NAMES:
             _assert_contains(tags, f"pipeline_profile:{name}")
             if "run.clearml.execution=pipeline_controller" not in [str(item) for item in overrides]:
-                raise AssertionError(f"pipeline template {name} must use run.clearml.execution=pipeline_controller")
+                raise AssertionError(f"pipeline seed {name} must use run.clearml.execution=pipeline_controller")
             if "pipeline.run_dataset_register=false" not in [str(item) for item in overrides]:
-                raise AssertionError(f"pipeline template {name} must pin pipeline.run_dataset_register=false")
+                raise AssertionError(f"pipeline seed {name} must pin pipeline.run_dataset_register=false")
             if any(str(item).startswith("+pipeline.model_set=") for item in overrides):
-                raise AssertionError(f"pipeline template {name} must not carry stale +pipeline.model_set overrides")
+                raise AssertionError(f"pipeline seed {name} must not carry stale +pipeline.model_set overrides")
             if any(
                 str(item).startswith(prefix)
                 for prefix in ("pipeline.model_variants=", "pipeline.grid.model_variants=")
                 for item in overrides
             ):
                 raise AssertionError(
-                    f"pipeline template {name} must not expose graph-shaping model variant overrides in spec defaults"
+                    f"pipeline seed {name} must not expose graph-shaping model variant overrides in spec defaults"
                 )
 
         for key in ("usecase_id", "process", "schema_version", "project_root", "template_set_id", "task_kind"):
@@ -179,19 +182,18 @@ def _validate_spec(repo: Path) -> None:
                 raise AssertionError(f"template {name} missing properties_minimal.{key}")
         if name in PIPELINE_TEMPLATE_NAMES:
             if props.get("process") != "pipeline":
-                raise AssertionError(f"pipeline template {name} properties_minimal.process must be pipeline")
-            if props.get("task_kind") != "template":
-                raise AssertionError(f"pipeline template {name} missing properties_minimal.task_kind=template")
+                raise AssertionError(f"pipeline seed {name} properties_minimal.process must be pipeline")
+            if props.get("task_kind") != "seed":
+                raise AssertionError(f"pipeline seed {name} missing properties_minimal.task_kind=seed")
             if props.get("pipeline_profile") != name:
-                raise AssertionError(f"pipeline template {name} missing properties_minimal.pipeline_profile={name}")
+                raise AssertionError(f"pipeline seed {name} missing properties_minimal.pipeline_profile={name}")
 
         project_key = "pipeline" if name in PIPELINE_TEMPLATE_NAMES else name
         if name in PIPELINE_TEMPLATE_NAMES:
             expected_tokens = [
-                layout_tokens["pipeline_root_group"],
-                layout_tokens["pipeline_templates_group"],
-                "{pipeline_root_group}",
-                "{pipeline_templates_group}",
+                "{pipeline_seed_namespace}",
+                f"/{layout_tokens['pipeline_seed_namespace'].strip('/')}/",
+                f"/{layout_tokens['pipeline_seed_namespace'].strip('/')}/{name}",
             ]
         else:
             stage = stage_map.get(project_key)

@@ -8,7 +8,7 @@ ensemble を標準運用にどう組み込むかを定義します。
 
 - 単体モデルが正本
 - ensemble は opt-in
-- full ensemble 運用は visible template `train_ensemble_full` を使う
+- full ensemble 運用は `LOCAL/TabularAnalysis/.pipelines/train_ensemble_full` の seed pipeline card から `NEW RUN` する
 
 ## supported methods
 

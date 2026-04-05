@@ -26,10 +26,12 @@ from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.reporting import pipeline_report as pipeline_report_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
 from tabular_analysis.processes.pipeline_support import (
+    PIPELINE_RAW_DATASET_ID_SENTINEL,
     apply_pipeline_profile_defaults,
     build_pipeline_template_defaults,
     resolve_pipeline_profile,
     resolve_pipeline_run_flags,
+    validate_pipeline_operator_inputs,
 )
 from tabular_analysis.registry.models import list_model_variants
 from tools.clearml_templates import manage_templates as manage_templates_module
@@ -134,7 +136,7 @@ def _assert_strict_template_lookup() -> None:
         template_module.resolve_clearml_script_spec = original["spec"]
 
 
-def _assert_visible_pipeline_template_lookup() -> None:
+def _assert_visible_pipeline_seed_lookup() -> None:
     calls: list[list[str]] = []
     original = {
         "list": pipeline_template_module.list_clearml_tasks_by_tags,
@@ -142,6 +144,8 @@ def _assert_visible_pipeline_template_lookup() -> None:
         "tags": pipeline_template_module.clearml_task_tags,
         "script": pipeline_template_module.clearml_task_script,
         "id": pipeline_template_module.clearml_task_id,
+        "runtime": pipeline_template_module._task_runtime,
+        "artifacts": pipeline_template_module._task_artifact_names,
         "mismatch": pipeline_template_module.clearml_script_mismatches,
         "spec": pipeline_template_module.resolve_clearml_script_spec,
     }
@@ -153,23 +157,30 @@ def _assert_visible_pipeline_template_lookup() -> None:
 
     try:
         pipeline_template_module.list_clearml_tasks_by_tags = lambda tags, project_name=None: calls.append(list(tags)) or [task]
-        pipeline_template_module.clearml_task_status_from_obj = lambda task_obj: "created"
+        pipeline_template_module.clearml_task_status_from_obj = lambda task_obj: "completed"
         pipeline_template_module.clearml_task_tags = lambda task_obj: [
-            "template:true",
             "usecase:TabularAnalysis",
             "process:pipeline",
             "schema:v1",
             "template_set:default",
             "solution:tabular-analysis",
             "pipeline",
-            "task_kind:template",
+            "task_kind:seed",
             "pipeline_profile:pipeline",
         ]
         pipeline_template_module.clearml_task_script = lambda task_obj: {"entry_point": "tools/clearml_entrypoint.py"}
-        pipeline_template_module.clearml_task_id = lambda task_obj: "pipeline-template-123"
+        pipeline_template_module.clearml_task_id = lambda task_obj: "pipeline-seed-123"
+        pipeline_template_module._task_runtime = lambda task_obj: {"_pipeline_hash": "seed-hash"}
+        pipeline_template_module._task_artifact_names = lambda task_obj: {
+            "pipeline_run.json",
+            "run_summary.json",
+            "report.json",
+            "manifest.json",
+            "config_resolved.yaml",
+        }
         pipeline_template_module.clearml_script_mismatches = lambda expected, actual: False
         pipeline_template_module.resolve_clearml_script_spec = lambda *args, **kwargs: {"entry_point": "tools/clearml_entrypoint.py"}
-        task_id = pipeline_template_module.resolve_pipeline_template_task_id(
+        task_id = pipeline_template_module.resolve_pipeline_seed_task_id(
             {
                 "run": {
                     "clearml": {
@@ -180,20 +191,22 @@ def _assert_visible_pipeline_template_lookup() -> None:
             },
             pipeline_profile="pipeline",
         )
-        if task_id != "pipeline-template-123":
-            raise AssertionError(f"unexpected pipeline template id: {task_id}")
+        if task_id != "pipeline-seed-123":
+            raise AssertionError(f"unexpected pipeline seed id: {task_id}")
         if len(calls) != 1:
-            raise AssertionError(f"pipeline template lookup should be strict and single-pass: {calls}")
+            raise AssertionError(f"pipeline seed lookup should be strict and single-pass: {calls}")
         tags = calls[0]
-        for required in ("process:pipeline", "pipeline", "task_kind:template", "pipeline_profile:pipeline", "template_set:default", "schema:v1"):
+        for required in ("process:pipeline", "pipeline", "task_kind:seed", "pipeline_profile:pipeline", "template_set:default", "schema:v1"):
             if required not in tags:
-                raise AssertionError(f"visible pipeline lookup missing {required}: {tags}")
+                raise AssertionError(f"visible pipeline seed lookup missing {required}: {tags}")
     finally:
         pipeline_template_module.list_clearml_tasks_by_tags = original["list"]
         pipeline_template_module.clearml_task_status_from_obj = original["status"]
         pipeline_template_module.clearml_task_tags = original["tags"]
         pipeline_template_module.clearml_task_script = original["script"]
         pipeline_template_module.clearml_task_id = original["id"]
+        pipeline_template_module._task_runtime = original["runtime"]
+        pipeline_template_module._task_artifact_names = original["artifacts"]
         pipeline_template_module.clearml_script_mismatches = original["mismatch"]
         pipeline_template_module.resolve_clearml_script_spec = original["spec"]
 
@@ -236,8 +249,8 @@ def _assert_project_layout_contract() -> None:
         raise AssertionError("step template project should resolve under Templates/Steps")
     if clearml_identity_module.build_project_name("LOCAL", "demo_usecase", "02_preprocess", process="preprocess", cfg=cfg) != "LOCAL/TabularAnalysis/Runs/demo_usecase/02_Preprocess":
         raise AssertionError("step run project should resolve under Runs/<usecase>")
-    if clearml_identity_module.build_pipeline_template_project_name("LOCAL", cfg=cfg) != "LOCAL/TabularAnalysis/Pipelines/Templates":
-        raise AssertionError("pipeline template project should resolve under Pipelines/Templates")
+    if clearml_identity_module.build_pipeline_template_project_name("LOCAL", pipeline_profile="pipeline", cfg=cfg) != "LOCAL/TabularAnalysis/.pipelines/pipeline":
+        raise AssertionError("pipeline seed project should resolve under .pipelines/<profile>")
     if clearml_identity_module.build_pipeline_run_project_name("LOCAL", "demo_usecase", cfg=cfg) != "LOCAL/TabularAnalysis/Pipelines/Runs/demo_usecase":
         raise AssertionError("pipeline run project should resolve under Pipelines/Runs/<usecase>")
 
@@ -307,15 +320,21 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
         raise AssertionError("slash-form ClearML args must normalize to Hydra dot overrides")
     if _normalize_loaded_override_key("ops/clearml_policy") != "ops/clearml_policy":
         raise AssertionError("config-group style ops overrides must preserve slash form")
+    if _normalize_loaded_override_key("run%2Egrid_run_id") != "run.grid_run_id":
+        raise AssertionError("percent-encoded dotted ClearML args must normalize to Hydra dot overrides")
+    if _normalize_loaded_override_key("group%2Fcustom") != "group/custom":
+        raise AssertionError("percent-encoded config-group overrides must preserve slash form")
     loaded: dict[str, str] = {}
-    _store_loaded_override(loaded, "data/raw_dataset_id", "template_raw_dataset")
-    _store_loaded_override(loaded, "data.raw_dataset_id", "runtime_dataset")
-    _store_loaded_override(loaded, "default_queue", "default")
-    _store_loaded_override(loaded, "+pipeline.model_set", "regression_all")
-    _store_loaded_override(loaded, "pipeline/model_set", "regression_all")
-    _store_loaded_override(loaded, "pipeline/profile", "train_ensemble_full")
+    priorities: dict[str, int] = {}
+    _store_loaded_override(loaded, "data/raw_dataset_id", "REPLACE_WITH_EXISTING_RAW_DATASET_ID", priorities=priorities)
+    _store_loaded_override(loaded, "data%2Eraw_dataset_id", "encoded_dataset", priorities=priorities)
+    _store_loaded_override(loaded, "data.raw_dataset_id", "runtime_dataset", priorities=priorities)
+    _store_loaded_override(loaded, "default_queue", "default", priorities=priorities)
+    _store_loaded_override(loaded, "+pipeline.model_set", "regression_all", priorities=priorities)
+    _store_loaded_override(loaded, "pipeline/model_set", "regression_all", priorities=priorities)
+    _store_loaded_override(loaded, "pipeline/profile", "train_ensemble_full", priorities=priorities)
     if loaded.get("data.raw_dataset_id") != "runtime_dataset":
-        raise AssertionError(f"dotted override must win over slash placeholder: {loaded}")
+        raise AssertionError(f"dotted override must win over encoded/slash placeholders: {loaded}")
     if "default_queue" in loaded:
         raise AssertionError(f"controller-only default_queue should not be forwarded to Hydra: {loaded}")
     if loaded.get("pipeline.model_set") != "regression_all":
@@ -737,23 +756,6 @@ def _assert_rehearsal_rebuild_pipeline_outputs_from_clearml() -> None:
             output_dir = Path(tmpdir)
             stage_dir = output_dir / "99_pipeline"
             stage_dir.mkdir(parents=True, exist_ok=True)
-            (stage_dir / "pipeline_run.json").write_text(
-                json.dumps(
-                    {
-                        "grid_run_id": "grid123",
-                        "plan_only": False,
-                        "planned_jobs": 2,
-                        "executed_jobs": 0,
-                        "skipped_due_to_policy": 0,
-                        "train_refs": [],
-                        "train_ensemble_refs": [],
-                        "status": "queued",
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
             summary = rehearsal_module._rebuild_pipeline_outputs_from_clearml(
                 repo=_REPO,
                 output_dir=output_dir,
@@ -764,13 +766,22 @@ def _assert_rehearsal_rebuild_pipeline_outputs_from_clearml() -> None:
             )
             if summary.get("status") != "completed":
                 raise AssertionError(f"rebuild should finalize completed status: {summary}")
+            if summary.get("planned_jobs") != 2:
+                raise AssertionError(f"rebuild should reconstruct planned_jobs from ClearML child tasks: {summary}")
             if summary.get("completed_jobs") != 2:
                 raise AssertionError(f"rebuild should count completed train jobs: {summary}")
             if len(summary.get("train_refs") or []) != 2:
                 raise AssertionError(f"rebuild should repopulate train refs: {summary}")
+            if summary.get("grid_run_id") != "grid123":
+                raise AssertionError(f"rebuild should recover grid_run_id from the controller tags: {summary}")
             report_payload = json.loads((stage_dir / "report.json").read_text(encoding="utf-8"))
             if report_payload.get("status") != "completed":
                 raise AssertionError(f"report.json should reflect rebuilt completed status: {report_payload}")
+            rebuilt_pipeline_run = json.loads((stage_dir / "pipeline_run.json").read_text(encoding="utf-8"))
+            if rebuilt_pipeline_run.get("completed_jobs") != 2:
+                raise AssertionError(
+                    f"rebuild should write pipeline_run.json from live ClearML state when synced artifacts are absent: {rebuilt_pipeline_run}"
+                )
     finally:
         platform_task_module.list_clearml_tasks_by_tags = original_platform["list"]
         platform_task_module.clearml_task_id = original_platform["id"]
@@ -1009,9 +1020,13 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
         def __init__(self) -> None:
             self._nodes = {"preprocess": object()}
             self.started = False
+            self.serialized = False
 
         def start_locally(self, *, run_pipeline_steps_locally: bool = False) -> None:
             self.started = True
+
+        def _serialize_pipeline_task(self) -> None:
+            self.serialized = True
 
     fake_controller = _FakeController()
     fake_task = _FakeTask()
@@ -1056,6 +1071,8 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
         summary = pipeline_module._execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id="grid-plan-only")
         if fake_controller.started:
             raise AssertionError("plan_only controller should not launch pipeline steps")
+        if not fake_controller.serialized:
+            raise AssertionError("plan_only controller should serialize the pipeline graph for UI visibility")
         if summary.get("status") != "planned":
             raise AssertionError(f"plan_only controller should return planned summary: {summary}")
         if summary.get("pipeline_task_id") != "controller-plan-only":
@@ -1110,11 +1127,110 @@ def _assert_pipeline_template_defaults_keep_plan_only() -> None:
         pipeline_task_id="controller-plan-only",
     )
     if defaults.get("pipeline.plan_only") is not True:
-        raise AssertionError(f"pipeline template defaults must preserve plan_only: {defaults}")
+        raise AssertionError(f"pipeline seed defaults must preserve plan_only: {defaults}")
     if defaults.get("pipeline.grid.model_variants") != ["ridge", "lgbm"]:
-        raise AssertionError(f"pipeline template defaults must keep requested model superset in grid.model_variants: {defaults}")
+        raise AssertionError(f"pipeline seed defaults must keep requested model superset in grid.model_variants: {defaults}")
     if defaults.get("pipeline.selection.enabled_model_variants") != ["ridge"]:
-        raise AssertionError(f"pipeline template defaults must expose active model subset via selection: {defaults}")
+        raise AssertionError(f"pipeline seed defaults must expose active model subset via selection: {defaults}")
+
+
+def _assert_ui_clone_cfg_normalization_clears_seed_only_defaults() -> None:
+    cfg = OmegaConf.create(
+        {
+            "data": {"raw_dataset_id": "dataset-123"},
+            "pipeline": {"plan_only": True, "dry_run": True, "plan": True},
+            "run": {"grid_run_id": "seed__train_ensemble_full"},
+        }
+    )
+    pipeline_module._normalize_ui_cloned_pipeline_cfg(cfg)
+    if pipeline_module.resolve_pipeline_plan_only(cfg):
+        raise AssertionError(f"actual UI clone should clear seed-only plan flags: {OmegaConf.to_container(cfg, resolve=False)}")
+    if cfg.run.grid_run_id != "":
+        raise AssertionError(f"actual UI clone should drop the inherited seed grid id: {OmegaConf.to_container(cfg, resolve=False)}")
+
+    seed_cfg = OmegaConf.create(
+        {
+            "data": {"raw_dataset_id": "REPLACE_WITH_EXISTING_RAW_DATASET_ID"},
+            "pipeline": {"plan_only": True},
+            "run": {"grid_run_id": "seed__train_ensemble_full"},
+        }
+    )
+    pipeline_module._normalize_ui_cloned_pipeline_cfg(seed_cfg)
+    if seed_cfg.pipeline.plan_only is not True:
+        raise AssertionError("seed placeholder runs must keep plan_only intact")
+    if seed_cfg.run.grid_run_id != "seed__train_ensemble_full":
+        raise AssertionError("seed placeholder runs must keep the seed grid id intact")
+
+
+def _assert_pipeline_run_task_identity_moves_seed_clone_to_run_project() -> None:
+    cfg = OmegaConf.create(
+        {
+            "run": {
+                "usecase_id": "ui_new_run_demo",
+                "schema_version": "v1",
+                "clearml": {
+                    "project_root": "LOCAL",
+                    "template_set_id": "default",
+                },
+            },
+            "exec_policy": {
+                "queues": {
+                    "default": "default",
+                    "train_model_heavy": "heavy-model",
+                }
+            },
+        }
+    )
+    captured: dict[str, object] = {}
+    originals = {
+        "set_project": pipeline_module.set_clearml_task_project,
+        "replace_tags": pipeline_module.replace_clearml_task_tags,
+        "ensure_tags": pipeline_module.ensure_clearml_task_tags,
+        "ensure_properties": pipeline_module.ensure_clearml_task_properties,
+    }
+    try:
+        pipeline_module.set_clearml_task_project = lambda task_id, project_name: captured.setdefault("project", (task_id, project_name)) or True
+        pipeline_module.replace_clearml_task_tags = lambda task_id, tags: captured.setdefault("tags", (task_id, list(tags))) or True
+        pipeline_module.ensure_clearml_task_tags = lambda task_id, tags: captured.setdefault("system_tags", (task_id, list(tags))) or True
+        pipeline_module.ensure_clearml_task_properties = (
+            lambda task_id, properties: captured.setdefault("properties", (task_id, dict(properties))) or True
+        )
+        pipeline_module._apply_pipeline_run_task_identity(
+            task_id="seed-clone-task",
+            cfg=cfg,
+            pipeline_profile="train_ensemble_full",
+            metadata={
+                "project_name": "LOCAL/TabularAnalysis/Pipelines/Runs/ui_new_run_demo",
+                "usecase_id": "ui_new_run_demo",
+                "tags": ["task_kind:seed", "usecase:TabularAnalysis", "template:true", "custom:keep"],
+                "user_properties": {"grid_run_id": "grid-ui", "base_template_task_id": "seed-base"},
+            },
+        )
+    finally:
+        pipeline_module.set_clearml_task_project = originals["set_project"]
+        pipeline_module.replace_clearml_task_tags = originals["replace_tags"]
+        pipeline_module.ensure_clearml_task_tags = originals["ensure_tags"]
+        pipeline_module.ensure_clearml_task_properties = originals["ensure_properties"]
+    if captured.get("project") != ("seed-clone-task", "LOCAL/TabularAnalysis/Pipelines/Runs/ui_new_run_demo"):
+        raise AssertionError(f"seed clone must move into the pipeline runs project: {captured}")
+    tag_payload = captured.get("tags")
+    if not isinstance(tag_payload, tuple):
+        raise AssertionError(f"runtime tags were not applied: {captured}")
+    tags = list(tag_payload[1])
+    for required in ("task_kind:run", "usecase:ui_new_run_demo", "pipeline_profile:train_ensemble_full", "custom:keep"):
+        if required not in tags:
+            raise AssertionError(f"runtime tag normalization missing {required}: {tags}")
+    for blocked in ("task_kind:seed", "usecase:TabularAnalysis", "template:true"):
+        if blocked in tags:
+            raise AssertionError(f"seed clone runtime tags must drop {blocked}: {tags}")
+    props_payload = captured.get("properties")
+    if not isinstance(props_payload, tuple):
+        raise AssertionError(f"runtime properties were not applied: {captured}")
+    properties = dict(props_payload[1])
+    if properties.get("task_kind") != "run":
+        raise AssertionError(f"runtime properties must mark cloned controller as run: {properties}")
+    if properties.get("usecase_id") != "ui_new_run_demo":
+        raise AssertionError(f"runtime properties must keep the actual UI usecase: {properties}")
 
 
 def _assert_pipeline_run_summary_tracks_actual_job_statuses() -> None:
@@ -1169,6 +1285,7 @@ def _assert_manage_templates_pipeline_properties_follow_resolved_context() -> No
         schema_version="v1",
         template_set_id="default",
         solution_root=defaults.solution_root,
+        pipeline_seed_namespace=defaults.pipeline_seed_namespace,
         pipeline_root_group=defaults.pipeline_root_group,
         pipeline_templates_group=defaults.pipeline_templates_group,
         pipeline_runs_group=defaults.pipeline_runs_group,
@@ -1189,8 +1306,124 @@ def _assert_manage_templates_pipeline_properties_follow_resolved_context() -> No
     )
     if resolved.expected_properties.get("project_root") != "LOCAL":
         raise AssertionError(
-            f"pipeline template properties must follow resolved context overrides: {resolved.expected_properties}"
+            f"pipeline seed properties must follow resolved context overrides: {resolved.expected_properties}"
         )
+
+
+def _assert_lock_context_payload_keeps_usecase_id() -> None:
+    ctx = manage_templates_module.PlanContext(
+        project_root="LOCAL",
+        usecase_id="TabularAnalysis",
+        schema_version="v1",
+        template_set_id="default",
+        solution_root="TabularAnalysis",
+        pipeline_seed_namespace=".pipelines",
+        pipeline_root_group="Pipelines",
+        pipeline_templates_group="Templates",
+        pipeline_runs_group="Runs",
+        templates_root_group="Templates",
+        step_templates_group="Steps",
+        runs_root_group="Runs",
+        group_map={},
+    )
+    payload = manage_templates_module._lock_context_payload(ctx)
+    if payload.get("usecase_id") != "TabularAnalysis":
+        raise AssertionError(f"lock context must preserve usecase_id: {payload}")
+    if payload.get("pipeline_seed_namespace") != ".pipelines":
+        raise AssertionError(f"lock context must preserve pipeline_seed_namespace: {payload}")
+    if payload.get("group_map") != {}:
+        raise AssertionError(f"lock context must preserve group_map: {payload}")
+
+
+def _assert_live_plan_context_prefers_lock_project_root() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        lock_path = Path(tmpdir) / "templates.lock.yaml"
+        lock_path.write_text(
+            "version: 2\ncontext:\n  project_root: LOCAL\n  usecase_id: TabularAnalysis\n  schema_version: v1\n  template_set_id: default\n  pipeline_seed_namespace: .pipelines\ntemplates: {}\n",
+            encoding="utf-8",
+        )
+        defaults = manage_templates_module.PlanContext(
+            project_root="MFG",
+            usecase_id="DefaultUsecase",
+            schema_version="v9",
+            template_set_id="fallback",
+            solution_root="TabularAnalysis",
+            pipeline_seed_namespace=".pipelines",
+            pipeline_root_group="Pipelines",
+            pipeline_templates_group="Templates",
+            pipeline_runs_group="Runs",
+            templates_root_group="Templates",
+            step_templates_group="Steps",
+            runs_root_group="Runs",
+            group_map={},
+        )
+        ctx = manage_templates_module._resolve_live_plan_context(
+            defaults=defaults,
+            lock_path=lock_path,
+            project_root=None,
+            usecase_id=None,
+            schema_version=None,
+            template_set_id=None,
+        )
+        if ctx.project_root != "LOCAL" or ctx.usecase_id != "TabularAnalysis":
+            raise AssertionError(f"live plan context must follow lock context: {ctx}")
+        if ctx.pipeline_seed_namespace != ".pipelines":
+            raise AssertionError(f"live plan context must preserve pipeline_seed_namespace: {ctx}")
+
+
+def _assert_live_plan_context_fails_on_layout_drift() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        lock_path = Path(tmpdir) / "templates.lock.yaml"
+        lock_path.write_text(
+            (
+                "version: 2\n"
+                "context:\n"
+                "  project_root: LOCAL\n"
+                "  usecase_id: TabularAnalysis\n"
+                "  schema_version: v1\n"
+                "  template_set_id: default\n"
+                "  solution_root: LegacySolution\n"
+                "  pipeline_seed_namespace: legacy.pipelines\n"
+                "  pipeline_root_group: Pipelines\n"
+                "  pipeline_templates_group: Templates\n"
+                "  pipeline_runs_group: Runs\n"
+                "  templates_root_group: Templates\n"
+                "  step_templates_group: Steps\n"
+                "  runs_root_group: Runs\n"
+                "  group_map: {}\n"
+                "templates: {}\n"
+            ),
+            encoding="utf-8",
+        )
+        defaults = manage_templates_module.PlanContext(
+            project_root="LOCAL",
+            usecase_id="TabularAnalysis",
+            schema_version="v1",
+            template_set_id="default",
+            solution_root="TabularAnalysis",
+            pipeline_seed_namespace=".pipelines",
+            pipeline_root_group="Pipelines",
+            pipeline_templates_group="Templates",
+            pipeline_runs_group="Runs",
+            templates_root_group="Templates",
+            step_templates_group="Steps",
+            runs_root_group="Runs",
+            group_map={},
+        )
+        try:
+            manage_templates_module._resolve_live_plan_context(
+                defaults=defaults,
+                lock_path=lock_path,
+                project_root=None,
+                usecase_id=None,
+                schema_version=None,
+                template_set_id=None,
+            )
+        except ValueError as exc:
+            if "Lock layout drift detected" not in str(exc):
+                raise AssertionError(f"unexpected layout drift error: {exc}")
+        else:
+            raise AssertionError("live plan context must fail when lock layout drifts")
 
 
 def _assert_visible_template_graph_mismatch_uses_default_profile_with_explicit_template_id() -> None:
@@ -1306,7 +1539,7 @@ def _assert_visible_template_clone_allows_selection_subset() -> None:
         raise AssertionError(f"selection subset must record disabled jobs: {plan}")
 
 
-def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
+def _assert_pipeline_seed_controller_uses_profile_model_set() -> None:
     repo = Path(__file__).resolve().parents[2]
     defaults = manage_templates_module._load_run_defaults(repo)
     ctx = manage_templates_module.PlanContext(
@@ -1315,6 +1548,7 @@ def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
         schema_version="v1",
         template_set_id="default",
         solution_root=defaults.solution_root,
+        pipeline_seed_namespace=defaults.pipeline_seed_namespace,
         pipeline_root_group=defaults.pipeline_root_group,
         pipeline_templates_group=defaults.pipeline_templates_group,
         pipeline_runs_group=defaults.pipeline_runs_group,
@@ -1371,11 +1605,17 @@ def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
         def create_draft(self) -> None:
             return None
 
+        def _verify(self) -> None:
+            return None
+
+        def _serialize_pipeline_task(self) -> None:
+            return None
+
     controller = _FakeController()
     original_resolve_base_task_id = pipeline_module._resolve_base_task_id
     try:
         pipeline_module._resolve_base_task_id = lambda *_args, **_kwargs: "template-base-task"
-        draft = pipeline_module.build_pipeline_template_draft(
+        draft = pipeline_module.build_pipeline_seed_controller(
             cfg=cfg,
             controller=controller,
             pipeline_profile="pipeline",
@@ -1383,11 +1623,14 @@ def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
     finally:
         pipeline_module._resolve_base_task_id = original_resolve_base_task_id
     if draft["shared_defaults"].get("pipeline.model_set") != "regression_all":
-        raise AssertionError(f"pipeline template defaults must pin regression_all: {draft['shared_defaults']}")
+        raise AssertionError(f"pipeline seed defaults must pin regression_all: {draft['shared_defaults']}")
+    if draft["shared_defaults"].get("data.raw_dataset_id") != PIPELINE_RAW_DATASET_ID_SENTINEL:
+        raise AssertionError(f"pipeline seed defaults must retain the raw dataset placeholder during seed materialization: {draft['shared_defaults']}")
     expected_variants = pipeline_module._resolve_model_set_variants("regression_all")
     if draft["shared_defaults"].get("pipeline.grid.model_variants") != expected_variants:
-        raise AssertionError(f"pipeline template defaults must expand the full regression profile: {draft['shared_defaults']}")
+        raise AssertionError(f"pipeline seed defaults must expand the full regression profile: {draft['shared_defaults']}")
     editable_defaults = draft.get("editable_defaults") or {}
+    operator_inputs = draft.get("operator_inputs") or {}
     for key in (
         "run.usecase_id",
         "data.raw_dataset_id",
@@ -1395,45 +1638,359 @@ def _assert_pipeline_template_draft_uses_profile_model_set() -> None:
         "pipeline.selection.enabled_model_variants",
     ):
         if key not in editable_defaults:
-            raise AssertionError(f"pipeline template draft must expose {key} as editable default: {draft}")
+            raise AssertionError(f"pipeline seed controller must expose {key} as editable default: {draft}")
     step_names = {str(item["name"]) for item in controller.steps}
     expected_train_steps = {f"train__stdscaler_ohe__{variant}" for variant in expected_variants}
     missing = sorted(expected_train_steps - step_names)
     if missing:
-        raise AssertionError(f"pipeline template draft must materialize the full regression graph: missing {missing}")
+        raise AssertionError(f"pipeline seed controller must materialize the full regression graph: missing {missing}")
     for required in ("preprocess__stdscaler_ohe", "leaderboard"):
         if required not in step_names:
-            raise AssertionError(f"pipeline template draft missing {required}: {sorted(step_names)}")
+            raise AssertionError(f"pipeline seed controller missing {required}: {sorted(step_names)}")
+    if "pipeline_run" not in draft or "report_bundle" not in draft:
+        raise AssertionError(f"pipeline seed controller must include pipeline report materialization payloads: {draft.keys()}")
+    if (((operator_inputs.get("pipeline") or {}).get("selection") or {}).get("enabled_model_variants")) != expected_variants:
+        raise AssertionError(f"operator inputs must mirror editable model selection: {operator_inputs}")
+
+
+def _assert_pipeline_operator_inputs_reject_placeholder_for_actual_runs() -> None:
+    placeholder_cfg = OmegaConf.create(
+        {
+            "task": {"name": "pipeline"},
+            "run": {"usecase_id": "demo_usecase"},
+            "data": {"raw_dataset_id": PIPELINE_RAW_DATASET_ID_SENTINEL},
+            "pipeline": {
+                "profile": "pipeline",
+                "run_dataset_register": False,
+                "run_preprocess": True,
+                "run_train": True,
+                "run_train_ensemble": False,
+                "run_leaderboard": True,
+                "run_infer": False,
+            },
+        }
+    )
+    try:
+        validate_pipeline_operator_inputs(placeholder_cfg, allow_placeholder_raw_dataset=False)
+    except ValueError as exc:
+        if "data.raw_dataset_id is still the seed placeholder" not in str(exc):
+            raise AssertionError(f"unexpected placeholder validation error: {exc}")
+    else:
+        raise AssertionError("actual pipeline runs must reject the seed raw_dataset placeholder")
+    validate_pipeline_operator_inputs(placeholder_cfg, allow_placeholder_raw_dataset=True)
+
+    empty_cfg = OmegaConf.create(
+        {
+            "task": {"name": "pipeline"},
+            "run": {"usecase_id": "demo_usecase"},
+            "data": {"raw_dataset_id": ""},
+            "pipeline": {
+                "profile": "pipeline",
+                "run_dataset_register": False,
+                "run_preprocess": True,
+                "run_train": True,
+                "run_train_ensemble": False,
+                "run_leaderboard": True,
+                "run_infer": False,
+            },
+        }
+    )
+    try:
+        validate_pipeline_operator_inputs(empty_cfg, allow_placeholder_raw_dataset=False)
+    except ValueError as exc:
+        if "data.raw_dataset_id is empty" not in str(exc):
+            raise AssertionError(f"unexpected empty raw_dataset_id validation error: {exc}")
+    else:
+        raise AssertionError("actual pipeline runs must reject an empty raw_dataset_id when dataset_register is disabled")
+
+
+def _assert_rehearsal_sync_pipeline_artifacts_missing_only_reuses_existing_outputs() -> None:
+    import tabular_analysis.platform_adapter_task as platform_task_module
+
+    original_get_copy = platform_task_module.get_task_artifact_local_copy
+    original_list_names = rehearsal_module._list_task_artifact_names
+    fetch_calls: list[str] = []
+    try:
+        platform_task_module.get_task_artifact_local_copy = lambda cfg, task_id, name: fetch_calls.append(str(name))  # type: ignore[assignment]
+        rehearsal_module._list_task_artifact_names = lambda task_id: {
+            "pipeline_run.json",
+            "run_summary.json",
+            "report.json",
+            "report.md",
+            "report_links.json",
+            "out.json",
+            "manifest.json",
+            "config_resolved.yaml",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            stage_dir = output_dir / "99_pipeline"
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            for name in (
+                "pipeline_run.json",
+                "run_summary.json",
+                "report.json",
+                "report.md",
+                "report_links.json",
+                "out.json",
+                "manifest.json",
+                "config_resolved.yaml",
+            ):
+                (stage_dir / name).write_text("{}", encoding="utf-8")
+            copied = rehearsal_module._sync_pipeline_artifacts(
+                _REPO,
+                output_dir,
+                "pipeline-task",
+                missing_only=True,
+            )
+            if set(copied) != {
+                "pipeline_run.json",
+                "run_summary.json",
+                "report.json",
+                "report.md",
+                "report_links.json",
+                "out.json",
+                "manifest.json",
+                "config_resolved.yaml",
+            }:
+                raise AssertionError(f"missing_only sync should reuse existing outputs: {copied}")
+            if fetch_calls:
+                raise AssertionError(f"missing_only sync should not fetch files that already exist: {fetch_calls}")
+    finally:
+        platform_task_module.get_task_artifact_local_copy = original_get_copy
+        rehearsal_module._list_task_artifact_names = original_list_names
 
 
 def _assert_lock_entry_preserves_updated_at_without_identity_change() -> None:
     existing = {
         "task_id": "task-123",
-        "project_name": "LOCAL/TabularAnalysis/Pipelines/Templates",
+        "project_name": "LOCAL/TabularAnalysis/.pipelines/pipeline",
         "task_name": "pipeline",
         "entrypoint": "python tools/clearml_entrypoint.py task=pipeline",
+        "kind": "seed",
         "updated_at": "2026-04-04T17:33:36Z",
     }
     payload = manage_templates_module._build_lock_template_entry(
         existing,
         task_id="task-123",
-        project_name="LOCAL/TabularAnalysis/Pipelines/Templates",
+        project_name="LOCAL/TabularAnalysis/.pipelines/pipeline",
         task_name="pipeline",
         entrypoint="python tools/clearml_entrypoint.py task=pipeline",
         now="2026-04-05T00:00:00Z",
+        kind="seed",
     )
     if payload.get("updated_at") != "2026-04-04T17:33:36Z":
         raise AssertionError(f"lock entry should preserve updated_at when identity is unchanged: {payload}")
     changed = manage_templates_module._build_lock_template_entry(
         existing,
         task_id="task-999",
-        project_name="LOCAL/TabularAnalysis/Pipelines/Templates",
+        project_name="LOCAL/TabularAnalysis/.pipelines/pipeline",
         task_name="pipeline",
         entrypoint="python tools/clearml_entrypoint.py task=pipeline",
         now="2026-04-05T00:00:00Z",
+        kind="seed",
     )
     if changed.get("updated_at") != "2026-04-05T00:00:00Z":
         raise AssertionError(f"lock entry should refresh updated_at when identity changes: {changed}")
+
+
+def _assert_pipeline_report_primary_summary_fields() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        dataset_dir = root / "01_dataset_register"
+        preprocess_dir = root / "02_preprocess"
+        leaderboard_dir = root / "99_leaderboard"
+        for path in (dataset_dir, preprocess_dir, leaderboard_dir):
+            path.mkdir(parents=True, exist_ok=True)
+        (dataset_dir / "out.json").write_text(
+            json.dumps(
+                {
+                    "raw_dataset_id": "raw-123",
+                    "raw_schema": {
+                        "rows": 12,
+                        "columns": ["num1", "num2"],
+                        "target_column": "target",
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (preprocess_dir / "out.json").write_text(
+            json.dumps(
+                {
+                    "processed_dataset_id": "processed-123",
+                    "split_hash": "split-123",
+                    "recipe_hash": "recipe-123",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (preprocess_dir / "schema.json").write_text(
+            json.dumps(
+                {
+                    "rows": 12,
+                    "columns": ["num1", "num2"],
+                    "target_column": "target",
+                    "id_columns": [],
+                    "drop_columns": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (preprocess_dir / "split.json").write_text(
+            json.dumps(
+                {"strategy": "random", "test_size": 0.2, "seed": 42},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (preprocess_dir / "recipe.json").write_text(
+            json.dumps({"variant": {"name": "stdscaler_ohe"}}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (leaderboard_dir / "leaderboard.csv").write_text(
+            (
+                "rank,model_variant,preprocess_variant,primary_metric,best_score,model_id,train_task_ref\n"
+                "1,ridge,stdscaler_ohe,rmse,0.10,model-ridge,train-1\n"
+                "2,lgbm,stdscaler_ohe,rmse,0.20,model-lgbm,train-2\n"
+                "3,xgboost,stdscaler_ohe,rmse,0.30,model-xgb,train-3\n"
+            ),
+            encoding="utf-8",
+        )
+        (leaderboard_dir / "out.json").write_text(
+            json.dumps(
+                {
+                    "recommended_primary_metric": "rmse",
+                    "recommended_best_score": 0.10,
+                    "recommended_train_task_ref": "train-1",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (leaderboard_dir / "recommendation.json").write_text(
+            json.dumps(
+                {
+                    "recommended_primary_metric": "rmse",
+                    "recommended_best_score": 0.10,
+                    "recommended_train_task_ref": "train-1",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (leaderboard_dir / "decision_summary.json").write_text(
+            json.dumps(
+                {
+                    "comparability": {
+                        "processed_dataset_id": "processed-123",
+                        "split_hash": "split-123",
+                        "recipe_hash": "recipe-123",
+                        "primary_metric": "rmse",
+                        "direction": "minimize",
+                        "task_type": "regression",
+                    },
+                    "recommended": {
+                        "primary_metric": "rmse",
+                        "best_score": 0.10,
+                        "task_type": "regression",
+                        "train_task_ref": "train-1",
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        pipeline_run = {
+            "grid_run_id": "grid123",
+            "status": "completed",
+            "requested_jobs": 4,
+            "planned_jobs": 2,
+            "executed_jobs": 2,
+            "disabled_jobs": 2,
+            "completed_jobs": 2,
+            "failed_jobs": 0,
+            "stopped_jobs": 0,
+            "running_jobs": 0,
+            "queued_jobs": 0,
+            "skipped_due_to_policy": 0,
+            "plan_only": False,
+            "dataset_register_ref": {"run_dir": str(dataset_dir)},
+            "preprocess_ref": [
+                {
+                    "run_dir": str(preprocess_dir),
+                    "preprocess_variant": "stdscaler_ohe",
+                    "processed_dataset_id": "processed-123",
+                    "split_hash": "split-123",
+                    "recipe_hash": "recipe-123",
+                }
+            ],
+            "train_refs": [
+                {
+                    "task_id": "train-1",
+                    "train_task_id": "train-1",
+                    "model_variant": "ridge",
+                    "preprocess_variant": "stdscaler_ohe",
+                    "best_score": 0.10,
+                    "primary_metric": "rmse",
+                },
+                {
+                    "task_id": "train-2",
+                    "train_task_id": "train-2",
+                    "model_variant": "lgbm",
+                    "preprocess_variant": "stdscaler_ohe",
+                    "best_score": 0.20,
+                    "primary_metric": "rmse",
+                },
+            ],
+            "train_ensemble_refs": [],
+            "leaderboard_ref": {"run_dir": str(leaderboard_dir)},
+            "infer_ref": None,
+            "grid": {
+                "preprocess_variants": ["stdscaler_ohe"],
+                "model_variants": ["ridge", "lgbm"],
+                "hpo": {"enabled": False, "params": {}},
+            },
+            "selection": {
+                "requested_preprocess_variants": ["stdscaler_ohe"],
+                "active_preprocess_variants": ["stdscaler_ohe"],
+                "disabled_preprocess_variants": [],
+                "requested_model_variants": ["ridge", "lgbm"],
+                "active_model_variants": ["ridge", "lgbm"],
+                "disabled_model_variants": [],
+                "requested_ensemble_methods": [],
+                "active_ensemble_methods": [],
+                "disabled_ensemble_methods": [],
+            },
+            "disabled_selection": [],
+        }
+        bundle = pipeline_report_module.build_pipeline_report_bundle(
+            pipeline_run,
+            cfg=None,
+            max_models=5,
+            pipeline_run_dir=root,
+            pipeline_task_id="pipeline-task",
+        )
+        summary = bundle.payload.get("summary") or {}
+        if summary.get("executed_jobs") != 2:
+            raise AssertionError(f"pipeline report must use executed_jobs as the primary launched-work field: {summary}")
+        if summary.get("ranked_candidates") != 3:
+            raise AssertionError(f"pipeline report must derive ranked_candidates from leaderboard rows: {summary}")
+        if summary.get("models_tried") != 2:
+            raise AssertionError(f"pipeline report must keep models_tried as the legacy executed_jobs mirror: {summary}")
+        for required in ("- executed_jobs: 2", "- ranked_candidates: 3", "- models_tried_legacy: 2"):
+            if required not in bundle.markdown:
+                raise AssertionError(f"pipeline report markdown missing {required!r}: {bundle.markdown}")
 
 
 def _assert_uv_lock_exposes_split_model_extras() -> None:
@@ -1456,7 +2013,7 @@ def main() -> int:
     _assert_batch_execution_mode()
     _assert_rehearsal_sync_cfg_keeps_clearml_enabled()
     _assert_strict_template_lookup()
-    _assert_visible_pipeline_template_lookup()
+    _assert_visible_pipeline_seed_lookup()
     _assert_project_layout_contract()
     _assert_runtime_tag_filter_contract()
     _assert_task_time_extras()
@@ -1476,13 +2033,21 @@ def main() -> int:
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
     _assert_plan_only_controller_does_not_launch_steps()
     _assert_pipeline_template_defaults_keep_plan_only()
+    _assert_ui_clone_cfg_normalization_clears_seed_only_defaults()
+    _assert_pipeline_run_task_identity_moves_seed_clone_to_run_project()
     _assert_pipeline_run_summary_tracks_actual_job_statuses()
     _assert_manage_templates_pipeline_properties_follow_resolved_context()
+    _assert_lock_context_payload_keeps_usecase_id()
+    _assert_live_plan_context_prefers_lock_project_root()
+    _assert_live_plan_context_fails_on_layout_drift()
     _assert_visible_template_graph_mismatch_uses_default_profile_with_explicit_template_id()
     _assert_visible_template_clone_rejects_graph_shaping_model_override()
     _assert_visible_template_clone_allows_selection_subset()
-    _assert_pipeline_template_draft_uses_profile_model_set()
+    _assert_pipeline_seed_controller_uses_profile_model_set()
+    _assert_pipeline_operator_inputs_reject_placeholder_for_actual_runs()
+    _assert_rehearsal_sync_pipeline_artifacts_missing_only_reuses_existing_outputs()
     _assert_lock_entry_preserves_updated_at_without_identity_change()
+    _assert_pipeline_report_primary_summary_fields()
     _assert_uv_lock_exposes_split_model_extras()
     print("OK: clearml runtime contracts")
     return 0

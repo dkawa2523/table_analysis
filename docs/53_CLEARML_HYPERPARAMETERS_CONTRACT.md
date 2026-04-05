@@ -37,7 +37,7 @@ ClearML UI の HyperParameters を、`General` だらけにせず、operator と
 - `pipeline.selection.enabled_model_variants`
 - `ensemble.selection.enabled_methods`
 
-固定 DAG の visible pipeline template では、subset 実行は `selection` section で表現します。  
+固定 DAG の seed pipeline では、subset 実行は `selection` section で表現します。  
 `pipeline.model_variants` や `pipeline.grid.model_variants` は local / ad hoc 実行の互換用で、operator 向けの通常 UI では graph-shaping key として扱います。
 
 ### clearml

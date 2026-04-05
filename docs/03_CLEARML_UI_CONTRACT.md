@@ -6,7 +6,7 @@
 
 operator が主に見る階層:
 
-- pipeline template: `<ROOT>/<solution_root>/Pipelines/Templates`
+- pipeline seed: `<ROOT>/<solution_root>/.pipelines/<profile>`
 - pipeline run: `<ROOT>/<solution_root>/Pipelines/Runs/<usecase_id>`
 - child task run: `<ROOT>/<solution_root>/Runs/<usecase_id>/<process_group>`
 - step template: `<ROOT>/<solution_root>/Templates/Steps/<process_group>`
@@ -18,7 +18,7 @@ operator が主に見る階層:
 - 設定ファイル: `conf/clearml/project_layout.yaml`
 
 例（デフォルト）：
-- `MFG/TabularAnalysis/Pipelines/Templates`
+- `MFG/TabularAnalysis/.pipelines/pipeline`
 - `MFG/TabularAnalysis/Pipelines/Runs/test_toy_20260101_120000`
 - `MFG/TabularAnalysis/Templates/Steps/03_TrainModels`
 - `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/01_Datasets`
@@ -62,12 +62,12 @@ operator が主に見る階層:
 - **そのタスクの再現に必要な入力のみ**を記録する
 - pipeline の設定や出力値を train の HyperParameters に混ぜない
 
-visible pipeline template について:
+seed pipeline について:
 
-- `Pipelines/Templates` にある template は profile 固定の DAG です
+- `.pipelines/<profile>` にある seed pipeline は profile 固定の DAG です
 - operator が UI から編集してよいのは `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants`、必要時のみ `ensemble.selection.enabled_methods`, `ensemble.top_k` などの限定された項目だけです
-- `pipeline.model_set` や `pipeline.grid.model_variants` は fixed template profile を支える内部の graph-shaping 値として扱い、通常の clone / run 導線では触りません
-- visible pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、dataset 登録は rehearsal / 準備系導線に分けます
+- `pipeline.model_set` や `pipeline.grid.model_variants` は fixed profile を支える内部の graph-shaping 値として扱い、通常の clone / run 導線では触りません
+- seed pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、dataset 登録は rehearsal / 準備系導線に分けます
 
 ## Artifacts（全タスク必須）
 - `config_resolved.yaml`

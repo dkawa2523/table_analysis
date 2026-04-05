@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Run rehearsal scenarios (dataset_register + pipeline) for ClearML integration."""
+"""Run rehearsal scenarios for ClearML integration.
+
+This helper can prepare a toy dataset via ``dataset_register`` before launching a
+pipeline run, but the standard visible-template contract remains
+``data.raw_dataset_id`` as the pipeline input.
+"""
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import io
 import json
+import logging
 import os
 import platform as platform_mod
 import re
@@ -428,7 +436,60 @@ def _build_minimal_clearml_cfg() -> Any:
     return OmegaConf.create({"run": {"clearml": {"enabled": True, "execution": "logging"}}})
 
 
-def _sync_pipeline_artifacts(repo: Path, output_dir: Path, pipeline_task_id: str) -> dict[str, Path]:
+def _list_task_artifact_names(task_id: str) -> set[str]:
+    try:
+        from clearml import Task as ClearMLTask
+    except Exception:
+        return set()
+    try:
+        task = ClearMLTask.get_task(task_id=str(task_id))
+    except Exception:
+        return set()
+    artifacts = getattr(task, "artifacts", None)
+    if isinstance(artifacts, dict):
+        return {str(key) for key in artifacts.keys()}
+    names: set[str] = set()
+    if artifacts is not None and not isinstance(artifacts, (str, bytes)):
+        try:
+            for item in artifacts:
+                key = None
+                if isinstance(item, dict):
+                    key = item.get("key") or item.get("name")
+                else:
+                    key = getattr(item, "key", None) or getattr(item, "name", None)
+                if key:
+                    names.add(str(key))
+        except Exception:
+            return names
+    return names
+
+
+@contextlib.contextmanager
+def _suppress_clearml_artifact_logs() -> Iterable[None]:
+    logger_names = ("clearml", "clearml.storage")
+    loggers = [logging.getLogger(name) for name in logger_names]
+    previous = [(logger, logger.level, logger.propagate) for logger in loggers]
+    previous_disable = logging.root.manager.disable
+    try:
+        logging.disable(logging.CRITICAL)
+        for logger in loggers:
+            logger.setLevel(logging.CRITICAL)
+            logger.propagate = False
+        yield
+    finally:
+        logging.disable(previous_disable)
+        for (logger, level, propagate) in previous:
+            logger.setLevel(level)
+            logger.propagate = propagate
+
+
+def _sync_pipeline_artifacts(
+    repo: Path,
+    output_dir: Path,
+    pipeline_task_id: str,
+    *,
+    missing_only: bool = False,
+) -> dict[str, Path]:
     _ensure_repo_src_on_path(repo)
     from tabular_analysis.platform_adapter_task import get_task_artifact_local_copy
 
@@ -436,7 +497,9 @@ def _sync_pipeline_artifacts(repo: Path, output_dir: Path, pipeline_task_id: str
     stage_dir = output_dir / "99_pipeline"
     stage_dir.mkdir(parents=True, exist_ok=True)
     copied: dict[str, Path] = {}
-    for name in (
+    available = _list_task_artifact_names(pipeline_task_id)
+    fetch_failures: list[str] = []
+    candidate_names = (
         "pipeline_run.json",
         "run_summary.json",
         "report.json",
@@ -445,12 +508,24 @@ def _sync_pipeline_artifacts(repo: Path, output_dir: Path, pipeline_task_id: str
         "out.json",
         "manifest.json",
         "config_resolved.yaml",
-    ):
-        try:
-            source = get_task_artifact_local_copy(cfg, pipeline_task_id, name)
-        except Exception:
-            continue
+    )
+    for name in candidate_names:
         target = stage_dir / name
+        if missing_only and target.exists():
+            copied[name] = target
+            continue
+        if available and name not in available:
+            continue
+        try:
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+                _suppress_clearml_artifact_logs(),
+            ):
+                source = get_task_artifact_local_copy(cfg, pipeline_task_id, name)
+        except Exception:
+            fetch_failures.append(name)
+            continue
         try:
             if source.resolve() != target.resolve():
                 shutil.copy2(source, target)
@@ -462,6 +537,16 @@ def _sync_pipeline_artifacts(repo: Path, output_dir: Path, pipeline_task_id: str
         fallback = stage_dir / "run_summary.json"
         shutil.copy2(pipeline_run, fallback)
         copied["run_summary.json"] = fallback
+    if fetch_failures and not missing_only:
+        print(
+            "[warn] Some pipeline artifacts were unavailable from fileserver; "
+            f"falling back where possible: {', '.join(fetch_failures)}"
+        )
+    elif fetch_failures:
+        print(
+            "[warn] Some supplemental pipeline artifacts were unavailable from fileserver; "
+            f"reused rebuilt outputs where possible: {', '.join(fetch_failures)}"
+        )
     return copied
 
 
@@ -644,7 +729,7 @@ def _run_ui_verify(repo: Path, usecase_id: str, project_root: str | None) -> Non
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Run dataset_register + pipeline rehearsal.")
+    ap = argparse.ArgumentParser(description="Run ClearML rehearsal flows, optionally registering a dataset before pipeline execution.")
     ap.add_argument("--repo", default=".", help="Repository root (default: current directory)")
     ap.add_argument(
         "--execution",
@@ -653,7 +738,7 @@ def main() -> int:
         help="Execution mode",
     )
     ap.add_argument("--queue-name", default=None, help="ClearML queue name (agent only)")
-    ap.add_argument("--template-task-id", default=None, help="Optional visible pipeline template task id")
+    ap.add_argument("--template-task-id", default=None, help="Optional seed/base pipeline task id (legacy config key name is kept)")
     ap.add_argument(
         "--pipeline-profile",
         default=None,
@@ -788,13 +873,9 @@ def main() -> int:
                     timeout_sec=args.wait_timeout_sec,
                     poll_interval_sec=args.poll_interval_sec,
                 )
-                copied_artifacts = _sync_pipeline_artifacts(repo, output_dir, pipeline_task_id)
-                pipeline_run_payload = _load_json_if_exists(copied_artifacts.get("pipeline_run.json"))
                 if controller_status in {"completed", "failed", "stopped"}:
-                    payload_status = _normalize_task_status(
-                        pipeline_run_payload.get("status") if isinstance(pipeline_run_payload, dict) else None
-                    )
-                    if pipeline_run_payload is None or payload_status in {"queued", "running"}:
+                    rebuild_error: Exception | None = None
+                    try:
                         pipeline_run_payload = _rebuild_pipeline_outputs_from_clearml(
                             repo=repo,
                             output_dir=output_dir,
@@ -803,6 +884,32 @@ def main() -> int:
                             controller_status=controller_status,
                             project_root=args.project_root,
                         )
+                    except Exception as exc:
+                        rebuild_error = exc
+                    copied_artifacts = _sync_pipeline_artifacts(
+                        repo,
+                        output_dir,
+                        pipeline_task_id,
+                        missing_only=True,
+                    )
+                    if pipeline_run_payload is None:
+                        pipeline_run_payload = _load_json_if_exists(copied_artifacts.get("pipeline_run.json"))
+                    payload_status = _normalize_task_status(
+                        pipeline_run_payload.get("status") if isinstance(pipeline_run_payload, dict) else None
+                    )
+                    if pipeline_run_payload is None or payload_status in {"queued", "running"}:
+                        if rebuild_error is not None:
+                            raise RuntimeError(
+                                "Failed to rebuild pipeline outputs from ClearML state after remote execution."
+                            ) from rebuild_error
+                else:
+                    copied_artifacts = _sync_pipeline_artifacts(
+                        repo,
+                        output_dir,
+                        pipeline_task_id,
+                        missing_only=False,
+                    )
+                    pipeline_run_payload = _load_json_if_exists(copied_artifacts.get("pipeline_run.json"))
             summary = {
                 "usecase_id": usecase_id,
                 "raw_dataset_id": raw_dataset_id,

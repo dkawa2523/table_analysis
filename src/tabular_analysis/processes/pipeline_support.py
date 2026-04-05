@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _normalize_str
-from ..common.collection_utils import to_list as _to_list
+from ..common.collection_utils import to_list as _to_list, to_mapping as _to_mapping
+from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _normalize_str, to_int as _to_int
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,7 @@ class PipelinePlan:
 
 
 DEFAULT_PIPELINE_PROFILE = 'pipeline'
+PIPELINE_RAW_DATASET_ID_SENTINEL = 'REPLACE_WITH_EXISTING_RAW_DATASET_ID'
 
 PIPELINE_PROFILE_SPECS: dict[str, PipelineProfileSpec] = {
     'pipeline': PipelineProfileSpec(
@@ -163,7 +164,7 @@ def resolve_pipeline_profile(cfg: Any | None, plan: Mapping[str, Any] | None = N
         if explicit_template_task_id:
             return DEFAULT_PIPELINE_PROFILE
         raise ValueError(
-            'No built-in visible pipeline template matches the current pipeline settings. '
+            'No built-in visible pipeline seed matches the current pipeline settings. '
             'Align the config to a supported profile or specify run.clearml.pipeline.template_task_id.'
         )
     return DEFAULT_PIPELINE_PROFILE
@@ -174,6 +175,66 @@ def build_pipeline_ui_parameter_whitelist(pipeline_profile: str) -> tuple[str, .
     if profile not in PIPELINE_TEMPLATE_UI_WHITELIST:
         raise ValueError(f'Unsupported pipeline profile for UI whitelist: {profile}')
     return PIPELINE_TEMPLATE_UI_WHITELIST[profile]
+
+
+def build_pipeline_operator_inputs(
+    defaults: Mapping[str, Any],
+    *,
+    pipeline_profile: str,
+) -> dict[str, Any]:
+    editable = extract_pipeline_editable_defaults(defaults, pipeline_profile=pipeline_profile)
+    payload: dict[str, Any] = {}
+    for (path, value) in editable.items():
+        cursor = payload
+        parts = str(path).split('.')
+        for key in parts[:-1]:
+            child = cursor.get(key)
+            if not isinstance(child, dict):
+                child = {}
+                cursor[key] = child
+            cursor = child
+        cursor[parts[-1]] = value
+    return payload
+
+
+def is_pipeline_placeholder_raw_dataset_id(value: Any) -> bool:
+    return _normalize_str(value) == PIPELINE_RAW_DATASET_ID_SENTINEL
+
+
+def validate_pipeline_operator_inputs(
+    cfg: Any | None,
+    *,
+    allow_placeholder_raw_dataset: bool = False,
+) -> None:
+    run_flags = resolve_pipeline_run_flags(cfg)
+    usecase_id = _normalize_str(_cfg_value(cfg, 'run.usecase_id')) if cfg is not None else ''
+    raw_dataset_id = _normalize_str(_cfg_value(cfg, 'data.raw_dataset_id')) if cfg is not None else ''
+    dataset_path = _normalize_str(_cfg_value(cfg, 'data.dataset_path')) if cfg is not None else ''
+
+    errors: list[str] = []
+    if not usecase_id:
+        errors.append(
+            'run.usecase_id is empty. Confirm Configuration > OperatorInputs, then set '
+            'Hyperparameters -> run.usecase_id before starting the pipeline run.'
+        )
+    if run_flags.get('run_preprocess') and not run_flags.get('run_dataset_register'):
+        if not raw_dataset_id and not dataset_path:
+            errors.append(
+                'data.raw_dataset_id is empty. Confirm Configuration > OperatorInputs, then set '
+                'Hyperparameters -> data.raw_dataset_id to an existing raw dataset id before starting the pipeline run.'
+            )
+        elif raw_dataset_id and is_pipeline_placeholder_raw_dataset_id(raw_dataset_id) and not allow_placeholder_raw_dataset:
+            errors.append(
+                'data.raw_dataset_id is still the seed placeholder. Confirm Configuration > OperatorInputs, then set '
+                'Hyperparameters -> data.raw_dataset_id to an existing raw dataset id before starting the pipeline run.'
+            )
+        elif raw_dataset_id.startswith('local:') and not dataset_path:
+            errors.append(
+                'data.raw_dataset_id points to a local dataset but data.dataset_path is empty. '
+                'Provide data.dataset_path or use an existing ClearML raw dataset id.'
+            )
+    if errors:
+        raise ValueError('Invalid pipeline operator inputs: ' + ' '.join(errors))
 
 
 def resolve_pipeline_run_flags(cfg: Any | None) -> dict[str, bool]:
@@ -278,6 +339,173 @@ def resolve_pipeline_selection(
     }
 
 
+def resolve_exec_policy_limits(cfg: Any) -> dict[str, int]:
+    limits_cfg = _to_mapping(_cfg_value(cfg, 'exec_policy.limits'))
+    max_jobs = (
+        _to_int(limits_cfg.get('max_jobs'), 0)
+        if 'max_jobs' in limits_cfg
+        else _to_int(_cfg_value(cfg, 'pipeline.grid.max_jobs'), 0)
+    )
+    max_models = (
+        _to_int(limits_cfg.get('max_models'), 0)
+        if 'max_models' in limits_cfg
+        else _to_int(_cfg_value(cfg, 'leaderboard.top_k'), 0)
+    )
+    max_hpo_trials = _to_int(limits_cfg.get('max_hpo_trials'), 0)
+    return {
+        'max_jobs': max(max_jobs, 0),
+        'max_models': max(max_models, 0),
+        'max_hpo_trials': max(max_hpo_trials, 0),
+    }
+
+
+def resolve_exec_policy_selection(cfg: Any) -> dict[str, bool]:
+    selection_cfg = _to_mapping(_cfg_value(cfg, 'exec_policy.selection'))
+    return {
+        key: bool(selection_cfg.get(key))
+        for key in ('calibration', 'uncertainty', 'ci')
+        if key in selection_cfg
+    }
+
+
+def apply_exec_policy_selection(overrides: dict[str, Any], selection: Mapping[str, bool]) -> None:
+    for (key, path) in (
+        ('calibration', 'eval.calibration.enabled'),
+        ('uncertainty', 'eval.uncertainty.enabled'),
+        ('ci', 'eval.ci.enabled'),
+    ):
+        if key in selection and not selection[key]:
+            overrides[path] = False
+
+
+def resolve_exec_policy_queues(cfg: Any) -> dict[str, Any]:
+    queues_cfg = _to_mapping(_cfg_value(cfg, 'exec_policy.queues'))
+
+    def _queue(key: str) -> str | None:
+        return _normalize_str(queues_cfg.get(key))
+
+    model_variants_cfg = _to_mapping(queues_cfg.get('model_variants'))
+    model_variants = {
+        str(key): _normalize_str(value)
+        for (key, value) in model_variants_cfg.items()
+        if _normalize_str(value)
+    }
+    heavy_variants = {
+        str(name)
+        for name in _to_list(queues_cfg.get('heavy_model_variants'))
+        if _normalize_str(name)
+    }
+    default_queue = _queue('default') or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
+    return {
+        'default': default_queue,
+        'pipeline': _queue('pipeline'),
+        'dataset_register': _queue('dataset_register'),
+        'preprocess': _queue('preprocess'),
+        'train_model': _queue('train_model'),
+        'train_ensemble': _queue('train_ensemble'),
+        'train_model_heavy': _queue('train_model_heavy'),
+        'leaderboard': _queue('leaderboard'),
+        'infer': _queue('infer'),
+        'model_variants': model_variants,
+        'heavy_model_variants': heavy_variants,
+    }
+
+
+def select_pipeline_queue(
+    queues: Mapping[str, Any],
+    process: str,
+    *,
+    model_variant: str | None = None,
+) -> str | None:
+    default_queue = _normalize_str(queues.get('default'))
+    if process == 'train_model':
+        model_variants = queues.get('model_variants') or {}
+        if model_variant:
+            variant_queue = _normalize_str(model_variants.get(model_variant))
+            if variant_queue:
+                return variant_queue
+            heavy_variants = queues.get('heavy_model_variants') or set()
+            if model_variant in heavy_variants:
+                heavy_queue = _normalize_str(queues.get('train_model_heavy'))
+                if heavy_queue:
+                    return heavy_queue
+        train_queue = _normalize_str(queues.get('train_model'))
+        return train_queue or default_queue
+    return _normalize_str(queues.get(process)) or default_queue
+
+
+def resolve_pipeline_controller_queue_name(queues: Mapping[str, Any]) -> str | None:
+    for value in (
+        select_pipeline_queue(queues, 'pipeline'),
+        select_pipeline_queue(queues, 'dataset_register'),
+        select_pipeline_queue(queues, 'preprocess'),
+        select_pipeline_queue(queues, 'train_model'),
+        select_pipeline_queue(queues, 'train_ensemble'),
+        _normalize_str(queues.get('train_model_heavy')),
+        select_pipeline_queue(queues, 'leaderboard'),
+        select_pipeline_queue(queues, 'infer'),
+    ):
+        if value:
+            return value
+    return next(
+        (_normalize_str(value) for value in (queues.get('model_variants') or {}).values() if _normalize_str(value)),
+        None,
+    )
+
+
+def resolve_ensemble_methods(cfg: Any) -> list[str]:
+    methods = [_normalize_str(item) for item in _to_list(_cfg_value(cfg, 'ensemble.methods'))]
+    methods = [item for item in methods if item]
+    if methods:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in methods:
+            if item in seen:
+                continue
+            seen.add(item)
+            ordered.append(item)
+        return ordered
+    explicit_profile = _normalize_str(_cfg_value(cfg, 'pipeline.profile'))
+    if explicit_profile:
+        spec = get_pipeline_profile_spec(explicit_profile)
+        if spec.ensemble_methods:
+            return [str(item) for item in spec.ensemble_methods]
+    method = _normalize_str(_cfg_value(cfg, 'ensemble.method')) or 'mean_topk'
+    return [method]
+
+
+def build_disabled_selection_entries(selection: Mapping[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for preprocess_variant in selection.get('disabled_preprocess_variants') or []:
+        entries.append(
+            {
+                'process': 'preprocess',
+                'preprocess_variant': str(preprocess_variant),
+                'execution_state': 'disabled_by_selection',
+                'reason': 'preprocess_variant_not_enabled',
+            }
+        )
+    for model_variant in selection.get('disabled_model_variants') or []:
+        entries.append(
+            {
+                'process': 'train_model',
+                'model_variant': str(model_variant),
+                'execution_state': 'disabled_by_selection',
+                'reason': 'model_variant_not_enabled',
+            }
+        )
+    for ensemble_method in selection.get('disabled_ensemble_methods') or []:
+        entries.append(
+            {
+                'process': 'train_ensemble',
+                'ensemble_method': str(ensemble_method),
+                'execution_state': 'disabled_by_selection',
+                'reason': 'ensemble_method_not_enabled',
+            }
+        )
+    return entries
+
+
 def apply_pipeline_profile_defaults(cfg: Any, pipeline_profile: str) -> Any:
     spec = get_pipeline_profile_spec(pipeline_profile)
     try:
@@ -372,24 +600,8 @@ def build_pipeline_template_defaults(
     defaults['pipeline.selection.enabled_preprocess_variants'] = selection.get('active_preprocess_variants') or plan.get('preprocess_variants')
     defaults['pipeline.selection.enabled_model_variants'] = selection.get('active_model_variants') or plan.get('model_variants')
     defaults['ensemble.selection.enabled_methods'] = selection.get('active_ensemble_methods') or []
+    defaults['ensemble.top_k'] = _cfg_value(cfg, 'ensemble.top_k')
     return {key: value for key, value in defaults.items() if value is not None}
-
-
-def build_pipeline_run_overrides(
-    *,
-    cfg: Any,
-    plan: Mapping[str, Any],
-    grid_run_id: str,
-    pipeline_profile: str,
-    pipeline_task_id: str | None = None,
-) -> dict[str, Any]:
-    return build_pipeline_template_defaults(
-        cfg=cfg,
-        plan=plan,
-        grid_run_id=grid_run_id,
-        pipeline_profile=pipeline_profile,
-        pipeline_task_id=pipeline_task_id,
-    )
 
 
 def extract_pipeline_editable_defaults(
@@ -486,25 +698,36 @@ __all__ = [
     'PIPELINE_PROFILE_SPECS',
     'PIPELINE_TEMPLATE_LOCAL_ONLY_KEYS',
     'PIPELINE_TEMPLATE_UI_WHITELIST',
+    'apply_exec_policy_selection',
     'apply_pipeline_profile_defaults',
+    'build_disabled_selection_entries',
     'PipelinePlan',
     'PipelineProfileSpec',
     'PipelineStepSpec',
     'build_pipeline_plan',
-    'build_pipeline_run_overrides',
+    'build_pipeline_operator_inputs',
     'build_pipeline_step_specs',
     'build_pipeline_template_defaults',
     'build_pipeline_template_step_overrides',
     'build_pipeline_ui_parameter_whitelist',
     'extract_pipeline_editable_defaults',
     'get_pipeline_profile_spec',
+    'is_pipeline_placeholder_raw_dataset_id',
     'is_pipeline_template_name',
     'normalize_pipeline_profile',
+    'PIPELINE_RAW_DATASET_ID_SENTINEL',
+    'resolve_ensemble_methods',
+    'resolve_exec_policy_limits',
+    'resolve_exec_policy_queues',
+    'resolve_exec_policy_selection',
     'resolve_pipeline_plan_only',
     'resolve_pipeline_profile',
+    'resolve_pipeline_controller_queue_name',
     'resolve_pipeline_run_flags',
     'resolve_pipeline_selection',
     'resolve_pipeline_queues',
     'resolve_pipeline_variants',
+    'select_pipeline_queue',
     'strip_local_only_pipeline_overrides',
+    'validate_pipeline_operator_inputs',
 ]

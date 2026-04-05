@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 _BOOTSTRAP_ENV = "TABULAR_ANALYSIS_BOOTSTRAPPED"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -105,13 +106,33 @@ _SLASH_OVERRIDE_PREFIXES = (
 
 def _normalize_loaded_override_key(key: str) -> str:
     prefix = "+" if key.startswith("+") else ""
-    body = key.lstrip("+").strip()
+    body = unquote(key.lstrip("+").strip())
     if not any(body.startswith(candidate) for candidate in _SLASH_OVERRIDE_PREFIXES):
         body = body.replace("/", ".")
     return f"{prefix}{body}" if body else ""
 
 
-def _store_loaded_override(overrides: dict[str, Any], key: str, value: Any) -> None:
+def _loaded_override_priority(key: str, normalized: str) -> int:
+    raw = str(key).strip()
+    body = raw.lstrip("+")
+    normalized_body = normalized.lstrip("+")
+    decoded = unquote(body)
+    if body == normalized_body:
+        return 30
+    if decoded != body:
+        return 20
+    if "/" in body and "." not in body and not any(body.startswith(candidate) for candidate in _SLASH_OVERRIDE_PREFIXES):
+        return 10
+    return 15
+
+
+def _store_loaded_override(
+    overrides: dict[str, Any],
+    key: str,
+    value: Any,
+    *,
+    priorities: dict[str, int] | None = None,
+) -> None:
     normalized = _normalize_loaded_override_key(str(key))
     if not normalized:
         return
@@ -122,14 +143,26 @@ def _store_loaded_override(overrides: dict[str, Any], key: str, value: Any) -> N
         normalized = f"+{normalized}"
     plain_key = bare_key
     appended_key = f"+{bare_key}"
+    priority = _loaded_override_priority(str(key), normalized)
+    if priorities is not None:
+        existing_priority = priorities.get(normalized, -1)
+        if existing_priority > priority:
+            return
     if not normalized.startswith("+"):
         overrides.pop(appended_key, None)
+        if priorities is not None:
+            priorities.pop(appended_key, None)
     elif plain_key in overrides:
         return
     raw = str(key).strip()
     if "/" in raw and "." not in raw and normalized in overrides:
-        return
+        if priorities is None:
+            return
+        if priorities.get(normalized, -1) >= priority:
+            return
     overrides[normalized] = value
+    if priorities is not None:
+        priorities[normalized] = priority
 
 
 def _parse_bool(value: str | None, *, default: bool = False) -> bool:
@@ -505,6 +538,7 @@ def _load_clearml_overrides() -> dict[str, Any]:
         return {}
     def _collect_overrides(task: Any) -> dict[str, Any]:
         overrides: dict[str, Any] = {}
+        priorities: dict[str, int] = {}
         params: Any = {}
         try:
             params = task.get_parameters() or {}
@@ -517,14 +551,14 @@ def _load_clearml_overrides() -> dict[str, Any]:
                     flattened: dict[str, Any] = {}
                     _flatten_params(str(key), value, flattened, sep="/")
                     for flat_key, flat_value in flattened.items():
-                        _store_loaded_override(overrides, flat_key, flat_value)
+                        _store_loaded_override(overrides, flat_key, flat_value, priorities=priorities)
             else:
                 for key, value in params.items():
                     if not isinstance(key, str) or not key.startswith("Args/"):
                         continue
                     override_key = key[5:]
                     if override_key:
-                        _store_loaded_override(overrides, override_key, value)
+                        _store_loaded_override(overrides, override_key, value, priorities=priorities)
         if overrides:
             return overrides
         params = {}
@@ -538,14 +572,14 @@ def _load_clearml_overrides() -> dict[str, Any]:
                 flattened: dict[str, Any] = {}
                 _flatten_params(str(key), value, flattened, sep="/")
                 for flat_key, flat_value in flattened.items():
-                    _store_loaded_override(overrides, flat_key, flat_value)
+                    _store_loaded_override(overrides, flat_key, flat_value, priorities=priorities)
         elif isinstance(params, dict):
             for key, value in params.items():
                 if not isinstance(key, str) or not key.startswith("Args/"):
                     continue
                 override_key = key[5:]
                 if override_key:
-                    _store_loaded_override(overrides, override_key, value)
+                    _store_loaded_override(overrides, override_key, value, priorities=priorities)
         return overrides
 
     task = Task.current_task()

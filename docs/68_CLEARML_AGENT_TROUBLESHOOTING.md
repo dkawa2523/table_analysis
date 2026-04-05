@@ -56,10 +56,10 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 ## Hydra list override pitfalls
 Bad:
-`pipeline.grid.model_variants=["catboost", "elasticnet"]`
+`pipeline.selection.enabled_model_variants=["catboost", "elasticnet"]`
 
 Good:
-`pipeline.grid.model_variants=[catboost,elasticnet]`
+`pipeline.selection.enabled_model_variants=[catboost,elasticnet]`
 
 Use the same Hydra list style for preprocess variants and other list overrides.
 

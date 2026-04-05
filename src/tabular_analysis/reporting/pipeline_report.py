@@ -215,9 +215,14 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
     if not top_models and leaderboard_rows:
         top_models = [_normalize_top_model_row(item) for item in leaderboard_rows]
     train_refs = list(pipeline_run.get('train_refs') or [])
+    train_ensemble_refs = list(pipeline_run.get('train_ensemble_refs') or [])
     if not top_models and train_refs:
         top_models = [_normalize_top_model_row(item) for item in _build_model_rows_from_train_refs(train_refs)]
-    models_tried = len(leaderboard_rows) if leaderboard_rows else len(train_refs) if train_refs else len(top_models)
+    ranked_candidates = len(leaderboard_rows) if leaderboard_rows else len(top_models)
+    executed_candidates = _coerce_int(executed_jobs)
+    if executed_candidates is None:
+        executed_candidates = len(train_refs) + len(train_ensemble_refs)
+    models_tried = executed_candidates
     has_infer_target = bool(preferred_reference.get('infer_model_id') or preferred_reference.get('infer_train_task_id'))
     status = pipeline_status or ('ready' if has_infer_target else 'incomplete')
     if data_quality_payload:
@@ -242,7 +247,7 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
     if status in {'queued', 'running', 'planned'}:
         actions.append('Wait for the pipeline controller to finish, then regenerate the report.')
     elif status in {'failed', 'stopped'}:
-        actions.append('Inspect failed/stopped child tasks and rerun from the visible pipeline template if needed.')
+        actions.append('Inspect failed/stopped child tasks and rerun from the seed pipeline if needed.')
     elif not has_infer_target:
         actions.append('Wait for training/leaderboard to finish, then regenerate the report.')
     if not leaderboard_rows and train_refs:
@@ -258,7 +263,7 @@ def _collect_report_payload(pipeline_run: Mapping[str, Any], *, cfg: Any | None,
     if not actions:
         actions.append('Validate the recommended model on a fresh holdout set.')
     actions = actions[:3]
-    return {'report_version': 1, 'grid_run_id': grid_run_id, 'status': status, 'summary': {'recommended_model_id': recommended_model_id, 'recommended_registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'primary_metric': recommended_metric, 'best_score': recommended_score, 'models_tried': models_tried, 'train_task_ref': recommended_train_ref, 'requested_jobs': requested_jobs, 'planned_jobs': planned_jobs, 'executed_jobs': executed_jobs, 'disabled_jobs': disabled_jobs, 'completed_jobs': completed_jobs, 'failed_jobs': failed_jobs, 'stopped_jobs': stopped_jobs, 'running_jobs': running_jobs, 'queued_jobs': queued_jobs, 'skipped_due_to_policy': skipped_jobs, 'plan_only': plan_only, 'recommendation_rationale': rationale}, 'dataset': {'raw_dataset_id': dataset_out.get('raw_dataset_id'), 'processed_dataset_id': _normalize_str(preprocess_ref.get('processed_dataset_id') if preprocess_ref else None) or comparability.get('processed_dataset_id'), 'rows': rows, 'feature_columns': feature_cols, 'target_column': target_column, 'id_columns': id_columns, 'drop_columns': drop_columns}, 'selection': {'requested_preprocess_variants': list(selection_payload.get('requested_preprocess_variants') or []), 'active_preprocess_variants': list(selection_payload.get('active_preprocess_variants') or preprocess_variants), 'disabled_preprocess_variants': list(selection_payload.get('disabled_preprocess_variants') or []), 'requested_model_variants': list(selection_payload.get('requested_model_variants') or []), 'active_model_variants': list(selection_payload.get('active_model_variants') or model_variants), 'disabled_model_variants': list(selection_payload.get('disabled_model_variants') or []), 'requested_ensemble_methods': list(selection_payload.get('requested_ensemble_methods') or []), 'active_ensemble_methods': list(selection_payload.get('active_ensemble_methods') or []), 'disabled_ensemble_methods': list(selection_payload.get('disabled_ensemble_methods') or []), 'disabled_entries': disabled_selection}, 'data_quality': data_quality, 'split': {'preprocess_variant': preprocess_variant, 'strategy': split_payload.get('strategy'), 'test_size': split_payload.get('test_size'), 'seed': split_payload.get('seed'), 'group_column': split_payload.get('group_column'), 'time_column': split_payload.get('time_column'), 'split_hash': split_hash, 'recipe_hash': recipe_hash}, 'comparability': comparability, 'top_models': top_models[:max_models], 'recommendation': {'model_id': recommended_model_id, 'registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'train_task_ref': recommended_train_ref, 'primary_metric': recommended_metric, 'best_score': recommended_score, 'direction': direction, 'primary_metric_ci': recommended_detail.get('primary_metric_ci'), 'task_type': task_type, 'n_classes': recommended_detail.get('n_classes'), 'threshold': recommended_threshold, 'thresholding': notes.get('thresholding'), 'calibration': notes.get('calibration'), 'imbalance': notes.get('imbalance'), 'uncertainty': notes.get('uncertainty')}, 'notes': notes, 'next_actions': actions}
+    return {'report_version': 1, 'grid_run_id': grid_run_id, 'status': status, 'summary': {'recommended_model_id': recommended_model_id, 'recommended_registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'primary_metric': recommended_metric, 'best_score': recommended_score, 'models_tried': models_tried, 'ranked_candidates': ranked_candidates, 'train_task_ref': recommended_train_ref, 'requested_jobs': requested_jobs, 'planned_jobs': planned_jobs, 'executed_jobs': executed_jobs, 'disabled_jobs': disabled_jobs, 'completed_jobs': completed_jobs, 'failed_jobs': failed_jobs, 'stopped_jobs': stopped_jobs, 'running_jobs': running_jobs, 'queued_jobs': queued_jobs, 'skipped_due_to_policy': skipped_jobs, 'plan_only': plan_only, 'recommendation_rationale': rationale}, 'dataset': {'raw_dataset_id': dataset_out.get('raw_dataset_id'), 'processed_dataset_id': _normalize_str(preprocess_ref.get('processed_dataset_id') if preprocess_ref else None) or comparability.get('processed_dataset_id'), 'rows': rows, 'feature_columns': feature_cols, 'target_column': target_column, 'id_columns': id_columns, 'drop_columns': drop_columns}, 'selection': {'requested_preprocess_variants': list(selection_payload.get('requested_preprocess_variants') or []), 'active_preprocess_variants': list(selection_payload.get('active_preprocess_variants') or preprocess_variants), 'disabled_preprocess_variants': list(selection_payload.get('disabled_preprocess_variants') or []), 'requested_model_variants': list(selection_payload.get('requested_model_variants') or []), 'active_model_variants': list(selection_payload.get('active_model_variants') or model_variants), 'disabled_model_variants': list(selection_payload.get('disabled_model_variants') or []), 'requested_ensemble_methods': list(selection_payload.get('requested_ensemble_methods') or []), 'active_ensemble_methods': list(selection_payload.get('active_ensemble_methods') or []), 'disabled_ensemble_methods': list(selection_payload.get('disabled_ensemble_methods') or []), 'disabled_entries': disabled_selection}, 'data_quality': data_quality, 'split': {'preprocess_variant': preprocess_variant, 'strategy': split_payload.get('strategy'), 'test_size': split_payload.get('test_size'), 'seed': split_payload.get('seed'), 'group_column': split_payload.get('group_column'), 'time_column': split_payload.get('time_column'), 'split_hash': split_hash, 'recipe_hash': recipe_hash}, 'comparability': comparability, 'top_models': top_models[:max_models], 'recommendation': {'model_id': recommended_model_id, 'registry_model_id': recommended_registry_model_id, 'infer_model_id': preferred_reference.get('infer_model_id'), 'infer_train_task_id': preferred_reference.get('infer_train_task_id'), 'reference_kind': preferred_reference.get('reference_kind'), 'train_task_ref': recommended_train_ref, 'primary_metric': recommended_metric, 'best_score': recommended_score, 'direction': direction, 'primary_metric_ci': recommended_detail.get('primary_metric_ci'), 'task_type': task_type, 'n_classes': recommended_detail.get('n_classes'), 'threshold': recommended_threshold, 'thresholding': notes.get('thresholding'), 'calibration': notes.get('calibration'), 'imbalance': notes.get('imbalance'), 'uncertainty': notes.get('uncertainty')}, 'notes': notes, 'next_actions': actions}
 def _render_report_markdown(payload: Mapping[str, Any], *, max_models: int) -> str:
     summary = payload.get('summary') or {}
     dataset = payload.get('dataset') or {}
@@ -267,13 +272,17 @@ def _render_report_markdown(payload: Mapping[str, Any], *, max_models: int) -> s
     recommendation = payload.get('recommendation') or {}
     notes = payload.get('notes') or {}
     data_quality = payload.get('data_quality') or {}
-    lines: list[str] = ['# Pipeline Summary', '', '## Conclusion', f"- grid_run_id: {_format_value(payload.get('grid_run_id'))}", f"- recommended_model_id: {_format_value(summary.get('recommended_model_id'))}", f"- infer_model_id: {_format_value(summary.get('infer_model_id'))}", f"- infer_train_task_id: {_format_value(summary.get('infer_train_task_id'))}", f"- primary_metric: {_format_value(summary.get('primary_metric'))}", f"- best_score: {_format_value(summary.get('best_score'))}", f"- status: {_format_value(payload.get('status'))}", f"- models_tried: {_format_value(summary.get('models_tried'))}"]
+    lines: list[str] = ['# Pipeline Summary', '', '## Conclusion', f"- grid_run_id: {_format_value(payload.get('grid_run_id'))}", f"- recommended_model_id: {_format_value(summary.get('recommended_model_id'))}", f"- infer_model_id: {_format_value(summary.get('infer_model_id'))}", f"- infer_train_task_id: {_format_value(summary.get('infer_train_task_id'))}", f"- primary_metric: {_format_value(summary.get('primary_metric'))}", f"- best_score: {_format_value(summary.get('best_score'))}", f"- status: {_format_value(payload.get('status'))}"]
+    if summary.get('executed_jobs') is not None:
+        lines.append(f"- executed_jobs: {_format_value(summary.get('executed_jobs'))}")
+    if summary.get('ranked_candidates') is not None:
+        lines.append(f"- ranked_candidates: {_format_value(summary.get('ranked_candidates'))}")
+    if summary.get('models_tried') is not None:
+        lines.append(f"- models_tried_legacy: {_format_value(summary.get('models_tried'))}")
     if summary.get('pipeline_url'):
         lines.append(f"- pipeline_url: {_format_value(summary.get('pipeline_url'))}")
     if summary.get('planned_jobs') is not None:
         lines.append(f"- planned_jobs: {_format_value(summary.get('planned_jobs'))}")
-    if summary.get('executed_jobs') is not None:
-        lines.append(f"- executed_jobs: {_format_value(summary.get('executed_jobs'))}")
     if summary.get('requested_jobs') is not None:
         lines.append(f"- requested_jobs: {_format_value(summary.get('requested_jobs'))}")
     if summary.get('disabled_jobs') is not None:
@@ -374,7 +383,7 @@ def _render_report_markdown(payload: Mapping[str, Any], *, max_models: int) -> s
         lines.append(f"- split.group_column: {_format_value(split.get('group_column'))}")
     if split.get('time_column'):
         lines.append(f"- split.time_column: {_format_value(split.get('time_column'))}")
-    lines.extend(['', f'## Models Tried (Top {max_models})'])
+    lines.extend(['', f'## Ranked Candidates (Top {max_models})'])
     _append_models_table(lines, payload.get('top_models') or [], max_models)
     lines.extend(['', '## Recommendation', f"- model_id: {_format_value(recommendation.get('model_id'))}", f"- registry_model_id: {_format_value(recommendation.get('registry_model_id'))}", f"- infer_model_id: {_format_value(recommendation.get('infer_model_id'))}", f"- infer_train_task_id: {_format_value(recommendation.get('infer_train_task_id'))}", f"- primary_metric: {_format_value(recommendation.get('primary_metric'))}", f"- best_score: {_format_value(recommendation.get('best_score'))}"])
     if recommendation.get('direction'):

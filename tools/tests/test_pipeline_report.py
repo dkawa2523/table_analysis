@@ -148,8 +148,12 @@ def main() -> int:
         raise AssertionError("report.json requested_jobs must mirror pipeline_run.json")
     if summary.get("disabled_jobs") != pipeline_run.get("disabled_jobs"):
         raise AssertionError("report.json disabled_jobs must mirror pipeline_run.json")
+    if summary.get("ranked_candidates") is None:
+        raise AssertionError("report.json missing summary.ranked_candidates")
     if "active_model_variants" not in selection:
         raise AssertionError("report.json missing selection.active_model_variants")
+    if "ranked_candidates" not in report_text:
+        raise AssertionError("report.md must expose ranked_candidates")
 
     links = _load_json(report_links_path)
     pipeline_link = links.get("pipeline") or {}

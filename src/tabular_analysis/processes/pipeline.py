@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections import OrderedDict
 from copy import deepcopy
-from ..common.config_utils import cfg_value as _cfg_value, set_cfg_value as _set_cfg_value, normalize_str as _normalize_str, to_int as _to_int
+from ..common.config_utils import cfg_value as _cfg_value, set_cfg_value as _set_cfg_value, normalize_str as _normalize_str
 from ..common.collection_utils import to_list as _to_list, to_mapping as _to_mapping
 from ..common.dataset_utils import derive_local_raw_dataset_id
 from ..common.clearml_bootstrap import resolve_required_uv_extras
@@ -22,17 +22,17 @@ from typing import Any, Mapping
 import uuid
 from ..clearml.hparams import connect_pipeline
 from ..clearml.pipeline_templates import (
-    resolve_pipeline_template_task_id,
+    resolve_pipeline_seed_task_id,
 )
 from ..clearml.templates import resolve_template_task_id
 from ..clearml.ui_logger import log_scalar
 from ..platform_adapter_artifacts import upload_artifact
 from ..platform_adapter_clearml_env import clearml_task_type_controller, is_clearml_enabled
 from ..platform_adapter_pipeline import apply_clearml_task_overrides, clone_pipeline_controller, create_pipeline_controller, enqueue_pipeline_controller, load_pipeline_controller_from_task, pipeline_require_clearml_agent, pipeline_step_task_id_ref
-from ..platform_adapter_task import clearml_task_id, get_clearml_task_status, report_markdown, reset_clearml_task_args, set_clearml_task_parameters, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
+from ..platform_adapter_task import clearml_task_id, get_clearml_task_status, report_markdown, reset_clearml_task_args, set_clearml_task_configuration, set_clearml_task_parameters, set_clearml_task_project, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
 from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_run_project_name, build_runtime_properties, build_runtime_tags, build_step_run_project_name, build_project_name, resolve_clearml_metadata
-from .pipeline_support import apply_pipeline_profile_defaults, build_pipeline_step_specs, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, get_pipeline_profile_spec, normalize_pipeline_profile, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection
+from .pipeline_support import apply_exec_policy_selection as _apply_exec_policy_selection, apply_pipeline_profile_defaults, build_disabled_selection_entries as _build_disabled_selection_entries, build_pipeline_operator_inputs, build_pipeline_step_specs, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, is_pipeline_placeholder_raw_dataset_id, normalize_pipeline_profile, resolve_ensemble_methods as _resolve_ensemble_methods, resolve_exec_policy_limits as _resolve_exec_policy_limits, resolve_exec_policy_queues as _resolve_exec_policy_queues, resolve_exec_policy_selection as _resolve_exec_policy_selection, resolve_pipeline_controller_queue_name as _resolve_pipeline_queue_name, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection, select_pipeline_queue as _select_queue, validate_pipeline_operator_inputs
 from ..reporting.pipeline_report import build_pipeline_report_bundle
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 _STAGE_BY_TASK = {'dataset_register': '01_dataset_register', 'preprocess': '02_preprocess', 'train_model': '03_train_model', 'train_ensemble': '04_train_ensemble', 'infer': '04_infer', 'leaderboard': '05_leaderboard'}
@@ -145,52 +145,6 @@ def _build_pipeline_step_parameter_override_payload(overrides: Mapping[str, Any]
             continue
         payload[f'Args/{key}'] = normalized
     return payload
-
-
-def _resolve_exec_policy_limits(cfg: Any) -> dict[str, int]:
-    limits_cfg = _to_mapping(_cfg_value(cfg, 'exec_policy.limits'))
-    max_jobs = _to_int(limits_cfg.get('max_jobs'), 0) if 'max_jobs' in limits_cfg else _to_int(_cfg_value(cfg, 'pipeline.grid.max_jobs'), 0)
-    max_models = _to_int(limits_cfg.get('max_models'), 0) if 'max_models' in limits_cfg else _to_int(_cfg_value(cfg, 'leaderboard.top_k'), 0)
-    max_hpo_trials = _to_int(limits_cfg.get('max_hpo_trials'), 0)
-    if max_jobs < 0:
-        max_jobs = 0
-    if max_models < 0:
-        max_models = 0
-    if max_hpo_trials < 0:
-        max_hpo_trials = 0
-    return {'max_jobs': max_jobs, 'max_models': max_models, 'max_hpo_trials': max_hpo_trials}
-def _resolve_exec_policy_selection(cfg: Any) -> dict[str, bool]:
-    selection_cfg = _to_mapping(_cfg_value(cfg, 'exec_policy.selection'))
-    return {key: bool(selection_cfg.get(key)) for key in ('calibration', 'uncertainty', 'ci') if key in selection_cfg}
-def _apply_exec_policy_selection(overrides: dict[str, Any], selection: Mapping[str, bool]) -> None:
-    for (key, path) in (('calibration', 'eval.calibration.enabled'), ('uncertainty', 'eval.uncertainty.enabled'), ('ci', 'eval.ci.enabled')):
-        if key in selection and (not selection[key]):
-            overrides[path] = False
-def _resolve_exec_policy_queues(cfg: Any) -> dict[str, Any]:
-    queues_cfg = _to_mapping(_cfg_value(cfg, 'exec_policy.queues'))
-    def _queue(key: str) -> str | None:
-        return _normalize_str(queues_cfg.get(key))
-    model_variants_cfg = _to_mapping(queues_cfg.get('model_variants'))
-    model_variants = {str(key): _normalize_str(value) for (key, value) in model_variants_cfg.items() if _normalize_str(value)}
-    heavy_variants = {str(name) for name in _to_list(queues_cfg.get('heavy_model_variants')) if _normalize_str(name)}
-    default_queue = _queue('default') or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
-    return {'default': default_queue, 'pipeline': _queue('pipeline'), 'dataset_register': _queue('dataset_register'), 'preprocess': _queue('preprocess'), 'train_model': _queue('train_model'), 'train_ensemble': _queue('train_ensemble'), 'train_model_heavy': _queue('train_model_heavy'), 'leaderboard': _queue('leaderboard'), 'infer': _queue('infer'), 'model_variants': model_variants, 'heavy_model_variants': heavy_variants}
-def _select_queue(queues: Mapping[str, Any], process: str, *, model_variant: str | None=None) -> str | None:
-    default_queue = _normalize_str(queues.get('default'))
-    if process == 'train_model':
-        model_variants = queues.get('model_variants') or {}
-        if model_variant:
-            variant_queue = _normalize_str(model_variants.get(model_variant))
-            if variant_queue:
-                return variant_queue
-            heavy_variants = queues.get('heavy_model_variants') or set()
-            if model_variant in heavy_variants:
-                heavy_queue = _normalize_str(queues.get('train_model_heavy'))
-                if heavy_queue:
-                    return heavy_queue
-        train_queue = _normalize_str(queues.get('train_model'))
-        return train_queue or default_queue
-    return _normalize_str(queues.get(process)) or default_queue
 def _expand_param_grid(param_grid: Mapping[str, Any]) -> list[dict[str, Any]]:
     if not param_grid:
         return [{}]
@@ -443,57 +397,6 @@ def _collect_eval_overrides(cfg: Any) -> dict[str, Any]:
     if selection:
         _apply_exec_policy_selection(overrides, selection)
     return overrides
-def _resolve_ensemble_methods(cfg: Any) -> list[str]:
-    methods = [_normalize_str(item) for item in _to_list(_cfg_value(cfg, 'ensemble.methods'))]
-    methods = [item for item in methods if item]
-    if methods:
-        seen: set[str] = set()
-        ordered: list[str] = []
-        for item in methods:
-            if item in seen:
-                continue
-            seen.add(item)
-            ordered.append(item)
-        return ordered
-    explicit_profile = _normalize_str(_cfg_value(cfg, 'pipeline.profile'))
-    if explicit_profile:
-        spec = get_pipeline_profile_spec(explicit_profile)
-        if spec.ensemble_methods:
-            return [str(item) for item in spec.ensemble_methods]
-    method = _normalize_str(_cfg_value(cfg, 'ensemble.method')) or 'mean_topk'
-    return [method]
-
-
-def _build_disabled_selection_entries(selection: Mapping[str, Any]) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    for preprocess_variant in selection.get('disabled_preprocess_variants') or []:
-        entries.append(
-            {
-                'process': 'preprocess',
-                'preprocess_variant': str(preprocess_variant),
-                'execution_state': 'disabled_by_selection',
-                'reason': 'preprocess_variant_not_enabled',
-            }
-        )
-    for model_variant in selection.get('disabled_model_variants') or []:
-        entries.append(
-            {
-                'process': 'train_model',
-                'model_variant': str(model_variant),
-                'execution_state': 'disabled_by_selection',
-                'reason': 'model_variant_not_enabled',
-            }
-        )
-    for ensemble_method in selection.get('disabled_ensemble_methods') or []:
-        entries.append(
-            {
-                'process': 'train_ensemble',
-                'ensemble_method': str(ensemble_method),
-                'execution_state': 'disabled_by_selection',
-                'reason': 'ensemble_method_not_enabled',
-            }
-        )
-    return entries
 def _collect_ensemble_overrides(cfg: Any) -> dict[str, Any]:
     ensemble_cfg = getattr(cfg, 'ensemble', None)
     overrides: dict[str, Any] = {}
@@ -531,6 +434,19 @@ def _visible_pipeline_project(cfg: Any) -> str:
         layout=_cfg_value(cfg, 'run.clearml.project_layout'),
         cfg=cfg,
     )
+
+
+def _normalize_ui_cloned_pipeline_cfg(cfg: Any) -> None:
+    raw_dataset_id = _normalize_str(_cfg_value(cfg, 'data.raw_dataset_id'))
+    if not raw_dataset_id or is_pipeline_placeholder_raw_dataset_id(raw_dataset_id):
+        return
+    if resolve_pipeline_plan_only(cfg):
+        _set_cfg_value(cfg, 'pipeline.plan_only', False)
+        _set_cfg_value(cfg, 'pipeline.dry_run', False)
+        _set_cfg_value(cfg, 'pipeline.plan', False)
+    grid_run_id = _normalize_str(_cfg_value(cfg, 'run.grid_run_id'))
+    if grid_run_id.startswith('seed__'):
+        _set_cfg_value(cfg, 'run.grid_run_id', '')
 
 
 def _pipeline_child_project(cfg: Any, *, task_name: str, usecase_id: str | None = None) -> str:
@@ -1235,11 +1151,6 @@ def _run_local_pipeline_impl(cfg: Any, grid_run_id: str, *, clearml_enabled: boo
     executed_jobs = len(train_refs) + len(train_ensemble_refs)
     summary = _build_local_pipeline_run_summary(cfg=cfg, plan=plan, grid_run_id=grid_run_id, dataset_register_ref=dataset_register_ref, preprocess_refs=preprocess_refs, train_refs=train_refs, train_ensemble_refs=train_ensemble_refs, leaderboard_ref=leaderboard_ref, infer_ref=infer_ref, executed_jobs=executed_jobs)
     return _finalize_pipeline_run_summary(cfg, summary)
-def _resolve_pipeline_queue_name(queues: Mapping[str, Any]) -> str | None:
-    queue_name = next((value for value in [_select_queue(queues, 'pipeline'), _select_queue(queues, 'dataset_register'), _select_queue(queues, 'preprocess'), _select_queue(queues, 'train_model'), _select_queue(queues, 'train_ensemble'), _normalize_str(queues.get('train_model_heavy')), _select_queue(queues, 'leaderboard'), _select_queue(queues, 'infer')] if value), None)
-    if queue_name:
-        return queue_name
-    return next((_normalize_str(value) for value in (queues.get('model_variants') or {}).values() if _normalize_str(value)), None)
 def _configure_clearml_pipeline_controller(*, cfg: Any, plan: Mapping[str, Any], run_overrides: Mapping[str, Any], grid_run_id: str, queue_name: str | None, controller_execution: str) -> Any:
     pipeline_queue = _select_queue(plan['queues'], 'pipeline')
     pipeline_name = _normalize_str(_cfg_value(cfg, 'run.clearml.task_name')) or 'pipeline'
@@ -1473,12 +1384,31 @@ def _add_clearml_pipeline_template_steps(*, cfg: Any, plan: Mapping[str, Any], s
     )
 
 
-def build_pipeline_template_draft(*, cfg: Any, controller: Any, pipeline_profile: str) -> dict[str, Any]:
-    template_grid_run_id = f'template__{normalize_pipeline_profile(pipeline_profile)}'
+def _serialize_pipeline_controller_graph(controller: Any, *, allow_create_draft: bool = True) -> None:
+    serializer = getattr(controller, '_serialize_pipeline_task', None)
+    verifier = getattr(controller, '_verify', None)
+    if callable(serializer):
+        if callable(verifier):
+            verifier()
+        serializer()
+        return
+    if not allow_create_draft:
+        raise AttributeError('Pipeline controller does not support runtime graph serialization APIs.')
+    create_draft = getattr(controller, 'create_draft', None)
+    if callable(create_draft):
+        create_draft()
+        return
+    raise AttributeError('Pipeline controller does not support seed serialization APIs.')
+
+
+def build_pipeline_seed_controller(*, cfg: Any, controller: Any, pipeline_profile: str) -> dict[str, Any]:
+    seed_grid_run_id = f'seed__{normalize_pipeline_profile(pipeline_profile)}'
     template_cfg = apply_pipeline_profile_defaults(_clone_cfg_for_runtime_overrides(cfg), pipeline_profile)
-    plan = _build_pipeline_plan(template_cfg, template_grid_run_id, child_execution='logging')
-    shared_defaults = _build_pipeline_template_runtime_defaults(cfg=template_cfg, plan=plan, grid_run_id=template_grid_run_id, pipeline_profile=pipeline_profile)
+    _set_cfg_value(template_cfg, 'pipeline.plan_only', True)
+    plan = _build_pipeline_plan(template_cfg, seed_grid_run_id, child_execution='logging')
+    shared_defaults = _build_pipeline_template_runtime_defaults(cfg=template_cfg, plan=plan, grid_run_id=seed_grid_run_id, pipeline_profile=pipeline_profile)
     editable_defaults = extract_pipeline_editable_defaults(shared_defaults, pipeline_profile=pipeline_profile)
+    operator_inputs = build_pipeline_operator_inputs(shared_defaults, pipeline_profile=pipeline_profile)
     _reset_pipeline_controller_definition(controller)
     setattr(
         controller,
@@ -1487,11 +1417,40 @@ def build_pipeline_template_draft(*, cfg: Any, controller: Any, pipeline_profile
     )
     _seed_pipeline_template_parameters(controller, editable_defaults)
     _add_clearml_pipeline_template_steps(cfg=cfg, plan=plan, steps=plan['steps'], controller=controller, use_templates=True, shared_defaults=editable_defaults)
-    create_draft = getattr(controller, 'create_draft', None)
-    if not callable(create_draft):
-        raise AttributeError('Pipeline controller does not support create_draft.')
-    create_draft()
-    return {'plan': plan, 'shared_defaults': shared_defaults, 'editable_defaults': editable_defaults, 'ui_whitelist': build_pipeline_ui_parameter_whitelist(pipeline_profile)}
+    _serialize_pipeline_controller_graph(controller, allow_create_draft=False)
+    pipeline_task_id = clearml_task_id(controller)
+    pipeline_run = _build_local_pipeline_run_summary(
+        cfg=template_cfg,
+        plan=plan,
+        grid_run_id=seed_grid_run_id,
+        dataset_register_ref=None,
+        preprocess_refs=[],
+        train_refs=[],
+        train_ensemble_refs=[],
+        leaderboard_ref=None,
+        infer_ref=None,
+        executed_jobs=0,
+    )
+    pipeline_run['pipeline_task_id'] = pipeline_task_id
+    pipeline_run['pipeline_profile'] = normalize_pipeline_profile(pipeline_profile)
+    pipeline_run = _finalize_pipeline_run_summary(template_cfg, pipeline_run, status='completed')
+    report_max_models = (_resolve_exec_policy_limits(template_cfg) or {}).get('max_models') or 5
+    report_bundle = build_pipeline_report_bundle(
+        pipeline_run,
+        cfg=template_cfg,
+        max_models=int(report_max_models) if int(report_max_models) > 0 else 5,
+        pipeline_task_id=pipeline_task_id,
+    )
+    return {
+        'plan': plan,
+        'shared_defaults': shared_defaults,
+        'editable_defaults': editable_defaults,
+        'ui_whitelist': build_pipeline_ui_parameter_whitelist(pipeline_profile),
+        'operator_inputs': operator_inputs,
+        'pipeline_run': pipeline_run,
+        'report_bundle': report_bundle,
+        'out_payload': {'pipeline_run': pipeline_run},
+    }
 def _resolve_pipeline_template_profile(cfg: Any, plan: Mapping[str, Any]) -> str:
     return resolve_pipeline_profile(cfg, plan)
 
@@ -1500,6 +1459,9 @@ def _apply_pipeline_run_task_identity(*, task_id: str, cfg: Any, pipeline_profil
     properties = dict(metadata.get('user_properties') or {})
     schema_version = _normalize_str(properties.get('schema_version')) or _normalize_str(_cfg_value(cfg, 'run.schema_version')) or 'v1'
     usecase_id = _normalize_str(metadata.get('usecase_id')) or _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'unknown'
+    project_name = _normalize_str(metadata.get('project_name'))
+    if project_name:
+        set_clearml_task_project(task_id, project_name)
     run_tags = build_runtime_tags(
         process='pipeline',
         schema_version=schema_version,
@@ -1525,10 +1487,11 @@ def _apply_pipeline_run_task_identity(*, task_id: str, cfg: Any, pipeline_profil
     ensure_clearml_task_properties(task_id, run_properties)
 
 
-def _build_pipeline_launch_summary(*, cfg: Any, plan: Mapping[str, Any], grid_run_id: str, controller_task_id: str, template_task_id: str, pipeline_profile: str, queue_name: str | None) -> dict[str, Any]:
+def _build_pipeline_launch_summary(*, cfg: Any, plan: Mapping[str, Any], grid_run_id: str, controller_task_id: str, seed_task_id: str, pipeline_profile: str, queue_name: str | None) -> dict[str, Any]:
     summary = _build_local_pipeline_run_summary(cfg=cfg, plan=plan, grid_run_id=grid_run_id, dataset_register_ref=None, preprocess_refs=[], train_refs=[], train_ensemble_refs=[], leaderboard_ref=None, infer_ref=None, executed_jobs=0)
     summary['pipeline_task_id'] = controller_task_id
-    summary['template_task_id'] = template_task_id
+    summary['seed_task_id'] = seed_task_id
+    summary['template_task_id'] = seed_task_id
     summary['pipeline_profile'] = pipeline_profile
     if queue_name:
         summary['controller_queue'] = queue_name
@@ -1536,6 +1499,7 @@ def _build_pipeline_launch_summary(*, cfg: Any, plan: Mapping[str, Any], grid_ru
 
 
 def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str) -> _VisiblePipelineRunContract:
+    validate_pipeline_operator_inputs(cfg, allow_placeholder_raw_dataset=False)
     plan = _build_pipeline_plan(cfg, grid_run_id, child_execution='logging')
     pipeline_profile = _resolve_pipeline_template_profile(cfg, plan)
     _assert_visible_pipeline_graph_contract(cfg=cfg, plan=plan, pipeline_profile=pipeline_profile)
@@ -1564,7 +1528,7 @@ def _assert_visible_pipeline_graph_contract(*, cfg: Any, plan: Mapping[str, Any]
     )
     expected_plan = _build_pipeline_plan(
         expected_cfg,
-        f'template__{normalize_pipeline_profile(pipeline_profile)}',
+        f'seed__{normalize_pipeline_profile(pipeline_profile)}',
         child_execution='logging',
     )
     actual_selection = dict(plan.get('selection') or {})
@@ -1613,7 +1577,7 @@ def _assert_visible_pipeline_graph_contract(*, cfg: Any, plan: Mapping[str, Any]
         }
     if mismatches:
         raise ValueError(
-            'Visible pipeline template clones use a fixed DAG. '
+            'Visible pipeline seed clones use a fixed DAG. '
             f'Use selection-based subsets under profile={normalize_pipeline_profile(pipeline_profile)!r} instead of '
             f'overriding graph-shaping pipeline values. Mismatch: {mismatches}'
         )
@@ -1629,6 +1593,12 @@ def _apply_visible_pipeline_run_defaults(*, target: Any, task_id: str, cfg: Any,
     )
     reset_clearml_task_args(task_id, _overrides_to_args(runtime_defaults))
     set_clearml_task_parameters(task_id, _template_pipeline_params(runtime_defaults), section='pipeline')
+    set_clearml_task_configuration(
+        task_id,
+        build_pipeline_operator_inputs(runtime_defaults, pipeline_profile=contract.pipeline_profile),
+        name='OperatorInputs',
+        description='Editable operator-facing pipeline inputs.',
+    )
     _apply_pipeline_run_task_identity(
         task_id=task_id,
         cfg=cfg,
@@ -1638,12 +1608,12 @@ def _apply_visible_pipeline_run_defaults(*, target: Any, task_id: str, cfg: Any,
     return runtime_defaults
 
 
-def _enqueue_pipeline_template_run(*, cfg: Any, grid_run_id: str) -> dict[str, Any]:
+def _enqueue_pipeline_seed_run(*, cfg: Any, grid_run_id: str) -> dict[str, Any]:
     contract = _resolve_visible_pipeline_run_contract(cfg=cfg, grid_run_id=grid_run_id)
-    template_task_id = resolve_pipeline_template_task_id(cfg, pipeline_profile=contract.pipeline_profile)
+    seed_task_id = resolve_pipeline_seed_task_id(cfg, pipeline_profile=contract.pipeline_profile)
     controller_name = _normalize_str(_cfg_value(cfg, 'run.clearml.task_name')) or f'pipeline__{grid_run_id}'
     controller_project = contract.metadata.get('project_name') or _normalize_str(_cfg_value(cfg, 'run.clearml.project_name'))
-    controller = clone_pipeline_controller(source_task_id=template_task_id, task_name=controller_name, project_name=controller_project)
+    controller = clone_pipeline_controller(source_task_id=seed_task_id, task_name=controller_name, project_name=controller_project)
     controller_task_id = clearml_task_id(controller)
     if not controller_task_id:
         raise RuntimeError('Cloned pipeline controller task id is missing.')
@@ -1654,7 +1624,7 @@ def _enqueue_pipeline_template_run(*, cfg: Any, grid_run_id: str) -> dict[str, A
         plan=contract.plan,
         grid_run_id=grid_run_id,
         controller_task_id=controller_task_id,
-        template_task_id=template_task_id,
+        seed_task_id=seed_task_id,
         pipeline_profile=contract.pipeline_profile,
         queue_name=contract.queue_name,
     )
@@ -1700,9 +1670,10 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
     if not getattr(controller, '_nodes', None):
         raise RuntimeError(
             'Current ClearML task does not contain a serialized pipeline graph. '
-            'Clone a visible pipeline template task from the Pipelines tab or run manage_templates.py --apply.'
+            'Clone a visible pipeline seed from the Pipelines tab or run manage_templates.py --apply.'
         )
     if contract.plan['plan_only']:
+        _serialize_pipeline_controller_graph(controller, allow_create_draft=False)
         summary = _build_local_pipeline_run_summary(
             cfg=cfg,
             plan=contract.plan,
@@ -1825,6 +1796,10 @@ def _create_pipeline_controller_runtime_context(cfg: Any) -> TaskContext:
     save_config_resolved(ctx, cfg)
     return ctx
 def run(cfg: Any) -> None:
+    execution = _normalize_str(_cfg_value(cfg, 'run.clearml.execution')) or 'local'
+    clearml_enabled = is_clearml_enabled(cfg)
+    if clearml_enabled and execution == 'pipeline_controller':
+        _normalize_ui_cloned_pipeline_cfg(cfg)
     grid_run_id = _normalize_str(_cfg_value(cfg, 'run.grid_run_id'))
     if not grid_run_id:
         grid_run_id = uuid.uuid4().hex
@@ -1832,9 +1807,7 @@ def run(cfg: Any) -> None:
     pipeline_flags = resolve_pipeline_run_flags(cfg)
     plan_only = resolve_pipeline_plan_only(cfg)
     identity = apply_clearml_identity(cfg, stage=cfg.task.stage)
-    execution = _normalize_str(_cfg_value(cfg, 'run.clearml.execution')) or 'local'
     controller_execution = execution == 'pipeline_controller'
-    clearml_enabled = is_clearml_enabled(cfg)
     if clearml_enabled and execution == 'pipeline_controller':
         ctx = _create_pipeline_controller_runtime_context(cfg)
     else:
@@ -1845,7 +1818,7 @@ def run(cfg: Any) -> None:
     pipeline_task_id = clearml_task_id(ctx.task) if ctx.task is not None else None
     if clearml_enabled and execution == 'pipeline_controller':
         if ctx.task is None:
-            pipeline_run = _enqueue_pipeline_template_run(cfg=cfg, grid_run_id=grid_run_id)
+            pipeline_run = _enqueue_pipeline_seed_run(cfg=cfg, grid_run_id=grid_run_id)
         else:
             pipeline_run = _execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id=grid_run_id)
         pipeline_task_id = _normalize_str(pipeline_run.get('pipeline_task_id')) or pipeline_task_id

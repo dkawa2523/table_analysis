@@ -520,7 +520,6 @@ def _build_encoding_note(
 
 
 def _write_preprocess_artifacts(
-    cfg: Any,
     *,
     ctx: Any,
     resolved_inputs: ResolvedInputs,
@@ -822,7 +821,6 @@ def run(cfg: Any) -> None:
         )
 
     (artifacts, dataset_dir) = _write_preprocess_artifacts(
-        cfg,
         ctx=ctx,
         resolved_inputs=resolved_inputs,
         runtime=runtime,

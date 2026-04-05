@@ -220,10 +220,12 @@
 ### 主な入力
 
 - `data.raw_dataset_id`
-- `pipeline.preprocess_variant` / `pipeline.preprocess_variants`
-- `pipeline.model_set` / `pipeline.model_variants`
+- `pipeline.selection.enabled_preprocess_variants`
+- `pipeline.model_set`
+- `pipeline.selection.enabled_model_variants`
 - `pipeline.run_*`
-- `ensemble.*`
+- `ensemble.selection.enabled_methods`
+- `ensemble.top_k`
 - `exec_policy.*`
 
 ### 主な出力
@@ -237,7 +239,7 @@
 ### どんなときに使うか
 
 - 前処理から leaderboard までを一括で回したいとき
-- visible pipeline template から controller 実行したいとき
+- seed pipeline から controller 実行したいとき
 
 ### 主なコード
 

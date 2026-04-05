@@ -26,7 +26,7 @@ ClearML 対応コードが散らかるのを防ぐための設計ガイドです
 
 - template
 - hparams
-- pipeline template
+- seed pipeline
 - UI logger
 
 ## やってはいけないこと

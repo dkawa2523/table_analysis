@@ -9,8 +9,8 @@
 | `local` | 最速の開発確認 | ローカル | 記録しない |
 | `logging` | UI 契約確認 | ローカル | task / artifact / plots を記録 |
 | `agent` | 単体 task の remote 実行 | Agent | queue ベースの task |
-| `clone` | template を元に remote 実行 | Agent | template clone |
-| `pipeline_controller` | operator 向け pipeline 実行 | Agent | visible pipeline template clone |
+| `clone` | 既存 task を元に remote 実行 | Agent | task clone |
+| `pipeline_controller` | operator 向け pipeline 実行 | Agent | `.pipelines/<profile>` の seed pipeline card から `NEW RUN` |
 
 ## 推奨の使い分け
 
@@ -24,7 +24,7 @@
 
 1. `manage_templates --apply`
 2. `manage_templates --validate`
-3. ClearML Pipelines タブから visible template を clone / 実行
+3. ClearML UI で `.pipelines/<profile>` の seed pipeline card を開き、`NEW RUN` 後に `Configuration > OperatorInputs` を確認し、実値は `Hyperparameters` で更新して実行
 
 ## 各モードの詳細
 
@@ -82,7 +82,10 @@ python -m tabular_analysis.cli task=train_model \
 
 ### pipeline_controller
 
-- visible pipeline template を clone して controller として実行する
+- `.pipelines/<profile>` の seed pipeline card から `NEW RUN` して controller として実行する
+- `Configuration > OperatorInputs` では placeholder や最小入力を確認する
+- 実際の `run.usecase_id` / `data.raw_dataset_id` は `Hyperparameters` 側で更新する
+- `data.raw_dataset_id` は placeholder のままにせず、既存 raw dataset id へ置き換える
 - operator 向けの正本
 - `controller/default/heavy-model` の queue 分割前提
 
@@ -101,7 +104,7 @@ python -m tabular_analysis.cli task=pipeline \
 - `run.clearml.queue_name` は pipeline child routing の正本ではありません。
 - pipeline mode では `exec_policy.queues.*` が child task の queue を決めます。
 - `run.clearml.queue_name` を渡す場合は controller queue の明示用途に限定します。
-- visible pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、入力は既存 `data.raw_dataset_id` です。
+- seed pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、入力は既存 `data.raw_dataset_id` です。
 
 ## queue との関係
 

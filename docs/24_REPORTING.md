@@ -88,7 +88,7 @@ pipeline は `pipeline_run.json` を lifecycle の canonical source とし、sto
 
 ## selection subset の扱い
 
-fixed DAG の visible pipeline template では、run ごとの差は graph 変更ではなく selection で表現します。
+fixed DAG の seed pipeline では、run ごとの差は graph 変更ではなく selection で表現します。
 
 - `pipeline.selection.enabled_preprocess_variants`
 - `pipeline.selection.enabled_model_variants`

@@ -183,19 +183,34 @@ def _join_project_parts(*parts: str, separator: str) -> str:
     return separator.join([str(part).strip(separator) for part in parts if str(part).strip(separator)])
 
 
-def build_pipeline_template_project_name(
+def _pipeline_seed_namespace(layout_cfg: Mapping[str, Any]) -> str:
+    return _normalize_str(layout_cfg.get('pipeline_seed_namespace')) or '.pipelines'
+
+
+def build_pipeline_seed_project_name(
     project_root: str,
     *,
+    pipeline_profile: str | None = None,
     layout: Mapping[str, Any] | None = None,
     cfg: Any | None = None,
 ) -> str:
     layout_cfg = dict(layout or _resolve_project_layout(cfg))
     separator = _layout_string(layout_cfg, 'separator', '/')
     solution_root = _layout_string(layout_cfg, 'solution_root', 'TabularAnalysis')
-    pipeline_root_group = _layout_string(layout_cfg, 'pipeline_root_group', 'Pipelines')
-    pipeline_templates_group = _layout_string(layout_cfg, 'pipeline_templates_group', 'Templates')
+    pipeline_seed_namespace = _pipeline_seed_namespace(layout_cfg)
+    profile = _normalize_str(pipeline_profile) or 'pipeline'
     root = _normalize_str(project_root) or 'MFG'
-    return _join_project_parts(root, solution_root, pipeline_root_group, pipeline_templates_group, separator=separator)
+    return _join_project_parts(root, solution_root, pipeline_seed_namespace, profile, separator=separator)
+
+
+def build_pipeline_template_project_name(
+    project_root: str,
+    *,
+    pipeline_profile: str | None = None,
+    layout: Mapping[str, Any] | None = None,
+    cfg: Any | None = None,
+) -> str:
+    return build_pipeline_seed_project_name(project_root, pipeline_profile=pipeline_profile, layout=layout, cfg=cfg)
 
 
 def build_pipeline_run_project_name(
@@ -266,10 +281,11 @@ def build_project_name(project_root: str, usecase_id: str, stage: str, *, proces
 def build_pipeline_project_name(
     project_root: str,
     *,
+    pipeline_profile: str | None = None,
     layout: Mapping[str, Any] | None = None,
     cfg: Any | None = None,
 ) -> str:
-    return build_pipeline_template_project_name(project_root, layout=layout, cfg=cfg)
+    return build_pipeline_seed_project_name(project_root, pipeline_profile=pipeline_profile, layout=layout, cfg=cfg)
 
 
 def build_pipeline_child_project_name(

@@ -71,7 +71,7 @@ def load_pipeline_controller_from_task(*, source_task_id: str | None=None, sourc
     return loader(task)
 
 
-def create_pipeline_draft_controller(*, project_name: str, task_name: str, module: str | None=None, script: str | None=None, args: Iterable[tuple[str, str]] | None=None, repo: str | None=None, branch: str | None=None, commit: str | None=None, working_dir: str | None=None) -> Any:
+def create_pipeline_seed_controller(*, project_name: str, task_name: str, module: str | None=None, script: str | None=None, args: Iterable[tuple[str, str]] | None=None, repo: str | None=None, branch: str | None=None, commit: str | None=None, working_dir: str | None=None) -> Any:
     PipelineController = _load_visible_pipeline_controller_class()
     kwargs: dict[str, Any] = {
         'project_name': str(project_name),
@@ -91,7 +91,7 @@ def create_pipeline_draft_controller(*, project_name: str, task_name: str, modul
     try:
         controller = PipelineController.create(**kwargs)
     except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
-        raise PlatformAdapterError(f'Failed to create visible pipeline draft: {exc}') from exc
+        raise PlatformAdapterError(f'Failed to create visible pipeline seed controller: {exc}') from exc
     task = _resolve_clearml_task(controller)
     _apply_clearml_task_type(task, clearml_task_type_controller())
     _apply_clearml_system_tags(task, ['pipeline'])
@@ -146,4 +146,4 @@ def pipeline_step_task_id_ref(step_name: str) -> str:
     if pipeline_utils is None:
         raise PlatformAdapterError('pipeline_utils is not available.')
     return pipeline_utils.step_task_id_ref(step_name)
-__all__ = ['apply_clearml_task_overrides', 'create_pipeline_controller', 'create_pipeline_draft_controller', 'clone_pipeline_controller', 'enqueue_pipeline_controller', 'load_pipeline_controller_from_task', 'pipeline_require_clearml_agent', 'pipeline_step_task_id_ref']
+__all__ = ['apply_clearml_task_overrides', 'create_pipeline_controller', 'create_pipeline_seed_controller', 'clone_pipeline_controller', 'enqueue_pipeline_controller', 'load_pipeline_controller_from_task', 'pipeline_require_clearml_agent', 'pipeline_step_task_id_ref']

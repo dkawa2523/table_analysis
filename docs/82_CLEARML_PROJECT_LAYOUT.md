@@ -9,7 +9,7 @@ location in the UI.
 
 Visible pipeline controllers use dedicated roots:
 
-- pipeline template: `<ROOT>/<solution_root>/Pipelines/Templates`
+- pipeline seed: `<ROOT>/<solution_root>/.pipelines/<profile>`
 - pipeline run: `<ROOT>/<solution_root>/Pipelines/Runs/<usecase_id>`
 - step template: `<ROOT>/<solution_root>/Templates/Steps/<process_group>`
 
@@ -26,7 +26,7 @@ Visible pipeline controllers use dedicated roots:
 - `05_Infer`
 - `05_Infer_Children`
 - `99_Leaderboard`
-- `Pipelines/Templates`
+- `.pipelines/<profile>`
 - `Pipelines/Runs/<usecase_id>`
 - `Templates/Steps/<group>`
 

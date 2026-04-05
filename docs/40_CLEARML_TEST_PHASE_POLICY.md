@@ -10,7 +10,7 @@ ClearML まわりの変更を、いきなり本番運用へ載せず、段階的
 
 1. local
 2. logging
-3. visible template の apply / validate
+3. template / seed の apply / validate
 4. pipeline_controller
 5. operator UI 確認
 
@@ -43,12 +43,12 @@ python tools/rehearsal/run_pipeline_v2.py \
   --project-root LOCAL
 ```
 
-## Phase 3: template refresh
+## Phase 3: template / seed refresh
 
 目的:
 
-- template metadata drift の検出
-- visible pipeline template の存在確認
+- template / seed metadata drift の検出
+- seed pipeline の存在確認
 
 代表コマンド:
 
@@ -62,7 +62,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 目的:
 
 - controller queue / child queue の動作確認
-- visible template clone 実行の確認
+- seed pipeline の `NEW RUN` 実行確認
 
 確認点:
 
@@ -74,8 +74,8 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 目的:
 
-- Pipelines タブで template が見える
-- clone / rerun ができる
+- `.pipelines/<profile>` project で seed pipeline card が見える
+- `NEW RUN` / rerun ができる
 - project tree から child task を辿れる
 
 ## 推奨 gate

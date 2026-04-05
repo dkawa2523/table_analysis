@@ -32,8 +32,9 @@ clearml:
   task_name: null
 
   pipeline:
-    # Visible pipeline templates and runs live in the same project.
+    # Visible pipeline seeds live in Pipelines, and concrete runs live under Pipelines/Runs.
     project_name: null
+    # Explicit seed/base task id override. The legacy key name is kept for compatibility.
     template_task_id: null
 
   extra_tags: []

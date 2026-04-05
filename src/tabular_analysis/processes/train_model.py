@@ -22,7 +22,7 @@ from ..io.bundle_io import load_bundle, save_bundle
 from ..metrics.regression import REGRESSION_METRIC_ORDER, compute_regression_metrics
 from ..monitoring.drift import build_train_profile
 from .drift_report import annotate_profile, resolve_drift_settings, sample_frame
-from .train_shared import build_plotly_confusion_matrix as _build_plotly_confusion_matrix, build_plotly_roc_curve as _build_plotly_roc_curve, build_prediction_sample as _build_prediction_sample, resolve_classification_metrics as _resolve_classification_metrics, resolve_classification_mode as _resolve_classification_mode
+from .train_shared import build_plotly_confusion_matrix as _build_plotly_confusion_matrix, build_plotly_roc_curve as _build_plotly_roc_curve, build_prediction_sample as _build_prediction_sample, resolve_calibration_settings as _resolve_calibration_settings, resolve_ci_settings as _resolve_ci_settings, resolve_classification_metrics as _resolve_classification_metrics, resolve_classification_mode as _resolve_classification_mode, resolve_imbalance_settings as _resolve_imbalance_settings, resolve_regression_metrics as _resolve_regression_metrics, resolve_thresholding_settings as _resolve_thresholding_settings, resolve_uncertainty_settings as _resolve_uncertainty_settings, resolve_viz_settings as _resolve_viz_settings
 from ..ops.clearml_identity import apply_clearml_identity
 from ..platform_adapter_artifacts import resolve_output_dir, upload_artifact
 from ..platform_adapter_clearml_env import is_clearml_enabled, resolve_version_props
@@ -34,121 +34,10 @@ from .lifecycle import emit_outputs_and_manifest, start_runtime
 from ..viz.plots import plot_confusion_matrix, plot_feature_importance, plot_interval_width_histogram, plot_reliability_curve, plot_regression_residuals, plot_roc_curve, write_confusion_matrix_csv
 from ..viz.regression_plots import build_regression_metrics_table, build_residuals_plot, build_true_pred_scatter
 from ..viz.render_common import plotly_go as _plotly_go
-_DEFAULT_THRESHOLD_GRID = [i / 100 for i in range(5, 100, 5)]
 _RECOVERABLE_ERRORS = (AttributeError, ImportError, KeyError, LookupError, OSError, RuntimeError, TypeError, ValueError, FloatingPointError, json.JSONDecodeError)
 def _normalize_key(value: Any) -> str | None:
     text = _normalize_str(value)
     return None if text is None else text.lower().replace('-', '_')
-def _resolve_regression_metrics(cfg: Any) -> list[str]:
-    metrics = list(REGRESSION_METRIC_ORDER)
-    extras = _to_list(_cfg_value(cfg, 'eval.metrics.regression', None))
-    if extras:
-        metrics.extend(extras)
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for name in metrics:
-        key = _normalize_key(name)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        ordered.append(key)
-    return ordered
-def _resolve_viz_settings(cfg: Any) -> dict[str, Any]:
-    enabled = bool(_cfg_value(cfg, 'viz.enabled', True))
-    heavy_enabled = bool(_cfg_value(cfg, 'viz.heavy.enabled', False))
-    max_features = _coerce_default(_cfg_value(cfg, 'viz.max_features', 20), int, 20)
-    max_points = _coerce_default(_cfg_value(cfg, 'viz.max_points', 1000), int, 1000)
-    confusion_normalize = bool(_cfg_value(cfg, 'viz.confusion_normalize', True))
-    roc_curve = bool(_cfg_value(cfg, 'viz.roc_curve', True))
-    return {'enabled': enabled, 'heavy_enabled': heavy_enabled, 'max_features': max_features, 'max_points': max_points, 'confusion_normalize': confusion_normalize, 'roc_curve': roc_curve}
-def _coerce_default(value: Any, caster: Any, default: Any) -> Any:
-    try:
-        return caster(value)
-    except (TypeError, ValueError, OverflowError):
-        return default
-def _normalize_threshold_grid(values: Any) -> list[float]:
-    container = _to_container(values)
-    if container is None:
-        return []
-    if isinstance(container, (list, tuple, set)):
-        raw_values = list(container)
-    else:
-        raw_values = [container]
-    grid: list[float] = []
-    for value in raw_values:
-        try:
-            num = float(value)
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if not math.isfinite(num):
-            continue
-        if num < 0.0 or num > 1.0:
-            continue
-        grid.append(float(num))
-    if not grid:
-        return []
-    return sorted(set(grid))
-def _resolve_enabled_text(cfg: Any, *, enabled_path: str, value_path: str, default: str) -> tuple[bool, str]:
-    enabled = bool(_cfg_value(cfg, enabled_path, False))
-    value = (_normalize_str(_cfg_value(cfg, value_path, default)) or default).lower()
-    return (enabled, value)
-def _validate_enabled_choice(*, enabled: bool, value: str, allowed: tuple[str, ...], message: str) -> None:
-    if enabled and value not in allowed:
-        raise ValueError(message)
-def _resolve_thresholding_settings(cfg: Any) -> dict[str, Any]:
-    enabled = bool(_cfg_value(cfg, 'eval.thresholding.enabled', False))
-    metric = _normalize_str(_cfg_value(cfg, 'eval.thresholding.metric', 'f1')) or 'f1'
-    grid: list[float] = []
-    if enabled:
-        raw_grid = _cfg_value(cfg, 'eval.thresholding.grid', None)
-        grid = _normalize_threshold_grid(raw_grid)
-        if not grid and raw_grid is None:
-            grid = list(_DEFAULT_THRESHOLD_GRID)
-        if not grid:
-            raise ValueError('eval.thresholding.grid must include values between 0 and 1.')
-    return {'enabled': enabled, 'metric': metric, 'grid': grid}
-def _resolve_calibration_settings(cfg: Any) -> dict[str, Any]:
-    (enabled, method) = _resolve_enabled_text(cfg, enabled_path='eval.calibration.enabled', value_path='eval.calibration.method', default='sigmoid')
-    (_, mode) = _resolve_enabled_text(cfg, enabled_path='eval.calibration.enabled', value_path='eval.calibration.mode', default='prefit')
-    _validate_enabled_choice(enabled=enabled, value=method, allowed=('sigmoid', 'isotonic'), message="eval.calibration.method must be 'sigmoid' or 'isotonic'.")
-    _validate_enabled_choice(enabled=enabled, value=mode, allowed=('prefit',), message="eval.calibration.mode must be 'prefit'.")
-    return {'enabled': enabled, 'method': method, 'mode': mode}
-def _resolve_uncertainty_settings(cfg: Any) -> dict[str, Any]:
-    (enabled, method) = _resolve_enabled_text(cfg, enabled_path='eval.uncertainty.enabled', value_path='eval.uncertainty.method', default='conformal_split')
-    alpha = _coerce_default(_cfg_value(cfg, 'eval.uncertainty.alpha', 0.1), float, 0.1)
-    use_abs_residual = bool(_cfg_value(cfg, 'eval.uncertainty.use_abs_residual', True))
-    _validate_enabled_choice(enabled=enabled, value=method, allowed=('conformal_split',), message="eval.uncertainty.method must be 'conformal_split'.")
-    if enabled and (not 0.0 < alpha < 1.0):
-        raise ValueError('eval.uncertainty.alpha must be between 0 and 1.')
-    return {'enabled': enabled, 'method': method, 'alpha': alpha, 'use_abs_residual': use_abs_residual}
-def _resolve_ci_settings(cfg: Any) -> dict[str, Any]:
-    enabled = bool(_cfg_value(cfg, 'eval.ci.enabled', False))
-    n_boot = _coerce_default(_cfg_value(cfg, 'eval.ci.n_boot', 200), int, 200)
-    alpha = _coerce_default(_cfg_value(cfg, 'eval.ci.alpha', 0.05), float, 0.05)
-    seed = _coerce_default(_cfg_value(cfg, 'eval.ci.seed', 0), int, 0)
-    if enabled and n_boot <= 0:
-        raise ValueError('eval.ci.n_boot must be > 0.')
-    if enabled and (not 0.0 < alpha < 1.0):
-        raise ValueError('eval.ci.alpha must be between 0 and 1.')
-    return {'enabled': enabled, 'n_boot': n_boot, 'alpha': alpha, 'seed': seed}
-def _normalize_class_weight(value: Any) -> Any | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        key = value.strip().lower()
-        if key in ('', 'none', 'null'):
-            return None
-        if key == 'balanced':
-            return 'balanced'
-    return value
-def _resolve_imbalance_settings(cfg: Any) -> dict[str, Any]:
-    enabled = bool(_cfg_value(cfg, 'eval.imbalance.enabled', False))
-    strategy = _normalize_key(_cfg_value(cfg, 'eval.imbalance.strategy', 'class_weight'))
-    class_weight = _normalize_class_weight(_cfg_value(cfg, 'eval.imbalance.class_weight', None))
-    pos_weight = _cfg_value(cfg, 'eval.imbalance.pos_weight', None)
-    if enabled and strategy not in ('class_weight', 'pos_weight', 'oversample', 'undersample'):
-        raise ValueError('eval.imbalance.strategy must be class_weight, pos_weight, oversample, or undersample.')
-    return {'enabled': enabled, 'strategy': strategy, 'class_weight': class_weight, 'pos_weight': pos_weight}
 def _supports_param(class_path: str, param: str) -> tuple[bool, str | None]:
     try:
         (module_name, class_name) = class_path.rsplit('.', 1)
@@ -1289,7 +1178,7 @@ def _fit_predict_and_score(cfg: Any, *, ctx: Any, runtime: TrainRuntimeContext) 
         _record_model_failure(ctx=ctx, cfg=cfg, processed_dataset_id=runtime.resolved_inputs.processed_dataset_id, split_hash=runtime.resolved_inputs.split_hash, recipe_hash=runtime.resolved_inputs.recipe_hash, model_variant_name=runtime.model_variant_name, primary_metric=runtime.primary_metric, direction=runtime.direction, cv_folds=runtime.cv_folds, cv_seed=runtime.cv_seed, task_type=task_type, n_classes=n_classes, error=exc)
         raise
     return TrainExecutionResult(model=model, calibrated_model=calibrated_model, metrics_holdout=metrics_holdout, regression_metrics=regression_metrics, y_val_pred=y_val_pred, y_val_proba=y_val_proba, threshold_payload=threshold_payload, calibration_payload=calibration_payload, calibration_report_path=calibration_report_path, best_score=best_score, debug_sample=debug_sample, ci_payload=ci_payload, preds_valid_path=preds_valid_path, classes_path=classes_path, preds_schema=preds_schema, cv_summary=cv_summary)
-def _build_and_save_train_bundle(*, cfg: Any, ctx: Any, clearml_enabled: bool, runtime: TrainRuntimeContext, result: TrainExecutionResult, metric_artifacts: TrainMetricArtifacts) -> tuple[Path, str | None]:
+def _build_and_save_train_bundle(*, ctx: Any, clearml_enabled: bool, runtime: TrainRuntimeContext, result: TrainExecutionResult, metric_artifacts: TrainMetricArtifacts) -> tuple[Path, str | None]:
     resolved = runtime.resolved_inputs
     frame = runtime.frame
     train_task_id = _resolve_task_id(ctx)
@@ -1310,7 +1199,7 @@ def _run_train_model_flow(cfg: Any, *, ctx: Any, clearml_enabled: bool) -> None:
     result = _fit_predict_and_score(cfg, ctx=ctx, runtime=runtime)
     frame = runtime.frame
     metric_artifacts = _build_train_metric_artifacts(output_dir=ctx.output_dir, primary_metric=runtime.primary_metric, direction=runtime.direction, task_type=frame.task_type, metrics_holdout=result.metrics_holdout, train_rows=len(frame.train_idx), val_rows=len(frame.val_idx), n_classes=frame.n_classes, cv_summary=result.cv_summary, threshold_payload=result.threshold_payload, calibration_payload=result.calibration_payload, uncertainty_payload=runtime.uncertainty_payload, ci_payload=result.ci_payload)
-    (model_bundle_path, train_task_id) = _build_and_save_train_bundle(cfg=cfg, ctx=ctx, clearml_enabled=clearml_enabled, runtime=runtime, result=result, metric_artifacts=metric_artifacts)
+    (model_bundle_path, train_task_id) = _build_and_save_train_bundle(ctx=ctx, clearml_enabled=clearml_enabled, runtime=runtime, result=result, metric_artifacts=metric_artifacts)
     resolved = runtime.resolved_inputs
     (feature_importance_path, confusion_csv_path) = _emit_train_viz_and_logs(cfg=cfg, ctx=ctx, clearml_enabled=clearml_enabled, task_type=frame.task_type, model=result.model, feature_names=frame.feature_names, y_val=runtime.y_val, y_val_pred=result.y_val_pred, y_val_proba=result.y_val_proba, n_classes=frame.n_classes, class_labels=frame.class_labels, primary_metric=runtime.primary_metric, metrics_holdout=result.metrics_holdout, regression_metrics=result.regression_metrics, uncertainty_payload=runtime.uncertainty_payload)
     _finalize_train_outputs(cfg=cfg, ctx=ctx, clearml_enabled=clearml_enabled, preprocess_run_dir=resolved.preprocess_run_dir, preprocess_bundle=frame.preprocess_bundle, model_variant=runtime.model_variant, model_variant_fit=runtime.model_variant_fit, model_variant_name=runtime.model_variant_name, processed_dataset_id=resolved.processed_dataset_id, split_hash=resolved.split_hash, recipe_hash=resolved.recipe_hash, train_idx=frame.train_idx, val_idx=frame.val_idx, cv_seed=runtime.cv_seed, task_type=frame.task_type, n_classes=frame.n_classes, primary_metric=runtime.primary_metric, direction=runtime.direction, best_score=result.best_score, ci_payload=result.ci_payload, metrics_holdout=result.metrics_holdout, threshold_payload=result.threshold_payload, calibration_payload=result.calibration_payload, uncertainty_payload=runtime.uncertainty_payload, imbalance_report=runtime.imbalance_report, class_labels=frame.class_labels, preds_schema=result.preds_schema, train_task_id=train_task_id, preprocess_task_id=resolved.preprocess_task_id, pipeline_task_id=resolved.pipeline_task_id, model_bundle_path=model_bundle_path, metrics_path=metric_artifacts.metrics_path, metrics_ci_path=metric_artifacts.metrics_ci_path, preds_valid_path=result.preds_valid_path, classes_path=result.classes_path, postprocess_path=metric_artifacts.postprocess_path, calibration_report_path=result.calibration_report_path, feature_importance_path=feature_importance_path, confusion_csv_path=confusion_csv_path)

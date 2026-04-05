@@ -341,6 +341,102 @@ def set_clearml_task_parameters(task_id: str, parameters: Mapping[str, Any], *, 
             setter(f'{section}/{key}', value)
         return True
     raise PlatformAdapterError('ClearML Task.set_parameters_as_dict is not available.')
+def set_clearml_task_configuration(task_id: str, config: Mapping[str, Any], *, name: str='effective', description: str | None=None) -> bool:
+    if not config:
+        return False
+    task = _get_clearml_task(task_id)
+    setter = getattr(task, 'set_configuration_object', None)
+    if callable(setter):
+        try:
+            setter(
+                str(name),
+                description=description,
+                config_type='dictionary',
+                config_dict=dict(config),
+            )
+            return True
+        except _RECOVERABLE_ERRORS as exc:
+            raise PlatformAdapterError(f'Failed to set task configuration {name!r}: {exc}') from exc
+    connector = getattr(task, 'connect_configuration', None)
+    if callable(connector):
+        try:
+            connector(dict(config), name=str(name))
+            return True
+        except _RECOVERABLE_ERRORS as exc:
+            raise PlatformAdapterError(f'Failed to connect task configuration {name!r}: {exc}') from exc
+    raise PlatformAdapterError('ClearML task configuration API is not available.')
+def get_clearml_task_configuration(task_id: str, *, name: str='effective') -> Any | None:
+    task = _get_clearml_task(task_id)
+    getter = getattr(task, 'get_configuration_object_as_dict', None)
+    if callable(getter):
+        try:
+            return getter(str(name))
+        except _RECOVERABLE_ERRORS as exc:
+            raise PlatformAdapterError(f'Failed to read task configuration {name!r}: {exc}') from exc
+    getter = getattr(task, 'get_configuration_object', None)
+    if callable(getter):
+        try:
+            value = getter(str(name))
+        except _RECOVERABLE_ERRORS as exc:
+            raise PlatformAdapterError(f'Failed to read task configuration {name!r}: {exc}') from exc
+        if value is None:
+            return None
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return value
+    raise PlatformAdapterError('ClearML task configuration API is not available.')
+def set_clearml_task_project(task_id: str, project_name: str) -> bool:
+    task = _get_clearml_task(task_id)
+    actual_project = clearml_task_project_name(task)
+    if str(actual_project or '') == str(project_name):
+        return False
+    mover = getattr(task, 'move_to_project', None)
+    if callable(mover):
+        try:
+            mover(new_project_name=str(project_name))
+            return True
+        except _RECOVERABLE_ERRORS:
+            pass
+    setter = getattr(task, 'set_project', None)
+    if not callable(setter):
+        raise PlatformAdapterError('ClearML Task.set_project is not available.')
+    try:
+        setter(project_name=str(project_name))
+    except _RECOVERABLE_ERRORS as exc:
+        raise PlatformAdapterError(f'Failed to move task to project {project_name!r}: {exc}') from exc
+    return True
+def upload_clearml_task_artifact(task_id: str, name: str, path: Path) -> bool:
+    task = _get_clearml_task(task_id)
+    uploader = getattr(task, 'upload_artifact', None)
+    if not callable(uploader):
+        raise PlatformAdapterError('ClearML Task.upload_artifact is not available.')
+    try:
+        uploader(str(name), artifact_object=Path(path))
+    except TypeError:
+        try:
+            uploader(str(name), Path(path))
+        except _RECOVERABLE_ERRORS as exc:
+            raise PlatformAdapterError(f'Failed to upload artifact {name!r}: {exc}') from exc
+    except _RECOVERABLE_ERRORS as exc:
+        raise PlatformAdapterError(f'Failed to upload artifact {name!r}: {exc}') from exc
+    return True
+
+
+def set_clearml_task_runtime_properties(task_id: str, properties: Mapping[str, Any]) -> bool:
+    if not properties:
+        return False
+    task = _get_clearml_task(task_id)
+    setter = getattr(task, '_set_runtime_properties', None)
+    if not callable(setter):
+        raise PlatformAdapterError('ClearML Task runtime properties API is not available.')
+    try:
+        setter(dict(properties))
+    except _RECOVERABLE_ERRORS as exc:
+        raise PlatformAdapterError(f'Failed to set runtime properties: {exc}') from exc
+    return True
+
+
 def enqueue_clearml_task(task_id: str, queue_name: str, *, force: bool=False) -> None:
     if not queue_name:
         raise PlatformAdapterError('queue_name is required to enqueue a ClearML task.')
@@ -357,6 +453,19 @@ def enqueue_clearml_task(task_id: str, queue_name: str, *, force: bool=False) ->
             ClearMLTask.enqueue(str(task_id), queue_name=str(queue_name))
     except _RECOVERABLE_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to enqueue ClearML task: {exc}') from exc
+def reset_clearml_task(task_id: str, *, force: bool=False, set_started_on_success: bool=False) -> bool:
+    task = _get_clearml_task(task_id)
+    resetter = getattr(task, 'reset', None)
+    if not callable(resetter):
+        raise PlatformAdapterError('ClearML Task.reset is not available.')
+    try:
+        resetter(
+            set_started_on_success=bool(set_started_on_success),
+            force=bool(force),
+        )
+    except _RECOVERABLE_ERRORS as exc:
+        raise PlatformAdapterError(f'Failed to reset ClearML task: {exc}') from exc
+    return True
 def get_clearml_task_status(task_id: str) -> str | None:
     task = _get_clearml_task(task_id)
     status = getattr(task, 'status', None)
@@ -658,4 +767,4 @@ def resolve_clearml_task_url(cfg: Any, task_id: str) -> str | None:
     if url:
         return str(url)
     return None
-__all__ = ['clearml_task_exists', 'create_clearml_task', 'list_clearml_tasks_by_tags', 'clearml_task_id', 'clearml_task_tags', 'clearml_task_script', 'clearml_task_status_from_obj', 'clearml_task_type_from_obj', 'clearml_task_project_name', 'find_clearml_task_id_by_tags', 'get_clearml_task_tags', 'get_clearml_task_script', 'get_clearml_task_args', 'clone_clearml_task', 'set_clearml_task_entry_point', 'set_clearml_task_parameters', 'enqueue_clearml_task', 'get_clearml_task_status', 'ensure_clearml_task_tags', 'replace_clearml_task_tags', 'update_clearml_task_tags', 'ensure_clearml_task_requirements', 'ensure_clearml_task_properties', 'ensure_clearml_task_args', 'reset_clearml_task_args', 'apply_clearml_task_overrides', 'ensure_clearml_task_script', 'get_task_artifact_local_copy', 'resolve_clearml_task_url']
+__all__ = ['clearml_task_exists', 'create_clearml_task', 'list_clearml_tasks_by_tags', 'clearml_task_id', 'clearml_task_tags', 'clearml_task_script', 'clearml_task_status_from_obj', 'clearml_task_type_from_obj', 'clearml_task_project_name', 'find_clearml_task_id_by_tags', 'get_clearml_task_tags', 'get_clearml_task_script', 'get_clearml_task_args', 'clone_clearml_task', 'set_clearml_task_entry_point', 'set_clearml_task_parameters', 'set_clearml_task_configuration', 'get_clearml_task_configuration', 'set_clearml_task_project', 'upload_clearml_task_artifact', 'set_clearml_task_runtime_properties', 'enqueue_clearml_task', 'reset_clearml_task', 'get_clearml_task_status', 'ensure_clearml_task_tags', 'replace_clearml_task_tags', 'update_clearml_task_tags', 'ensure_clearml_task_requirements', 'ensure_clearml_task_properties', 'ensure_clearml_task_args', 'reset_clearml_task_args', 'apply_clearml_task_overrides', 'ensure_clearml_task_script', 'get_task_artifact_local_copy', 'resolve_clearml_task_url']

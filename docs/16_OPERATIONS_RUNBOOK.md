@@ -1,7 +1,7 @@
 ﻿# 16 Operations Runbook
 
 このファイルは、operator が日常運用で使う最短手順をまとめた runbook です。  
-想定する流れは「template を同期し、visible pipeline template を確認し、実行し、結果と推奨モデルを確認する」です。
+想定する流れは「seed pipeline を同期し、`.pipelines/<profile>` で確認し、`NEW RUN` で実行し、結果と推奨モデルを確認する」です。
 
 ## 1. 前提条件
 
@@ -12,7 +12,7 @@
 - agent の `/root/.clearml` は Docker named volume を使う
 - Windows bind mount は task repository / venv / uv cache が `p9_client_rpc` 待ちになりやすいので避ける
 
-## 2. template を同期する
+## 2. seed pipeline を同期する
 
 ```bash
 python tools/clearml_templates/manage_templates.py --apply --project-root LOCAL
@@ -21,7 +21,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 確認ポイント:
 
-- visible pipeline template が `LOCAL/TabularAnalysis/Pipelines/Templates` にある
+- seed pipeline が `LOCAL/TabularAnalysis/.pipelines/<profile>` にある
 - `pipeline`
 - `train_model_full`
 - `train_ensemble_full`
@@ -30,13 +30,14 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 ### 推奨
 
-1. ClearML の `Pipelines` タブを開く
-2. `LOCAL/TabularAnalysis/Pipelines` の template を確認する
-3. 必要な template を clone する
-4. dataset id や usecase などを編集する
-5. 実行する
+1. ClearML UI で対象 profile の seed pipeline project を開く
+2. `LOCAL/TabularAnalysis/.pipelines/<profile>` の seed card を確認する
+3. 必要な card を開いて `NEW RUN` を選ぶ
+4. `Configuration > OperatorInputs` を先に確認し、`run.usecase_id` と `data.raw_dataset_id` の想定値を把握する
+5. `data.raw_dataset_id` が placeholder のままなら、対応する `Hyperparameters` 側の値を既存 raw dataset id へ置き換える
+6. 実行する
 
-### template の使い分け
+### seed profile の使い分け
 
 - `pipeline`
   - preprocess + single-model train + leaderboard
@@ -47,7 +48,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 
 注意:
 
-- visible pipeline template の DAG は profile ごとに固定です
+- seed pipeline の DAG は profile ごとに固定です
 - 標準 pipeline は `data.raw_dataset_id` 指定前提で、`dataset_register` は準備系導線です
 - UI から安全に編集する対象は `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants` に絞ります
 - `train_ensemble_full` だけは追加で `ensemble.selection.enabled_methods`, `ensemble.top_k` を編集対象にします
@@ -86,20 +87,19 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
+  +pipeline.profile=train_ensemble_full \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  pipeline.preprocess_variant=stdscaler_ohe \
+  pipeline.selection.enabled_preprocess_variants=[stdscaler_ohe] \
   pipeline.model_set=regression_all \
-  pipeline.run_train_ensemble=true \
-  ensemble.enabled=true \
-  ensemble.methods=[mean_topk,weighted,stacking]
+  ensemble.selection.enabled_methods=[mean_topk,weighted,stacking]
 ```
 
 ## 5. 実行後に見る場所
 
 ### ClearML UI
 
-- Pipeline template
-  - `LOCAL/TabularAnalysis/Pipelines/Templates`
+- Pipeline seed
+  - `LOCAL/TabularAnalysis/.pipelines/<profile>`
 - Pipeline run
   - `LOCAL/TabularAnalysis/Pipelines/Runs/<usecase_id>`
 - child tasks

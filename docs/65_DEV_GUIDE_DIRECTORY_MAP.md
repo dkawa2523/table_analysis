@@ -114,7 +114,7 @@ variant や計算ロジックの正本です。
 ClearML 契約の中心です。
 
 - template lookup
-- pipeline template helper
+- pipeline seed helper
 - hyperparameter section helper
 - visible pipeline controller 契約
 

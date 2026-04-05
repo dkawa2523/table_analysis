@@ -15,7 +15,7 @@
 - 単体モデルと ensemble の比較評価
 - leaderboard による推奨モデル選定
 - ClearML による task / artifact / pipeline / model traceability
-- ClearML Pipelines タブを正本とした pipeline template 運用
+- ClearML 上の seed pipeline を正本とした運用
 - task-time install 前提の再現可能 runtime
 
 ## Out Of Scope
@@ -64,7 +64,7 @@ ClearML を使う場合は、project、tags、properties、artifacts、HyperPara
 ## この repo の主な利用者
 
 - operator
-  - ClearML UI から template を確認し、clone して pipeline を実行する
+  - ClearML UI の `<project_root>/TabularAnalysis/.pipelines/<profile>` にある seed pipeline card を開き、`NEW RUN` 前に `Configuration > OperatorInputs` を確認し、実値は `Hyperparameters` で更新して pipeline を実行する
 - ML engineer
   - 前処理、モデル、評価、report を実装・改善する
 - reviewer / newcomer

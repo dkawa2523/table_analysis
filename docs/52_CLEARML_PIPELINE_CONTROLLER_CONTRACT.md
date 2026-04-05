@@ -6,29 +6,29 @@
 
 ## 正本の考え方
 
-pipeline 実行の正本は visible pipeline template です。  
-runtime は hidden controller を ad hoc に作らず、visible template を clone して run controller を作ります。
+pipeline 実行の正本は seed pipeline です。  
+runtime は hidden controller を ad hoc に作らず、seed pipeline から run controller を起動します。
 
-## template 側
+## seed pipeline 側
 
-visible pipeline template は次を満たします。
+seed pipeline は次を満たします。
 
 - `TaskTypes.controller`
 - `process:pipeline`
-- `task_kind:template`
+- `task_kind:seed`
 - `pipeline_profile:<name>`
-- visible project: `<project_root>/TabularAnalysis/Pipelines`
+- project: `<project_root>/TabularAnalysis/.pipelines/<profile>`
 
 ## run controller 側
 
-run controller は template clone 後に runtime metadata へ上書きされます。
+run controller は seed pipeline から起動された後に runtime metadata へ上書きされます。
 
 必須の考え方:
 
 - `task_kind:run`
 - `usecase:<actual>`
 - `template:true` は残さない
-- project は template と同じ visible pipeline project
+- project は `<project_root>/TabularAnalysis/Pipelines/Runs/<usecase_id>`
 
 ## child task 側
 
@@ -42,7 +42,7 @@ child task は runtime identity を再構築します。
 - `model:lgbm`
 - `grid:<grid_run_id>`
 
-template 用 tag や stale usecase は残しません。
+step template tag や stale usecase は残しません。
 
 ## queue 契約
 

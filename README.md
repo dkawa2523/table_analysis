@@ -20,7 +20,7 @@
   - `weighted`
   - `stacking`
 - 学習済み bundle または ClearML Model Registry を使った推論
-- ClearML Pipelines タブを正本にした pipeline template 管理
+- ClearML 上の seed pipeline を正本にした pipeline 管理
 - ClearML Agent を使った controller / heavy model / default worker の分離実行
 
 ## 2. リポジトリの立ち位置
@@ -207,22 +207,22 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 | `local` | ローカル確認 | ClearML なし |
 | `logging` | UI 契約確認 | ローカル実行しつつ ClearML に記録 |
 | `agent` | 単一 task の remote 実行 | task を queue へ投げる |
-| `clone` | template task を元に remote 実行 | template clone |
-| `pipeline_controller` | operator 向け本番運用 | visible pipeline template を clone して controller 実行 |
+| `clone` | 既存 task を元に remote 実行 | task clone |
+| `pipeline_controller` | operator 向け本番運用 | seed pipeline から `NEW RUN` で controller 実行 |
 
 現在の operator 正本は `pipeline_controller` です。  
-ClearML Pipelines タブ上の visible template を確認、clone、実行する流れを想定しています。
+ClearML 上の seed pipeline project `<project_root>/TabularAnalysis/.pipelines/<profile>` にある seed pipeline card を確認し、`NEW RUN` を開き、`Configuration > OperatorInputs` で placeholder を確認してから、実値は `Hyperparameters` 側で更新して実行する流れを想定しています。
 
 詳細は [docs/10_OPERATION_MODES.md](docs/10_OPERATION_MODES.md) を参照してください。
 
 ## 9. ClearML 運用の基本
 
-### 9.1 template の正本
+### 9.1 template / seed の正本
 
 ClearML template は `manage_templates.py` で管理します。  
-現在は child task template に加えて、visible pipeline template も first-class に管理しています。
+現在は child task template に加えて、seed pipeline も first-class に管理しています。
 
-主な visible pipeline template:
+主な seed pipeline:
 
 - `pipeline`
   - preprocess + single-model train + leaderboard
@@ -231,14 +231,19 @@ ClearML template は `manage_templates.py` で管理します。
 - `train_ensemble_full`
   - preprocess + single-model train + 3 ensemble + leaderboard
 
-visible pipeline template は profile 固定の DAG です。  
+seed pipeline は profile 固定の DAG です。  
 operator が UI から安全に触る前提は `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants`、必要時のみ `ensemble.selection.enabled_methods`, `ensemble.top_k` 程度で、`pipeline.model_set` や `pipeline.grid.model_variants` を UI 上で変えて custom DAG を作る運用は想定していません。  
-標準の visible pipeline は `pipeline.run_dataset_register=false` を前提にし、入力 dataset は既存の `data.raw_dataset_id` を指定します。`dataset_register` は rehearsal / smoke / 事前準備の別導線です。
+標準の seed pipeline は `pipeline.run_dataset_register=false` を前提にし、入力 dataset は既存の `data.raw_dataset_id` を指定します。`dataset_register` は rehearsal / smoke / 事前準備の別導線です。
 
-visible pipeline template は ClearML 上の次 project に置かれます。
+UI で設定を確認するときは、まず controller task の `Configuration > OperatorInputs` を見てください。  
+operator が日常的に触る項目だけを mirror しており、詳細な override や互換 key は `Hyperparameters` 側に残しています。
+seed pipeline の `data.raw_dataset_id` は placeholder なので、`NEW RUN` 前に `OperatorInputs` で確認し、必要なら `Hyperparameters` 側で既存 raw dataset id へ差し替えてください。
+`NEW RUN` 後の run controller では `OperatorInputs` も current values に更新されますが、実編集の正本は引き続き `Hyperparameters` です。placeholder のまま実行すると fail-fast します。
+
+seed pipeline は profile ごとに次 project に置かれます。
 
 ```text
-<project_root>/TabularAnalysis/Pipelines/Templates
+<project_root>/TabularAnalysis/.pipelines/<profile>
 ```
 
 controller run は次に置かれます。
@@ -376,9 +381,9 @@ python tools/rehearsal/run_pipeline_v2.py \
   --project-root LOCAL
 ```
 
-### 11.3 operator と同じ visible pipeline template を使いたい
+### 11.3 operator と同じ seed pipeline を使いたい
 
-template を同期:
+seed / template を同期:
 
 ```bash
 python tools/clearml_templates/manage_templates.py --apply --project-root LOCAL
@@ -393,7 +398,7 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  pipeline.preprocess_variant=stdscaler_ohe \
+  pipeline.selection.enabled_preprocess_variants=[stdscaler_ohe] \
   pipeline.model_set=regression_all
 ```
 
@@ -404,15 +409,26 @@ python -m tabular_analysis.cli task=pipeline \
   run.clearml.enabled=true \
   run.clearml.execution=pipeline_controller \
   run.clearml.project_root=LOCAL \
+  +pipeline.profile=train_ensemble_full \
   data.raw_dataset_id=<RAW_DATASET_ID> \
-  pipeline.preprocess_variant=stdscaler_ohe \
+  pipeline.selection.enabled_preprocess_variants=[stdscaler_ohe] \
   pipeline.model_set=regression_all \
-  pipeline.run_train_ensemble=true \
-  ensemble.enabled=true \
-  ensemble.methods=[mean_topk,weighted,stacking]
+  ensemble.selection.enabled_methods=[mean_topk,weighted,stacking]
 ```
 
-または ClearML UI の Pipelines タブから `train_ensemble_full` template を clone して実行します。
+または subset を明示:
+
+```bash
+python -m tabular_analysis.cli task=pipeline \
+  run.clearml.enabled=true \
+  run.clearml.execution=pipeline_controller \
+  run.clearml.project_root=LOCAL \
+  data.raw_dataset_id=<RAW_DATASET_ID> \
+  pipeline.selection.enabled_preprocess_variants=[stdscaler_ohe] \
+  pipeline.selection.enabled_model_variants=[ridge,lgbm,xgboost]
+```
+
+または ClearML UI で `LOCAL/TabularAnalysis/.pipelines/train_ensemble_full` の seed pipeline card を開き、`NEW RUN` で実行します。
 
 ### 11.5 UI 契約を監査したい
 
@@ -509,7 +525,7 @@ python tools/tests/test_clearml_runtime_contracts.py
 
 ## 16. 補足
 
-- ClearML の operator 向け正本は visible pipeline template です。
+- ClearML の operator 向け正本は seed pipeline です。
 - runtime の bootstrap は task-time install を維持しますが、`uv` cache 共有前提です。
 - `work/` と `artifacts/` は実行生成物の置き場です。コミット前に中身を確認してください。
 

@@ -7,19 +7,24 @@
 ## pipeline の基本入力
 
 - `data.raw_dataset_id`
-- `pipeline.preprocess_variant` / `pipeline.preprocess_variants`
-- `pipeline.model_set` / `pipeline.model_variants`
+- `pipeline.selection.enabled_preprocess_variants`
+- `pipeline.model_set`
+- `pipeline.selection.enabled_model_variants`
 - `pipeline.run_train`
 - `pipeline.run_train_ensemble`
 - `pipeline.run_leaderboard`
-- `ensemble.*`
+- `ensemble.selection.enabled_methods`
+- `ensemble.top_k`
 - `exec_policy.*`
+
+seed pipeline の正規運用では、dataset 登録は含めず、既存 `raw_dataset_id` を入力にします。
+`pipeline.model_variants` と `pipeline.preprocess_variant` は local / ad hoc 実行の互換入力として残りますが、fixed-DAG seed pipeline の operator UI では `selection` 系を使います。
 
 ## 実行フロー
 
 1. raw dataset を取得
-2. preprocess variant を展開
-3. model set / model variants を展開
+2. preprocess 母集合を解決し、selection で有効候補を絞る
+3. model 母集合を解決し、selection で有効候補を絞る
 4. train jobs を計画
 5. 必要なら ensemble jobs を計画
 6. leaderboard を実行
@@ -59,11 +64,22 @@ canonical 13 モデル:
 ## ensemble の扱い
 
 - 既定では `pipeline.run_train_ensemble=false`
-- operator 向け full ensemble は `train_ensemble_full` template が正本
+- operator 向け full ensemble は `train_ensemble_full` seed pipeline が正本
+- subset 実行は `ensemble.selection.enabled_methods` で表現
 - 3 method:
   - `mean_topk`
   - `weighted`
   - `stacking`
+
+## subset selection
+
+fixed DAG の seed pipeline では、step の追加削除ではなく selection で subset を表現します。
+
+- `pipeline.selection.enabled_preprocess_variants`
+- `pipeline.selection.enabled_model_variants`
+- `ensemble.selection.enabled_methods`
+
+非選択候補は v1 では child task を作らず、`pipeline_run.json` / `report.json` で `disabled_by_selection` として記録します。
 
 ## report
 
@@ -82,7 +98,7 @@ pipeline は最低でも次を出します。
 - `logging`
   - ローカル実行しつつ ClearML に記録
 - `pipeline_controller`
-  - visible pipeline template を clone して controller 実行
+  - `.pipelines/<profile>` の seed pipeline card から `NEW RUN` して controller 実行
 
 ## queue ルール
 

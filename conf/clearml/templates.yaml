@@ -110,7 +110,7 @@ templates:
       task_kind: "template"
 
   train_model_full:
-    project_name: "{project_root}/{solution_root}/{pipeline_root_group}/{pipeline_templates_group}"
+    project_name: "{project_root}/{solution_root}/{pipeline_seed_namespace}/train_model_full"
     task_name_template: "train_model_full"
     entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
     default_overrides:
@@ -129,13 +129,12 @@ templates:
       - "clearml>=1.15.0"
       - "uv>=0.5.0"
     tags:
-      - "template:true"
       - "template_set:{template_set_id}"
       - "usecase:{usecase_id}"
       - "process:pipeline"
       - "schema:{schema_version}"
       - "solution:tabular-analysis"
-      - "task_kind:template"
+      - "task_kind:seed"
       - "pipeline_profile:train_model_full"
     properties_minimal:
       usecase_id: "{usecase_id}"
@@ -143,11 +142,11 @@ templates:
       schema_version: "{schema_version}"
       project_root: "{project_root}"
       template_set_id: "{template_set_id}"
-      task_kind: "template"
+      task_kind: "seed"
       pipeline_profile: "train_model_full"
 
   train_ensemble_full:
-    project_name: "{project_root}/{solution_root}/{pipeline_root_group}/{pipeline_templates_group}"
+    project_name: "{project_root}/{solution_root}/{pipeline_seed_namespace}/train_ensemble_full"
     task_name_template: "train_ensemble_full"
     entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
     default_overrides:
@@ -169,13 +168,12 @@ templates:
       - "clearml>=1.15.0"
       - "uv>=0.5.0"
     tags:
-      - "template:true"
       - "template_set:{template_set_id}"
       - "usecase:{usecase_id}"
       - "process:pipeline"
       - "schema:{schema_version}"
       - "solution:tabular-analysis"
-      - "task_kind:template"
+      - "task_kind:seed"
       - "pipeline_profile:train_ensemble_full"
     properties_minimal:
       usecase_id: "{usecase_id}"
@@ -183,7 +181,7 @@ templates:
       schema_version: "{schema_version}"
       project_root: "{project_root}"
       template_set_id: "{template_set_id}"
-      task_kind: "template"
+      task_kind: "seed"
       pipeline_profile: "train_ensemble_full"
 
   infer:
@@ -241,7 +239,7 @@ templates:
       task_kind: "template"
 
   pipeline:
-    project_name: "{project_root}/{solution_root}/{pipeline_root_group}/{pipeline_templates_group}"
+    project_name: "{project_root}/{solution_root}/{pipeline_seed_namespace}/pipeline"
     task_name_template: "pipeline"
     entrypoint: "python tools/clearml_entrypoint.py task=pipeline"
     default_overrides:
@@ -260,13 +258,12 @@ templates:
       - "clearml>=1.15.0"
       - "uv>=0.5.0"
     tags:
-      - "template:true"
       - "template_set:{template_set_id}"
       - "usecase:{usecase_id}"
       - "process:pipeline"
       - "schema:{schema_version}"
       - "solution:tabular-analysis"
-      - "task_kind:template"
+      - "task_kind:seed"
       - "pipeline_profile:pipeline"
     properties_minimal:
       usecase_id: "{usecase_id}"
@@ -274,5 +271,5 @@ templates:
       schema_version: "{schema_version}"
       project_root: "{project_root}"
       template_set_id: "{template_set_id}"
-      task_kind: "template"
+      task_kind: "seed"
       pipeline_profile: "pipeline"

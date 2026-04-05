@@ -27,7 +27,6 @@ HyperParameters を section ごとに分け、operator が UI で設定の要点
 
 ### dataset
 
-- `data.dataset_path`
 - `data.target_column`
 - `data.raw_dataset_id`
 - `data.processed_dataset_id`
@@ -60,7 +59,26 @@ HyperParameters を section ごとに分け、operator が UI で設定の要点
 - `pipeline.plan_only`
 - `pipeline.model_set`
 
-visible pipeline template の operator UI では、graph-shaping key を直接編集しません。
+seed pipeline の標準運用では、operator は主に次を編集します。
+
+- `run.usecase_id`
+- `data.raw_dataset_id`
+- `pipeline.selection.enabled_preprocess_variants`
+- `pipeline.selection.enabled_model_variants`
+- `ensemble.selection.enabled_methods`
+- `ensemble.top_k` (`train_ensemble_full` のみ)
+
+確認場所の優先順は次です。
+
+- `Configuration > OperatorInputs`
+  - operator が見るべき最小入力だけを mirror した read-only 表示
+  - seed clone 実行前は `data.raw_dataset_id` が placeholder かどうかをここで確認する
+- `Hyperparameters`
+  - 実行ソースの正本
+  - 互換 key や低レベル override もここに残る
+  - `data.raw_dataset_id` を実際に差し替えるときもこちらを使う
+
+seed pipeline の operator UI では、graph-shaping key を直接編集しません。
 
 - `pipeline.model_variants`
 - `pipeline.grid.model_variants`
