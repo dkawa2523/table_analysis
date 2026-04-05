@@ -2,6 +2,7 @@
 """ClearML entrypoint wrapper for src/ layout."""
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -104,9 +105,20 @@ _SLASH_OVERRIDE_PREFIXES = (
 )
 
 
+def _fully_unquote(text: str, *, max_rounds: int = 8) -> str:
+    value = str(text)
+    for _ in range(max_rounds):
+        collapsed = re.sub(r"%(?:%)+(?=[0-9A-Fa-f]{2})", "%", value)
+        decoded = unquote(collapsed)
+        if decoded == value:
+            return decoded
+        value = decoded
+    return value
+
+
 def _normalize_loaded_override_key(key: str) -> str:
     prefix = "+" if key.startswith("+") else ""
-    body = unquote(key.lstrip("+").strip())
+    body = _fully_unquote(key.lstrip("+").strip())
     if not any(body.startswith(candidate) for candidate in _SLASH_OVERRIDE_PREFIXES):
         body = body.replace("/", ".")
     return f"{prefix}{body}" if body else ""
@@ -116,7 +128,7 @@ def _loaded_override_priority(key: str, normalized: str) -> int:
     raw = str(key).strip()
     body = raw.lstrip("+")
     normalized_body = normalized.lstrip("+")
-    decoded = unquote(body)
+    decoded = _fully_unquote(body)
     if body == normalized_body:
         return 30
     if decoded != body:

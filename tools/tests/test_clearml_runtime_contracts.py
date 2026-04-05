@@ -403,12 +403,15 @@ def _assert_entrypoint_reads_clearml_slash_overrides() -> None:
         raise AssertionError("config-group style ops overrides must preserve slash form")
     if _normalize_loaded_override_key("run%2Egrid_run_id") != "run.grid_run_id":
         raise AssertionError("percent-encoded dotted ClearML args must normalize to Hydra dot overrides")
+    if _normalize_loaded_override_key("run%%%%%%%%2Egrid_run_id") != "run.grid_run_id":
+        raise AssertionError("multi-encoded dotted ClearML args must normalize to Hydra dot overrides")
     if _normalize_loaded_override_key("group%2Fcustom") != "group/custom":
         raise AssertionError("percent-encoded config-group overrides must preserve slash form")
     loaded: dict[str, str] = {}
     priorities: dict[str, int] = {}
     _store_loaded_override(loaded, "data/raw_dataset_id", "REPLACE_WITH_EXISTING_RAW_DATASET_ID", priorities=priorities)
     _store_loaded_override(loaded, "data%2Eraw_dataset_id", "encoded_dataset", priorities=priorities)
+    _store_loaded_override(loaded, "data%%%%2Eraw_dataset_id", "multi_encoded_dataset", priorities=priorities)
     _store_loaded_override(loaded, "data.raw_dataset_id", "runtime_dataset", priorities=priorities)
     _store_loaded_override(loaded, "default_queue", "default", priorities=priorities)
     _store_loaded_override(loaded, "+pipeline.model_set", "regression_all", priorities=priorities)
@@ -536,10 +539,12 @@ def _assert_replace_clearml_task_parameter_sections_replaces_stale_section_paylo
             self.payload = {
                 "dataset": {
                     "data%2Eraw_dataset_id": "REPLACE_WITH_EXISTING_RAW_DATASET_ID",
+                    "data%%%%2Eraw_dataset_id": "dataset-very-old",
                     "data": {"raw_dataset_id": "dataset-old"},
                 },
                 "selection": {
                     "pipeline%2Eselection%2Eenabled_model_variants": "[\"ridge\"]",
+                    "pipeline%%%%2Eselection%%%%2Eenabled_model_variants": "[\"elasticnet\"]",
                 },
                 "pipeline": {
                     "pipeline": {"profile": "pipeline"},
@@ -578,6 +583,50 @@ def _assert_replace_clearml_task_parameter_sections_replaces_stale_section_paylo
         raise AssertionError(f"dataset section must be fully replaced with the normalized payload: {updated}")
     if selection_section != {"pipeline": {"selection": {"enabled_model_variants": ["lgbm", "xgboost"]}}}:
         raise AssertionError(f"selection section must be fully replaced with the normalized payload: {updated}")
+
+
+def _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.payload = {
+                "Args": {
+                    "run%2Eusecase_id": "TabularAnalysis",
+                    "run%%%%2Egrid_run_id": "seed__train_ensemble_full",
+                    "data": {"raw_dataset_id": "dataset-old"},
+                },
+                "dataset": {"data": {"raw_dataset_id": "dataset-old"}},
+            }
+            self.updated: dict[str, object] | None = None
+
+        def get_parameters_as_dict(self, cast: bool = False) -> dict[str, object]:
+            return dict(self.payload)
+
+        def set_parameters_as_dict(self, payload: dict[str, object]) -> None:
+            self.updated = dict(payload)
+            self.payload = dict(payload)
+
+    fake = _FakeTask()
+    original = task_ops_module._get_clearml_task
+    try:
+        task_ops_module._get_clearml_task = lambda _task_id: fake
+        task_ops_module.reset_clearml_task_args(
+            "task-123",
+            [
+                "run.usecase_id=demo_usecase",
+                "data.raw_dataset_id=dataset-new",
+            ],
+        )
+    finally:
+        task_ops_module._get_clearml_task = original
+    updated = fake.updated or {}
+    args_section = updated.get("Args")
+    if args_section != {
+        "run.usecase_id": "demo_usecase",
+        "data.raw_dataset_id": "dataset-new",
+    }:
+        raise AssertionError(f"reset_clearml_task_args must fully replace stale encoded Args payloads: {updated}")
+    if updated.get("dataset") != {"data": {"raw_dataset_id": "dataset-old"}}:
+        raise AssertionError(f"reset_clearml_task_args must preserve non-Args sections: {updated}")
 
 
 def _assert_hparam_sections_are_nested_for_clearml_ui() -> None:
@@ -2310,6 +2359,7 @@ def main() -> int:
     _assert_reset_clearml_task_args_replaces_stale_args()
     _assert_set_clearml_task_parameters_normalizes_encoded_section_keys()
     _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads()
+    _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads()
     _assert_hparam_sections_are_nested_for_clearml_ui()
     _assert_regression_model_set_contract()
     _assert_explicit_pipeline_variants_override_model_set()

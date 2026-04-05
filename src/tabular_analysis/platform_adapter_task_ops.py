@@ -3,6 +3,7 @@ from collections.abc import Sequence as SequenceABC
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any, Iterable, Mapping
 from urllib.parse import unquote, urlparse
 from .platform_adapter_core import PlatformAdapterError, _CLEARML_TASK_CACHE, _RECOVERABLE_ERRORS, _apply_clearml_files_host_substitution, _dedupe_tags, _existing_user_properties, _normalize_files_host, _normalize_requirement_lines, _resolve_clearml_task, is_clearml_enabled
@@ -239,6 +240,57 @@ def _task_parameters(task: Any) -> dict[str, Any]:
                     flat[f'{section}/{key}'] = value
             return flat
     return {}
+
+
+def _fully_unquote_text(text: str, *, max_rounds: int = 8) -> str:
+    value = str(text).strip()
+    for _ in range(max_rounds):
+        collapsed = re.sub(r"%(?:%)+(?=[0-9A-Fa-f]{2})", "%", value)
+        decoded = unquote(collapsed)
+        if decoded == value:
+            return decoded
+        value = decoded
+    return value
+
+
+def _flatten_parameter_mapping(prefix: str, value: Any, out: dict[str, Any]) -> None:
+    if isinstance(value, Mapping):
+        for (key, item) in value.items():
+            normalized_key = _normalize_parameter_key(str(key))
+            next_prefix = f'{prefix}.{normalized_key}' if prefix else normalized_key
+            _flatten_parameter_mapping(next_prefix, item, out)
+        return
+    if prefix:
+        out[prefix] = value
+
+
+def _task_parameter_sections(task: Any) -> dict[str, Any]:
+    getter = getattr(task, 'get_parameters_as_dict', None)
+    if callable(getter):
+        try:
+            params = getter(cast=False)
+        except _RECOVERABLE_ERRORS:
+            params = None
+        if isinstance(params, Mapping):
+            normalized = _normalize_parameter_payload(params)
+            if isinstance(normalized, Mapping):
+                return dict(normalized)
+    params = _task_parameters(task)
+    sections: dict[str, dict[str, Any]] = {}
+    for (key, value) in params.items():
+        if not isinstance(key, str) or '/' not in key:
+            continue
+        section, param_key = key.split('/', 1)
+        section_name = _normalize_parameter_key(section)
+        normalized_key = _normalize_parameter_key(param_key)
+        sections.setdefault(section_name, {})[normalized_key] = value
+    return sections
+
+
+def _flatten_args_section(values: Mapping[str, Any]) -> dict[str, str]:
+    flattened: dict[str, Any] = {}
+    _flatten_parameter_mapping('', values, flattened)
+    return {str(key): '' if value is None else str(value) for (key, value) in flattened.items() if key}
 def _property_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         if 'value' in value:
@@ -288,11 +340,8 @@ def _set_task_script_payload(task: Any, payload: Mapping[str, Any]) -> None:
 def _apply_task_args(task: Any, args: Mapping[str, Any]) -> bool:
     if not args:
         return False
-    params = _task_parameters(task)
-    existing_args: dict[str, str] = {}
-    for (key, value) in params.items():
-        if isinstance(key, str) and key.startswith('Args/'):
-            existing_args[key[5:]] = '' if value is None else str(value)
+    sections = _task_parameter_sections(task)
+    existing_args = _flatten_args_section(sections.get('Args', {})) if isinstance(sections.get('Args'), Mapping) else {}
     updates: dict[str, str] = {}
     for (key, value) in args.items():
         expected = '' if value is None else str(value)
@@ -300,17 +349,19 @@ def _apply_task_args(task: Any, args: Mapping[str, Any]) -> bool:
             updates[str(key)] = expected
     if not updates:
         return False
+    setter = getattr(task, 'set_parameters_as_dict', None)
+    if callable(setter):
+        payload = dict(sections)
+        payload['Args'] = {**existing_args, **updates}
+        setter(payload)
+        return True
+    params = _task_parameters(task)
     updated_params = dict(params)
     for (key, value) in updates.items():
         updated_params[f'Args/{key}'] = value
     setter = getattr(task, 'set_parameters', None)
     if callable(setter):
         setter(updated_params)
-        return True
-    setter = getattr(task, 'set_parameters_as_dict', None)
-    if callable(setter):
-        merged = {**existing_args, **updates}
-        setter({'Args': merged})
         return True
     raise PlatformAdapterError('ClearML Task.set_parameters is not available.')
 def get_clearml_task_tags(task_id: str) -> list[str]:
@@ -322,13 +373,10 @@ def get_clearml_task_script(task_id: str) -> dict[str, Any]:
     return {'repository': script.get('repository'), 'branch': script.get('branch'), 'entry_point': script.get('entry_point'), 'working_dir': script.get('working_dir'), 'version_num': script.get('version_num')}
 def get_clearml_task_args(task_id: str) -> dict[str, str]:
     task = _get_clearml_task(task_id)
-    params = _task_parameters(task)
-    args: dict[str, str] = {}
-    for (key, value) in params.items():
-        if not isinstance(key, str) or not key.startswith('Args/'):
-            continue
-        args[key[5:]] = '' if value is None else str(value)
-    return args
+    args_section = _task_parameter_sections(task).get('Args', {})
+    if not isinstance(args_section, Mapping):
+        return {}
+    return _flatten_args_section(args_section)
 def clone_clearml_task(*, source_task_id: str | None=None, source_task: Any | None=None, task_name: str | None=None, parent_task_id: str | None=None) -> str:
     if not source_task_id and source_task is None:
         raise PlatformAdapterError('source_task_id or source_task is required to clone a task.')
@@ -359,7 +407,7 @@ def set_clearml_task_entry_point(task_id: str, entry_point: str) -> None:
 
 
 def _normalize_parameter_key(text: str) -> str:
-    return unquote(str(text).strip())
+    return _fully_unquote_text(text)
 
 
 def _normalize_parameter_payload(value: Any) -> Any:
@@ -705,17 +753,21 @@ def ensure_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
     if not desired:
         return False
     task = _get_clearml_task(task_id)
-    params = _task_parameters(task)
-    existing_args: dict[str, str] = {}
-    for (key, value) in params.items():
-        if isinstance(key, str) and key.startswith('Args/'):
-            existing_args[key[5:]] = '' if value is None else str(value)
+    sections = _task_parameter_sections(task)
+    existing_args = _flatten_args_section(sections.get('Args', {})) if isinstance(sections.get('Args'), Mapping) else {}
     updates: dict[str, str] = {}
     for (key, value) in desired.items():
         if existing_args.get(key) != value:
             updates[key] = value
     if not updates:
         return False
+    setter = getattr(task, 'set_parameters_as_dict', None)
+    if callable(setter):
+        payload = dict(sections)
+        payload['Args'] = {**existing_args, **updates}
+        setter(payload)
+        return True
+    params = _task_parameters(task)
     updated_params = dict(params)
     for (key, value) in updates.items():
         updated_params[f'Args/{key}'] = value
@@ -723,16 +775,18 @@ def ensure_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
     if callable(setter):
         setter(updated_params)
         return True
-    setter = getattr(task, 'set_parameters_as_dict', None)
-    if callable(setter):
-        merged = {**existing_args, **updates}
-        setter({'Args': merged})
-        return True
     raise PlatformAdapterError('ClearML Task.set_parameters is not available.')
 def reset_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
     desired = _parse_task_args(args)
     task = _get_clearml_task(task_id)
     normalized = {str(key): '' if value is None else str(value) for (key, value) in desired.items()}
+    sections = _task_parameter_sections(task)
+    setter = getattr(task, 'set_parameters_as_dict', None)
+    if callable(setter):
+        payload = dict(sections)
+        payload['Args'] = dict(normalized)
+        setter(payload)
+        return True
     params = _task_parameters(task)
     updated = {k: v for (k, v) in params.items() if not (isinstance(k, str) and k.startswith('Args/'))}
     for (key, value) in normalized.items():
@@ -740,10 +794,6 @@ def reset_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
     setter = getattr(task, 'set_parameters', None)
     if callable(setter):
         setter(updated)
-        return True
-    setter = getattr(task, 'set_parameters_as_dict', None)
-    if callable(setter):
-        setter({'Args': dict(normalized)})
         return True
     raise PlatformAdapterError('ClearML Task.set_parameters is not available.')
 def apply_clearml_task_overrides(target: Any, overrides: Iterable[str]) -> bool:
