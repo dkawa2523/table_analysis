@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..common.collection_utils import to_list as _to_list, to_mapping as _to_mapping
-from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _normalize_str, to_int as _to_int
+from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _normalize_str, set_cfg_value as _set_cfg_value, to_int as _to_int
+from ..common.json_utils import load_json as _load_json
+from ..platform_adapter_task import get_clearml_task_status
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ class PipelinePlan:
 
 
 DEFAULT_PIPELINE_PROFILE = 'pipeline'
+DEFAULT_PIPELINE_USECASE_ID = 'TabularAnalysis'
 PIPELINE_RAW_DATASET_ID_SENTINEL = 'REPLACE_WITH_EXISTING_RAW_DATASET_ID'
 
 PIPELINE_PROFILE_SPECS: dict[str, PipelineProfileSpec] = {
@@ -114,6 +117,42 @@ PIPELINE_TEMPLATE_UI_WHITELIST: dict[str, tuple[str, ...]] = {
 PIPELINE_TEMPLATE_LOCAL_ONLY_KEYS = frozenset({'run.output_dir', 'train.inputs.preprocess_run_dir'})
 
 
+def normalize_pipeline_template_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Path):
+        return str(value)
+    try:
+        from omegaconf import OmegaConf
+
+        if OmegaConf.is_config(value):
+            return OmegaConf.to_container(value, resolve=False)
+    except ImportError:
+        pass
+    if isinstance(value, tuple):
+        return tuple(normalize_pipeline_template_value(item) for item in value)
+    if isinstance(value, (list, set)):
+        return [normalize_pipeline_template_value(item) for item in value]
+    return value
+
+
+def build_pipeline_template_params(values: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key).replace(".", "/"): normalize_pipeline_template_value(value)
+        for (key, value) in values.items()
+        if value is not None
+    }
+
+
+def build_pipeline_step_parameter_override_payload(overrides: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        f"Args/{key}": normalized
+        for (key, value) in overrides.items()
+        for normalized in [normalize_pipeline_template_value(value)]
+        if normalized is not None
+    }
+
+
 def normalize_pipeline_profile(value: Any, *, default: str = DEFAULT_PIPELINE_PROFILE) -> str:
     text = _normalize_str(value)
     return text or default
@@ -140,15 +179,8 @@ def resolve_pipeline_profile(cfg: Any | None, plan: Mapping[str, Any] | None = N
         return profile
     explicit_template_task_id = _normalize_str(_cfg_value(cfg, 'run.clearml.pipeline.template_task_id')) if cfg is not None else ''
     if plan is not None:
-        signature = {
-            'run_dataset_register': bool(plan.get('run_dataset_register')),
-            'run_preprocess': bool(plan.get('run_preprocess')),
-            'run_train': bool(plan.get('run_train')),
-            'run_train_ensemble': bool(plan.get('run_train_ensemble')),
-            'run_leaderboard': bool(plan.get('run_leaderboard')),
-            'run_infer': bool(plan.get('run_infer')),
-            'model_set': _normalize_str(plan.get('model_set')),
-        }
+        signature = {key: bool(plan.get(key)) for key in ('run_dataset_register', 'run_preprocess', 'run_train', 'run_train_ensemble', 'run_leaderboard', 'run_infer')}
+        signature['model_set'] = _normalize_str(plan.get('model_set'))
         for profile_name, spec in PIPELINE_PROFILE_SPECS.items():
             expected = {
                 'run_dataset_register': spec.run_dataset_register,
@@ -188,17 +220,35 @@ def build_pipeline_operator_inputs(
         cursor = payload
         parts = str(path).split('.')
         for key in parts[:-1]:
-            child = cursor.get(key)
-            if not isinstance(child, dict):
-                child = {}
-                cursor[key] = child
-            cursor = child
+            cursor = cursor.setdefault(key, {})  # type: ignore[assignment]
         cursor[parts[-1]] = value
     return payload
 
 
 def is_pipeline_placeholder_raw_dataset_id(value: Any) -> bool:
     return _normalize_str(value) == PIPELINE_RAW_DATASET_ID_SENTINEL
+
+
+def should_autogenerate_pipeline_usecase_id(cfg: Any | None) -> bool:
+    usecase_id = _normalize_str(_cfg_value(cfg, 'run.usecase_id')) if cfg is not None else ''
+    return bool(usecase_id) and usecase_id == DEFAULT_PIPELINE_USECASE_ID
+
+
+def normalize_ui_cloned_pipeline_cfg(cfg: Any | None) -> None:
+    if cfg is None:
+        return
+    raw_dataset_id = _normalize_str(_cfg_value(cfg, 'data.raw_dataset_id'))
+    if not raw_dataset_id or is_pipeline_placeholder_raw_dataset_id(raw_dataset_id):
+        return
+    if should_autogenerate_pipeline_usecase_id(cfg):
+        _set_cfg_value(cfg, 'run.usecase_id', '')
+    if resolve_pipeline_plan_only(cfg):
+        _set_cfg_value(cfg, 'pipeline.plan_only', False)
+        _set_cfg_value(cfg, 'pipeline.dry_run', False)
+        _set_cfg_value(cfg, 'pipeline.plan', False)
+    grid_run_id = _normalize_str(_cfg_value(cfg, 'run.grid_run_id'))
+    if grid_run_id.startswith('seed__'):
+        _set_cfg_value(cfg, 'run.grid_run_id', '')
 
 
 def validate_pipeline_operator_inputs(
@@ -506,6 +556,170 @@ def build_disabled_selection_entries(selection: Mapping[str, Any]) -> list[dict[
     return entries
 
 
+def normalize_pipeline_job_status(value: Any) -> str | None:
+    text = (_normalize_str(value) or '').lower()
+    if not text:
+        return None
+    if text in {'completed', 'closed', 'finished', 'published', 'success'}:
+        return 'completed'
+    if text in {'failed', 'error'}:
+        return 'failed'
+    if text in {'stopped', 'aborted'}:
+        return 'stopped'
+    if text in {'queued', 'created', 'pending'}:
+        return 'queued'
+    if text in {'in_progress', 'running'}:
+        return 'running'
+    return text
+
+
+def resolve_pipeline_ref_status(
+    ref: Mapping[str, Any] | None,
+    *,
+    status_loader: Any = get_clearml_task_status,
+    json_loader: Any = _load_json,
+) -> str | None:
+    if not isinstance(ref, Mapping):
+        return None
+    task_id = _normalize_str(ref.get('task_id') or ref.get('train_task_id'))
+    if task_id:
+        status = normalize_pipeline_job_status(status_loader(task_id))
+        if status:
+            return status
+    run_dir = _normalize_str(ref.get('run_dir'))
+    if run_dir:
+        out_path = Path(run_dir) / 'out.json'
+        if out_path.exists():
+            out_payload = json_loader(out_path)
+            status = normalize_pipeline_job_status(out_payload.get('status'))
+            return status or 'completed'
+    return None
+
+
+def build_pipeline_run_summary_payload(
+    *,
+    cfg: Any,
+    plan: Mapping[str, Any],
+    grid_run_id: str,
+    dataset_register_ref: dict[str, Any] | None,
+    preprocess_refs: list[dict[str, Any]],
+    train_refs: list[dict[str, Any]],
+    train_ensemble_refs: list[dict[str, Any]],
+    leaderboard_ref: dict[str, Any] | None,
+    infer_ref: dict[str, Any] | None,
+    executed_jobs: int,
+) -> dict[str, Any]:
+    selection = dict(plan.get('selection') or {})
+    return {
+        'grid_run_id': grid_run_id,
+        'plan_only': plan['plan_only'],
+        'requested_jobs': int(plan['plan_info'].get('requested_jobs', plan['plan_info'].get('raw_jobs', 0))),
+        'planned_jobs': int(plan['plan_info'].get('planned_jobs', 0)),
+        'executed_jobs': int(executed_jobs),
+        'disabled_jobs': int(plan['plan_info'].get('disabled_jobs', 0)),
+        'skipped_due_to_policy': int(plan['plan_info'].get('skipped_due_to_policy', 0)),
+        'disabled_selection': list(plan.get('disabled_selection') or []),
+        'dataset_register_ref': dataset_register_ref,
+        'preprocess_ref': preprocess_refs,
+        'train_refs': train_refs,
+        'train_ensemble_refs': train_ensemble_refs,
+        'leaderboard_ref': leaderboard_ref,
+        'infer_ref': infer_ref,
+        'grid': {
+            'preprocess_variants': plan['preprocess_variants'],
+            'model_variants': plan['model_variants'],
+            'max_jobs': plan['max_jobs'],
+            'max_hpo_trials': plan['max_hpo_trials'],
+            'hpo': {'enabled': plan['hpo_enabled'], 'params': plan['hpo_params_cfg']},
+        },
+        'selection': {
+            'requested_preprocess_variants': list(selection.get('requested_preprocess_variants') or []),
+            'active_preprocess_variants': list(selection.get('active_preprocess_variants') or []),
+            'disabled_preprocess_variants': list(selection.get('disabled_preprocess_variants') or []),
+            'requested_model_variants': list(selection.get('requested_model_variants') or []),
+            'active_model_variants': list(selection.get('active_model_variants') or []),
+            'disabled_model_variants': list(selection.get('disabled_model_variants') or []),
+            'requested_ensemble_methods': list(selection.get('requested_ensemble_methods') or []),
+            'active_ensemble_methods': list(selection.get('active_ensemble_methods') or []),
+            'disabled_ensemble_methods': list(selection.get('disabled_ensemble_methods') or []),
+        },
+        'policy': {'limits': dict(plan['limits']), 'selection': resolve_exec_policy_selection(cfg)},
+    }
+
+
+def finalize_pipeline_run_summary_payload(
+    summary: dict[str, Any],
+    *,
+    status: str | None = None,
+    queued_launch: bool = False,
+    status_loader: Any = get_clearml_task_status,
+    json_loader: Any = _load_json,
+) -> dict[str, Any]:
+    planned_jobs = int(summary.get('planned_jobs') or 0)
+    skipped_jobs = int(summary.get('skipped_due_to_policy') or 0)
+    if queued_launch:
+        summary['executed_jobs'] = 0
+        summary['completed_jobs'] = 0
+        summary['failed_jobs'] = 0
+        summary['stopped_jobs'] = 0
+        summary['running_jobs'] = 0
+        summary['queued_jobs'] = planned_jobs
+        summary['status'] = 'queued'
+        return summary
+    if bool(summary.get('plan_only')):
+        summary['executed_jobs'] = 0
+        summary['completed_jobs'] = 0
+        summary['failed_jobs'] = 0
+        summary['stopped_jobs'] = 0
+        summary['running_jobs'] = 0
+        summary['queued_jobs'] = 0
+        summary['status'] = normalize_pipeline_job_status(status) or 'planned'
+        return summary
+    job_refs: list[Mapping[str, Any]] = []
+    for key in ('train_refs', 'train_ensemble_refs'):
+        refs = summary.get(key) or []
+        if isinstance(refs, list):
+            job_refs.extend((ref for ref in refs if isinstance(ref, Mapping)))
+    counts = {'completed': 0, 'failed': 0, 'stopped': 0, 'running': 0, 'queued': 0}
+    launched_jobs = 0
+    for ref in job_refs:
+        job_status = resolve_pipeline_ref_status(
+            ref,
+            status_loader=status_loader,
+            json_loader=json_loader,
+        )
+        if not job_status:
+            continue
+        launched_jobs += 1
+        if job_status in counts:
+            counts[job_status] += 1
+    if launched_jobs == 0:
+        launched_jobs = int(summary.get('executed_jobs') or 0)
+        if launched_jobs > 0:
+            counts['completed'] = launched_jobs
+    summary['executed_jobs'] = launched_jobs
+    summary['completed_jobs'] = counts['completed']
+    summary['failed_jobs'] = counts['failed']
+    summary['stopped_jobs'] = counts['stopped']
+    summary['running_jobs'] = counts['running']
+    summary['queued_jobs'] = counts['queued']
+    explicit_status = normalize_pipeline_job_status(status)
+    if explicit_status in {'failed', 'stopped'}:
+        summary['status'] = explicit_status
+    elif counts['failed'] > 0:
+        summary['status'] = 'failed'
+    elif counts['stopped'] > 0:
+        summary['status'] = 'stopped'
+    elif counts['running'] > 0:
+        summary['status'] = 'running'
+    elif counts['queued'] > 0:
+        summary['status'] = 'queued'
+    else:
+        summary['status'] = explicit_status or 'completed'
+    summary['skipped_jobs'] = skipped_jobs
+    return summary
+
+
 def apply_pipeline_profile_defaults(cfg: Any, pipeline_profile: str) -> Any:
     spec = get_pipeline_profile_spec(pipeline_profile)
     try:
@@ -581,9 +795,6 @@ def build_pipeline_template_defaults(
     )
     defaults['run.grid_run_id'] = grid_run_id
     defaults['run.clearml.execution'] = 'pipeline_controller'
-    defaults['run.clearml.pipeline.template_task_id'] = _normalize_str(
-        _cfg_value(cfg, 'run.clearml.pipeline.template_task_id')
-    )
     defaults['run.clearml.pipeline_task_id'] = pipeline_task_id or ''
     defaults['pipeline.profile'] = normalize_pipeline_profile(pipeline_profile)
     defaults['pipeline.run_dataset_register'] = plan.get('run_dataset_register')
@@ -601,7 +812,11 @@ def build_pipeline_template_defaults(
     defaults['pipeline.selection.enabled_model_variants'] = selection.get('active_model_variants') or plan.get('model_variants')
     defaults['ensemble.selection.enabled_methods'] = selection.get('active_ensemble_methods') or []
     defaults['ensemble.top_k'] = _cfg_value(cfg, 'ensemble.top_k')
-    return {key: value for key, value in defaults.items() if value is not None}
+    return {
+        key: normalize_pipeline_template_value(value)
+        for (key, value) in defaults.items()
+        if value is not None
+    }
 
 
 def extract_pipeline_editable_defaults(
@@ -705,17 +920,25 @@ __all__ = [
     'PipelineProfileSpec',
     'PipelineStepSpec',
     'build_pipeline_plan',
+    'build_pipeline_run_summary_payload',
     'build_pipeline_operator_inputs',
+    'build_pipeline_step_parameter_override_payload',
     'build_pipeline_step_specs',
     'build_pipeline_template_defaults',
+    'build_pipeline_template_params',
     'build_pipeline_template_step_overrides',
     'build_pipeline_ui_parameter_whitelist',
     'extract_pipeline_editable_defaults',
     'get_pipeline_profile_spec',
+    'normalize_pipeline_job_status',
+    'normalize_ui_cloned_pipeline_cfg',
+    'normalize_pipeline_template_value',
     'is_pipeline_placeholder_raw_dataset_id',
     'is_pipeline_template_name',
     'normalize_pipeline_profile',
     'PIPELINE_RAW_DATASET_ID_SENTINEL',
+    'DEFAULT_PIPELINE_USECASE_ID',
+    'finalize_pipeline_run_summary_payload',
     'resolve_ensemble_methods',
     'resolve_exec_policy_limits',
     'resolve_exec_policy_queues',
@@ -724,10 +947,12 @@ __all__ = [
     'resolve_pipeline_profile',
     'resolve_pipeline_controller_queue_name',
     'resolve_pipeline_run_flags',
+    'resolve_pipeline_ref_status',
     'resolve_pipeline_selection',
     'resolve_pipeline_queues',
     'resolve_pipeline_variants',
     'select_pipeline_queue',
+    'should_autogenerate_pipeline_usecase_id',
     'strip_local_only_pipeline_overrides',
     'validate_pipeline_operator_inputs',
 ]
