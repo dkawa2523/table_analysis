@@ -1674,6 +1674,20 @@ def _assert_ui_clone_cfg_normalization_clears_seed_only_defaults() -> None:
     if explicit_cfg.run.usecase_id != "ui_train_ensemble_full_20260405_2200":
         raise AssertionError("explicit UI usecase_id must be preserved")
 
+    missing_grid_cfg = OmegaConf.create(
+        {
+            "data": {"raw_dataset_id": "dataset-123"},
+            "pipeline": {"plan_only": False},
+            "run": {
+                "usecase_id": "TabularAnalysis",
+                "grid_run_id": None,
+            },
+        }
+    )
+    pipeline_module._normalize_ui_cloned_pipeline_cfg_impl(missing_grid_cfg)
+    if missing_grid_cfg.run.usecase_id != "":
+        raise AssertionError("missing grid_run_id must not block UI clone normalization")
+
 
 def _assert_pipeline_run_task_identity_moves_seed_clone_to_run_project() -> None:
     cfg = OmegaConf.create(

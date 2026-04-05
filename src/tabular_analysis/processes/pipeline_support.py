@@ -246,7 +246,7 @@ def normalize_ui_cloned_pipeline_cfg(cfg: Any | None) -> None:
         _set_cfg_value(cfg, 'pipeline.plan_only', False)
         _set_cfg_value(cfg, 'pipeline.dry_run', False)
         _set_cfg_value(cfg, 'pipeline.plan', False)
-    grid_run_id = _normalize_str(_cfg_value(cfg, 'run.grid_run_id'))
+    grid_run_id = _normalize_str(_cfg_value(cfg, 'run.grid_run_id')) or ''
     if grid_run_id.startswith('seed__'):
         _set_cfg_value(cfg, 'run.grid_run_id', '')
 
