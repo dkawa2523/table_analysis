@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import unquote, urlparse
-from .platform_adapter_core import PlatformAdapterError, _CLEARML_TASK_CACHE, _RECOVERABLE_ERRORS, _apply_clearml_files_host_substitution, _apply_clearml_task_args, _dedupe_tags, _existing_user_properties, _normalize_files_host, _normalize_requirement_lines, _resolve_clearml_task, _set_clearml_task_script, is_clearml_enabled
+from .platform_adapter_core import PlatformAdapterError, _CLEARML_TASK_CACHE, _RECOVERABLE_ERRORS, _apply_clearml_files_host_substitution, _dedupe_tags, _existing_user_properties, _normalize_files_host, _normalize_requirement_lines, _resolve_clearml_task, is_clearml_enabled
 def _get_clearml_task(task_id: str) -> Any:
     cached = _CLEARML_TASK_CACHE.get(task_id)
     if cached is not None:
@@ -255,6 +255,64 @@ def _parse_task_args(args: Iterable[str]) -> dict[str, str]:
         (key, value) = text.split('=', 1)
         parsed[str(key)] = str(value)
     return parsed
+
+
+def _set_task_script_payload(task: Any, payload: Mapping[str, Any]) -> None:
+    setter = getattr(task, 'set_script', None)
+    if not callable(setter):
+        raise PlatformAdapterError('ClearML Task.set_script is not available.')
+    try:
+        setter(**payload)
+        return
+    except TypeError:
+        pass
+    if 'version_num' in payload:
+        commit_payload = dict(payload)
+        commit_payload['commit'] = commit_payload.pop('version_num')
+        try:
+            setter(**commit_payload)
+            return
+        except TypeError:
+            pass
+    try:
+        setter(script=dict(payload))
+        return
+    except TypeError:
+        if 'version_num' not in payload:
+            raise
+        trimmed = dict(payload)
+        trimmed.pop('version_num', None)
+        setter(**trimmed)
+
+
+def _apply_task_args(task: Any, args: Mapping[str, Any]) -> bool:
+    if not args:
+        return False
+    params = _task_parameters(task)
+    existing_args: dict[str, str] = {}
+    for (key, value) in params.items():
+        if isinstance(key, str) and key.startswith('Args/'):
+            existing_args[key[5:]] = '' if value is None else str(value)
+    updates: dict[str, str] = {}
+    for (key, value) in args.items():
+        expected = '' if value is None else str(value)
+        if existing_args.get(str(key)) != expected:
+            updates[str(key)] = expected
+    if not updates:
+        return False
+    updated_params = dict(params)
+    for (key, value) in updates.items():
+        updated_params[f'Args/{key}'] = value
+    setter = getattr(task, 'set_parameters', None)
+    if callable(setter):
+        setter(updated_params)
+        return True
+    setter = getattr(task, 'set_parameters_as_dict', None)
+    if callable(setter):
+        merged = {**existing_args, **updates}
+        setter({'Args': merged})
+        return True
+    raise PlatformAdapterError('ClearML Task.set_parameters is not available.')
 def get_clearml_task_tags(task_id: str) -> list[str]:
     task = _get_clearml_task(task_id)
     return _dedupe_tags(_task_tags(task))
@@ -297,7 +355,7 @@ def set_clearml_task_entry_point(task_id: str, entry_point: str) -> None:
         if value is not None:
             payload[key] = value
     payload['entry_point'] = entry_point
-    _set_clearml_task_script(task, payload)
+    _set_task_script_payload(task, payload)
 
 
 def _normalize_parameter_key(text: str) -> str:
@@ -321,12 +379,24 @@ def _normalize_parameter_payload(value: Any) -> Any:
     return normalized
 
 
+def _normalize_parameter_input_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _normalize_parameter_payload(
+            {str(key): _normalize_parameter_input_value(item) for (key, item) in value.items()}
+        )
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, SequenceABC) and not isinstance(value, (str, bytes, bytearray)):
+        return [_normalize_parameter_input_value(item) for item in value]
+    return value
+
+
 def set_clearml_task_parameters(task_id: str, parameters: Mapping[str, Any], *, section: str='Args') -> bool:
     if not parameters:
         return False
     task = _get_clearml_task(task_id)
     json_keys = {'infer.input_json', 'infer.batch.inputs_json', 'infer.validation.inputs_json', 'infer.optimize.search_space'}
-    normalized: dict[str, str] = {}
+    normalized: dict[str, Any] = {}
     for (key, value) in parameters.items():
         key_text = str(key)
         if value is None:
@@ -338,7 +408,7 @@ def set_clearml_task_parameters(task_id: str, parameters: Mapping[str, Any], *, 
                 continue
             except _RECOVERABLE_ERRORS:
                 pass
-        normalized[key_text] = str(value)
+        normalized[key_text] = _normalize_parameter_input_value(value)
     getter = getattr(task, 'get_parameters_as_dict', None)
     existing = None
     if callable(getter):
@@ -366,6 +436,37 @@ def set_clearml_task_parameters(task_id: str, parameters: Mapping[str, Any], *, 
     if callable(setter):
         for (key, value) in section_values.items():
             setter(f'{section}/{key}', value)
+        return True
+    raise PlatformAdapterError('ClearML Task.set_parameters_as_dict is not available.')
+
+
+def replace_clearml_task_parameter_sections(task_id: str, sections: Mapping[str, Mapping[str, Any]]) -> bool:
+    if not sections:
+        return False
+    task = _get_clearml_task(task_id)
+    getter = getattr(task, 'get_parameters_as_dict', None)
+    payload: dict[str, Any] = {}
+    if callable(getter):
+        try:
+            existing = getter(cast=False)
+        except _RECOVERABLE_ERRORS:
+            existing = None
+        if isinstance(existing, Mapping):
+            normalized_existing = _normalize_parameter_payload(existing)
+            if isinstance(normalized_existing, Mapping):
+                payload.update(normalized_existing)
+    changed = False
+    for (section, values) in sections.items():
+        section_name = str(section)
+        normalized_section = _normalize_parameter_input_value(values)
+        if payload.get(section_name) != normalized_section:
+            changed = True
+        payload[section_name] = normalized_section
+    if not changed:
+        return False
+    setter = getattr(task, 'set_parameters_as_dict', None)
+    if callable(setter):
+        setter(payload)
         return True
     raise PlatformAdapterError('ClearML Task.set_parameters_as_dict is not available.')
 def set_clearml_task_configuration(task_id: str, config: Mapping[str, Any], *, name: str='effective', description: str | None=None) -> bool:
@@ -650,7 +751,7 @@ def apply_clearml_task_overrides(target: Any, overrides: Iterable[str]) -> bool:
     if not desired:
         return False
     task = _resolve_clearml_task(target)
-    return _apply_clearml_task_args(task, desired)
+    return _apply_task_args(task, desired)
 def ensure_clearml_task_script(task_id: str, *, repo: str | None, branch: str | None, entry_point: str | None, working_dir: str | None, version_num: str | None=None, diff: str | None=None) -> bool:
     if repo is None and branch is None and (entry_point is None) and (working_dir is None) and (version_num is None) and (diff is None):
         return False
@@ -676,7 +777,7 @@ def ensure_clearml_task_script(task_id: str, *, repo: str | None, branch: str | 
         payload['version_num'] = version_num
     if diff is not None:
         payload['diff'] = diff
-    _set_clearml_task_script(task, payload)
+    _set_task_script_payload(task, payload)
     return True
 def _resolve_task_artifact(task: Any, artifact_name: str) -> Any | None:
     artifacts = getattr(task, 'artifacts', None)
@@ -794,4 +895,4 @@ def resolve_clearml_task_url(cfg: Any, task_id: str) -> str | None:
     if url:
         return str(url)
     return None
-__all__ = ['clearml_task_exists', 'create_clearml_task', 'list_clearml_tasks_by_tags', 'clearml_task_id', 'clearml_task_tags', 'clearml_task_script', 'clearml_task_status_from_obj', 'clearml_task_type_from_obj', 'clearml_task_project_name', 'find_clearml_task_id_by_tags', 'get_clearml_task_tags', 'get_clearml_task_script', 'get_clearml_task_args', 'clone_clearml_task', 'set_clearml_task_entry_point', 'set_clearml_task_parameters', 'set_clearml_task_configuration', 'get_clearml_task_configuration', 'set_clearml_task_project', 'upload_clearml_task_artifact', 'set_clearml_task_runtime_properties', 'enqueue_clearml_task', 'reset_clearml_task', 'get_clearml_task_status', 'ensure_clearml_task_tags', 'replace_clearml_task_tags', 'update_clearml_task_tags', 'ensure_clearml_task_requirements', 'ensure_clearml_task_properties', 'ensure_clearml_task_args', 'reset_clearml_task_args', 'apply_clearml_task_overrides', 'ensure_clearml_task_script', 'get_task_artifact_local_copy', 'resolve_clearml_task_url']
+__all__ = ['clearml_task_exists', 'create_clearml_task', 'list_clearml_tasks_by_tags', 'clearml_task_id', 'clearml_task_tags', 'clearml_task_script', 'clearml_task_status_from_obj', 'clearml_task_type_from_obj', 'clearml_task_project_name', 'find_clearml_task_id_by_tags', 'get_clearml_task_tags', 'get_clearml_task_script', 'get_clearml_task_args', 'clone_clearml_task', 'set_clearml_task_entry_point', 'set_clearml_task_parameters', 'replace_clearml_task_parameter_sections', 'set_clearml_task_configuration', 'get_clearml_task_configuration', 'set_clearml_task_project', 'upload_clearml_task_artifact', 'set_clearml_task_runtime_properties', 'enqueue_clearml_task', 'reset_clearml_task', 'get_clearml_task_status', 'ensure_clearml_task_tags', 'replace_clearml_task_tags', 'update_clearml_task_tags', 'ensure_clearml_task_requirements', 'ensure_clearml_task_properties', 'ensure_clearml_task_args', 'reset_clearml_task_args', 'apply_clearml_task_overrides', 'ensure_clearml_task_script', 'get_task_artifact_local_copy', 'resolve_clearml_task_url']

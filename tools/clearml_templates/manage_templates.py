@@ -32,6 +32,7 @@ from tabular_analysis.clearml.pipeline_templates import (
     build_pipeline_template_tags,
     is_pipeline_template_name,
 )
+from tabular_analysis.clearml.hparams import build_sections_from_values
 from tabular_analysis.common.hydra_overrides import overrides_to_args
 from tabular_analysis.common.hydra_config import compose_config
 from tabular_analysis.processes.pipeline_support import (
@@ -67,7 +68,7 @@ from tabular_analysis.platform_adapter_task import (
     replace_clearml_task_tags,
     ensure_clearml_task_script,
     set_clearml_task_configuration,
-    set_clearml_task_parameters,
+    replace_clearml_task_parameter_sections,
     set_clearml_task_project,
     set_clearml_task_runtime_properties,
     ensure_clearml_task_tags,
@@ -99,7 +100,6 @@ class PlanContext:
     solution_root: str
     pipeline_seed_namespace: str
     pipeline_root_group: str
-    pipeline_templates_group: str
     pipeline_runs_group: str
     templates_root_group: str
     step_templates_group: str
@@ -144,7 +144,6 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
     solution_root = "TabularAnalysis"
     pipeline_seed_namespace = ".pipelines"
     pipeline_root_group = "Pipelines"
-    pipeline_templates_group = "Templates"
     pipeline_runs_group = "Runs"
     templates_root_group = "Templates"
     step_templates_group = "Steps"
@@ -155,7 +154,6 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
         solution_root = str(getattr(layout_cfg, "solution_root", None) or solution_root)
         pipeline_seed_namespace = str(getattr(layout_cfg, "pipeline_seed_namespace", None) or pipeline_seed_namespace)
         pipeline_root_group = str(getattr(layout_cfg, "pipeline_root_group", None) or pipeline_root_group)
-        pipeline_templates_group = str(getattr(layout_cfg, "pipeline_templates_group", None) or pipeline_templates_group)
         pipeline_runs_group = str(getattr(layout_cfg, "pipeline_runs_group", None) or pipeline_runs_group)
         templates_root_group = str(getattr(layout_cfg, "templates_root_group", None) or templates_root_group)
         step_templates_group = str(getattr(layout_cfg, "step_templates_group", None) or step_templates_group)
@@ -174,7 +172,6 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
             solution_root=solution_root,
             pipeline_seed_namespace=pipeline_seed_namespace,
             pipeline_root_group=pipeline_root_group,
-            pipeline_templates_group=pipeline_templates_group,
             pipeline_runs_group=pipeline_runs_group,
             templates_root_group=templates_root_group,
             step_templates_group=step_templates_group,
@@ -191,7 +188,6 @@ def _load_run_defaults(repo_root: Path) -> PlanContext:
         solution_root=solution_root,
         pipeline_seed_namespace=pipeline_seed_namespace,
         pipeline_root_group=pipeline_root_group,
-        pipeline_templates_group=pipeline_templates_group,
         pipeline_runs_group=pipeline_runs_group,
         templates_root_group=templates_root_group,
         step_templates_group=step_templates_group,
@@ -242,7 +238,6 @@ def _load_templates(spec_path: Path, ctx: PlanContext) -> list[TemplateSpec]:
         "solution_root": ctx.solution_root,
         "pipeline_seed_namespace": ctx.pipeline_seed_namespace,
         "pipeline_root_group": ctx.pipeline_root_group,
-        "pipeline_templates_group": ctx.pipeline_templates_group,
         "pipeline_runs_group": ctx.pipeline_runs_group,
         "templates_root_group": ctx.templates_root_group,
         "step_templates_group": ctx.step_templates_group,
@@ -356,7 +351,6 @@ def _plan_output(spec_path: Path, ctx: PlanContext, templates: list[TemplateSpec
             "solution_root": ctx.solution_root,
             "pipeline_seed_namespace": ctx.pipeline_seed_namespace,
             "pipeline_root_group": ctx.pipeline_root_group,
-            "pipeline_templates_group": ctx.pipeline_templates_group,
             "pipeline_runs_group": ctx.pipeline_runs_group,
             "templates_root_group": ctx.templates_root_group,
             "step_templates_group": ctx.step_templates_group,
@@ -400,7 +394,6 @@ def _plan_output(spec_path: Path, ctx: PlanContext, templates: list[TemplateSpec
         f"- solution_root: `{ctx.solution_root}`",
         f"- pipeline_seed_namespace: `{ctx.pipeline_seed_namespace}`",
         f"- pipeline_root_group: `{ctx.pipeline_root_group}`",
-        f"- pipeline_templates_group: `{ctx.pipeline_templates_group}`",
         f"- pipeline_runs_group: `{ctx.pipeline_runs_group}`",
         f"- templates_root_group: `{ctx.templates_root_group}`",
         f"- step_templates_group: `{ctx.step_templates_group}`",
@@ -493,7 +486,6 @@ def _lock_context_payload(ctx: PlanContext) -> dict[str, Any]:
         "solution_root": ctx.solution_root,
         "pipeline_seed_namespace": ctx.pipeline_seed_namespace,
         "pipeline_root_group": ctx.pipeline_root_group,
-        "pipeline_templates_group": ctx.pipeline_templates_group,
         "pipeline_runs_group": ctx.pipeline_runs_group,
         "templates_root_group": ctx.templates_root_group,
         "step_templates_group": ctx.step_templates_group,
@@ -543,7 +535,6 @@ def _resolve_live_plan_context(
         "solution_root",
         "pipeline_seed_namespace",
         "pipeline_root_group",
-        "pipeline_templates_group",
         "pipeline_runs_group",
         "templates_root_group",
         "step_templates_group",
@@ -573,7 +564,6 @@ def _resolve_live_plan_context(
         solution_root=str(defaults.solution_root),
         pipeline_seed_namespace=str(defaults.pipeline_seed_namespace),
         pipeline_root_group=str(defaults.pipeline_root_group),
-        pipeline_templates_group=str(defaults.pipeline_templates_group),
         pipeline_runs_group=str(defaults.pipeline_runs_group),
         templates_root_group=str(defaults.templates_root_group),
         step_templates_group=str(defaults.step_templates_group),
@@ -602,15 +592,6 @@ def _arg_pairs(args: Iterable[str]) -> list[tuple[str, str]]:
     return pairs
 
 
-def _pipeline_parameter_payload(values: Mapping[str, Any]) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
-    for (key, value) in dict(values).items():
-        if value is None:
-            continue
-        payload[str(key).replace(".", "/")] = value
-    return payload
-
-
 def _pipeline_seed_script_mismatches(spec: Any, script: Mapping[str, Any]) -> list[str]:
     raw = clearml_script_mismatches(spec, script)
     if isinstance(raw, bool):
@@ -626,14 +607,6 @@ def _seed_runtime_defaults(seed_definition: Mapping[str, Any]) -> dict[str, Any]
     return {
         str(key): value
         for (key, value) in dict(seed_definition.get("shared_defaults") or {}).items()
-        if value is not None
-    }
-
-
-def _seed_editable_defaults(seed_definition: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        str(key): value
-        for (key, value) in dict(seed_definition.get("editable_defaults") or {}).items()
         if value is not None
     }
 
@@ -703,7 +676,6 @@ def _compose_pipeline_template_cfg(repo_root: Path, spec: TemplateSpec, ctx: Pla
         *_normalize_internal_compose_overrides(entry_args),
         *_normalize_internal_compose_overrides(spec.default_overrides),
         f"run.clearml.project_root={ctx.project_root}",
-        f"run.clearml.template_usecase_id={ctx.usecase_id}",
         f"run.clearml.template_set_id={ctx.template_set_id}",
         f"run.schema_version={ctx.schema_version}",
         f"run.usecase_id={ctx.usecase_id}",
@@ -840,28 +812,45 @@ def _configuration_paths(payload: Any, *, prefix: str = "") -> Iterable[str]:
 
 def _pipeline_parameter_keys(task: Any) -> set[str]:
     keys: set[str] = set()
+    visible_sections = {
+        "Args",
+        "inputs",
+        "dataset",
+        "selection",
+        "preprocess",
+        "model",
+        "eval",
+        "optimize",
+        "pipeline",
+        "clearml",
+    }
     for text in _iter_parameter_paths(_task_parameters(task)):
         text = str(text)
         if text.startswith("Args/"):
             keys.add(text.split("/", 1)[1].replace(".", "/"))
             continue
-        if text.startswith("pipeline/"):
-            keys.add(text.split("/", 1)[1].replace(".", "/"))
+        if "/" in text:
+            section, remainder = text.split("/", 1)
+            if section in visible_sections and remainder:
+                keys.add(remainder.replace(".", "/"))
             continue
-        if text.startswith("pipeline."):
-            keys.add(text.split(".", 1)[1].replace(".", "/"))
-            continue
+        if "." in text:
+            section, remainder = text.split(".", 1)
+            if section in visible_sections and remainder:
+                keys.add(remainder.replace(".", "/"))
     return keys
 
 
 def _deprecated_pipeline_project_name(project_name: str) -> str:
     text = str(project_name).rstrip("/")
-    if "/.pipelines/" in text:
-        return text.replace("/.pipelines/", "/_DeprecatedPipelines/", 1)
+    for (source, target) in (
+        ("/.pipelines/", "/_DeprecatedPipelines/"),
+        ("/Pipelines/", "/_DeprecatedPipelines/"),
+    ):
+        if source in text:
+            return text.replace(source, target, 1)
     if text.endswith("/Pipelines"):
         return text.rsplit("/Pipelines", 1)[0] + "/_DeprecatedPipelines/legacy_seed_root"
-    if "/Pipelines/" in text:
-        return text.replace("/Pipelines/", "/_DeprecatedPipelines/", 1)
     if text.endswith("/Templates"):
         text = text.rsplit("/", 1)[0]
     return f"{text}/_Deprecated"
@@ -960,15 +949,6 @@ def _resolve_template_spec(
     )
 
 
-def _deprecate_template_task(task_id: str) -> None:
-    task = _load_clearml_task(task_id)
-    actual_project = clearml_task_project_name(task) or ""
-    update_clearml_task_tags(str(task_id), add=["template:deprecated"])
-    if actual_project:
-        deprecated_project = _deprecated_pipeline_project_name(actual_project)
-        set_clearml_task_project(str(task_id), deprecated_project)
-
-
 def _task_system_tags(task: Any) -> list[str]:
     getter = getattr(task, "get_system_tags", None)
     if callable(getter):
@@ -1027,13 +1007,14 @@ def _remove_project_pipeline_visibility(project_name: str | None) -> None:
     _ensure_clearml_project_system_tags(text, remove_tags=["pipeline"])
 
 
-def _deprecate_pipeline_ui_task(
+def _deprecate_pipeline_task(
     task_id: str,
     *,
-    actual_project: str,
-    remove_source_project_pipeline_tag: bool,
+    actual_project: str | None = None,
+    remove_source_project_pipeline_tag: bool = False,
     fallback_target_project: str | None = None,
 ) -> None:
+    actual_project = str(actual_project or "").strip()
     update_clearml_task_tags(task_id, add=["template:deprecated"], remove=["pipeline"])
     _remove_task_system_tags(task_id, ["pipeline"])
     if "/_DeprecatedPipelines/" in actual_project:
@@ -1164,11 +1145,8 @@ def _restore_pipeline_seed_task(
     seed_definition: Mapping[str, Any],
 ) -> None:
     reset_clearml_task_args(task_id, overrides_to_args(_seed_runtime_defaults(seed_definition)))
-    set_clearml_task_parameters(
-        task_id,
-        _pipeline_parameter_payload(_seed_editable_defaults(seed_definition)),
-        section="pipeline",
-    )
+    (sections, _) = build_sections_from_values(_seed_runtime_defaults(seed_definition), cfg=resolved.cfg)
+    replace_clearml_task_parameter_sections(task_id, sections)
     replace_clearml_task_tags(task_id, resolved.expected_tags)
     ensure_clearml_task_tags(task_id, ["pipeline"])
     ensure_clearml_task_properties(task_id, resolved.expected_properties)
@@ -1290,7 +1268,7 @@ def _upsert_standard_template(
             actual_project = clearml_task_project_name(task)
             if str(actual_project or "") != spec.project_name:
                 recreate = True
-                _deprecate_template_task(str(existing_id))
+                _deprecate_pipeline_task(str(existing_id), actual_project=str(actual_project or ""))
                 print(f"Recreate template {spec.name}: project drift {actual_project!r} -> {spec.project_name!r}")
             else:
                 task_id = str(existing_id)
@@ -1392,7 +1370,7 @@ def _upsert_pipeline_seed(
             task_id = str(existing_id)
         except Exception:
             try:
-                _deprecate_template_task(str(existing_id))
+                _deprecate_pipeline_task(str(existing_id))
             except Exception:
                 pass
     if controller is None or not task_id:
@@ -1445,49 +1423,53 @@ def _cleanup_stale_pipeline_tasks(
     if not active_seed_projects:
         return
     solution_prefix = next(iter(active_seed_projects)).split("/.pipelines/", 1)[0]
-    candidate_projects: set[str] = set(active_seed_projects)
-    candidate_projects.update(_list_clearml_project_names(f"{solution_prefix}/.pipelines/"))
-    candidate_projects.update(_list_clearml_project_names(f"{solution_prefix}/_debug_seed_probe/.pipelines/"))
-    candidate_projects.add(f"{solution_prefix}/Pipelines")
-    candidate_projects.add(f"{solution_prefix}/Pipelines/Templates")
-    for project_name in sorted(candidate_projects):
-        is_seed_namespace_project = (
+    candidate_projects = (
+        active_seed_projects
+        | set(_list_clearml_project_names(f"{solution_prefix}/.pipelines/"))
+        | set(_list_clearml_project_names(f"{solution_prefix}/_debug_seed_probe/.pipelines/"))
+        | {f"{solution_prefix}/Pipelines", f"{solution_prefix}/Pipelines/Templates"}
+    )
+    cleanup_projects = {
+        project_name
+        for project_name in candidate_projects
+        if (
             project_name in active_seed_projects
             or "/.pipelines/" in project_name
             or project_name.endswith("/Pipelines")
             or "/Pipelines/Templates" in project_name
         )
+    }
+    for project_name in sorted(cleanup_projects):
+        remove_source_project_pipeline_tag = project_name not in active_seed_projects
         for task in _list_clearml_tasks(project_name):
             task_id = clearml_task_id(task)
-            if not task_id:
+            if not task_id or (project_name in active_seed_projects and task_id in active_seed_ids):
                 continue
-            if project_name in active_seed_projects and task_id in active_seed_ids:
-                continue
-            if not is_seed_namespace_project:
-                continue
-            _deprecate_pipeline_ui_task(
+            _deprecate_pipeline_task(
                 task_id,
                 actual_project=project_name,
-                remove_source_project_pipeline_tag=project_name not in active_seed_projects,
+                remove_source_project_pipeline_tag=remove_source_project_pipeline_tag,
             )
     for task_id in _list_clearml_task_ids_by_name_prefix("seed_probe_"):
         task = _load_clearml_task(task_id)
         actual_project = str(clearml_task_project_name(task) or "").strip()
-        _deprecate_pipeline_ui_task(
+        _deprecate_pipeline_task(
             task_id,
             actual_project=actual_project,
             remove_source_project_pipeline_tag=True,
             fallback_target_project=f"{solution_prefix}/_DeprecatedPipelines/debug_probe",
         )
-    for project_name in sorted(candidate_projects):
-        if project_name in active_seed_projects:
-            continue
-        if (
+    for project_name in sorted(
+        project_name
+        for project_name in candidate_projects
+        if project_name not in active_seed_projects
+        and (
             "/_debug_seed_probe/.pipelines/" in project_name
             or project_name.endswith("/Pipelines")
             or "/Pipelines/Templates" in project_name
-        ):
-            _remove_project_pipeline_visibility(project_name)
+        )
+    ):
+        _remove_project_pipeline_visibility(project_name)
 
 
 def _apply_templates(
@@ -1731,7 +1713,6 @@ def main() -> int:
             solution_root=str(defaults.solution_root),
             pipeline_seed_namespace=str(defaults.pipeline_seed_namespace),
             pipeline_root_group=str(defaults.pipeline_root_group),
-            pipeline_templates_group=str(defaults.pipeline_templates_group),
             pipeline_runs_group=str(defaults.pipeline_runs_group),
             templates_root_group=str(defaults.templates_root_group),
             step_templates_group=str(defaults.step_templates_group),

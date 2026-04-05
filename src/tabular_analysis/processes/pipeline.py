@@ -21,6 +21,7 @@ from threading import RLock
 from typing import Any, Mapping
 import uuid
 from ..clearml.hparams import connect_pipeline
+from ..clearml.hparams import build_sections_from_values as _build_hparam_sections_from_values
 from ..clearml.pipeline_templates import (
     resolve_pipeline_seed_task_id,
 )
@@ -29,10 +30,10 @@ from ..clearml.ui_logger import log_scalar
 from ..platform_adapter_artifacts import upload_artifact
 from ..platform_adapter_clearml_env import clearml_task_type_controller, is_clearml_enabled
 from ..platform_adapter_pipeline import apply_clearml_task_overrides, clone_pipeline_controller, create_pipeline_controller, enqueue_pipeline_controller, load_pipeline_controller_from_task, pipeline_require_clearml_agent, pipeline_step_task_id_ref
-from ..platform_adapter_task import clearml_task_id, get_clearml_task_status, report_markdown, reset_clearml_task_args, set_clearml_task_configuration, set_clearml_task_parameters, set_clearml_task_project, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
+from ..platform_adapter_task import clearml_task_id, get_clearml_task_status, report_markdown, reset_clearml_task_args, replace_clearml_task_parameter_sections, set_clearml_task_configuration, set_clearml_task_project, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
 from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_run_project_name, build_runtime_properties, build_runtime_tags, build_step_run_project_name, build_project_name, resolve_clearml_metadata
-from .pipeline_support import apply_exec_policy_selection as _apply_exec_policy_selection, apply_pipeline_profile_defaults, build_disabled_selection_entries as _build_disabled_selection_entries, build_pipeline_operator_inputs, build_pipeline_step_specs, build_pipeline_template_defaults, build_pipeline_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, is_pipeline_placeholder_raw_dataset_id, normalize_pipeline_profile, resolve_ensemble_methods as _resolve_ensemble_methods, resolve_exec_policy_limits as _resolve_exec_policy_limits, resolve_exec_policy_queues as _resolve_exec_policy_queues, resolve_exec_policy_selection as _resolve_exec_policy_selection, resolve_pipeline_controller_queue_name as _resolve_pipeline_queue_name, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection, select_pipeline_queue as _select_queue, validate_pipeline_operator_inputs
+from .pipeline_support import apply_exec_policy_selection as _apply_exec_policy_selection, apply_pipeline_profile_defaults, build_disabled_selection_entries as _build_disabled_selection_entries, build_pipeline_operator_inputs, build_pipeline_run_summary_payload as _build_local_pipeline_run_summary, build_pipeline_step_parameter_override_payload as _build_pipeline_step_parameter_override_payload, build_pipeline_step_specs, build_pipeline_template_defaults as _build_pipeline_template_runtime_defaults, build_pipeline_template_params as _template_pipeline_params, build_pipeline_template_step_overrides as _build_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, finalize_pipeline_run_summary_payload as _finalize_pipeline_run_summary_payload, is_pipeline_placeholder_raw_dataset_id, normalize_pipeline_profile, normalize_pipeline_template_value as _normalize_template_arg_value, normalize_ui_cloned_pipeline_cfg as _normalize_ui_cloned_pipeline_cfg_impl, resolve_ensemble_methods as _resolve_ensemble_methods, resolve_exec_policy_limits as _resolve_exec_policy_limits, resolve_exec_policy_queues as _resolve_exec_policy_queues, resolve_exec_policy_selection as _resolve_exec_policy_selection, resolve_pipeline_controller_queue_name as _resolve_pipeline_queue_name, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection, select_pipeline_queue as _select_queue, validate_pipeline_operator_inputs
 from ..reporting.pipeline_report import build_pipeline_report_bundle
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 _STAGE_BY_TASK = {'dataset_register': '01_dataset_register', 'preprocess': '02_preprocess', 'train_model': '03_train_model', 'train_ensemble': '04_train_ensemble', 'infer': '04_infer', 'leaderboard': '05_leaderboard'}
@@ -81,88 +82,28 @@ def _create_local_task_context(cfg: Any, *, stage: str, task_name: str) -> TaskC
     save_config_resolved(ctx, cfg)
     return ctx
 
-
-def _normalize_template_arg_value(value: Any) -> Any:
-    if value is None:
-        return ''
-    if isinstance(value, Path):
-        return str(value)
-    try:
-        from omegaconf import OmegaConf
-        if OmegaConf.is_config(value):
-            return OmegaConf.to_container(value, resolve=False)
-    except ImportError:
-        pass
-    return value
-
-
-def _template_pipeline_param_name(name: str) -> str:
-    return str(name).replace('.', '/')
-
-
-def _template_pipeline_params(values: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        _template_pipeline_param_name(key): _normalize_template_arg_value(value)
-        for (key, value) in values.items()
-        if value is not None
-    }
-
-
-def _build_pipeline_template_runtime_defaults(*, cfg: Any, plan: Mapping[str, Any], grid_run_id: str, pipeline_profile: str, pipeline_task_id: str | None=None) -> dict[str, Any]:
-    defaults = build_pipeline_template_defaults(
-        cfg=cfg,
-        plan=plan,
-        grid_run_id=grid_run_id,
-        pipeline_profile=pipeline_profile,
-        pipeline_task_id=pipeline_task_id,
-    )
-    return {key: _normalize_template_arg_value(value) for (key, value) in defaults.items() if value is not None}
-
-
-def _build_template_step_overrides(step_overrides: Mapping[str, Any], shared_defaults: Mapping[str, Any]) -> dict[str, Any]:
-    return build_pipeline_template_step_overrides(step_overrides, editable_defaults=shared_defaults)
-
-
-def _normalize_pipeline_step_parameter_value(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, tuple):
-        return tuple(_normalize_pipeline_step_parameter_value(item) for item in value)
-    if isinstance(value, list):
-        return [_normalize_pipeline_step_parameter_value(item) for item in value]
-    if isinstance(value, set):
-        return [_normalize_pipeline_step_parameter_value(item) for item in value]
-    return value
-
-
-def _build_pipeline_step_parameter_override_payload(overrides: Mapping[str, Any]) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
-    for (key, value) in overrides.items():
-        normalized = _normalize_pipeline_step_parameter_value(value)
-        if normalized is None:
-            continue
-        payload[f'Args/{key}'] = normalized
-    return payload
 def _expand_param_grid(param_grid: Mapping[str, Any]) -> list[dict[str, Any]]:
     if not param_grid:
         return [{}]
+
     def _to_value_list(value: Any) -> list[Any]:
         if value is None:
             return []
         try:
             from omegaconf import OmegaConf
+
             if OmegaConf.is_list(value):
                 return [v for v in value]
         except ImportError:
             pass
         return list(value) if isinstance(value, (list, tuple, set)) else [value]
-    grid_items = [(str(key), _to_value_list(raw_values)) for (key, raw_values) in param_grid.items()]
+
+    grid_items = [(str(key), _to_value_list(raw)) for (key, raw) in param_grid.items()]
     if any((not values) for (_, values) in grid_items):
         return []
-    keys = [key for (key, _) in grid_items]
-    return [dict(zip(keys, values)) for values in product(*[values for (_, values) in grid_items])]
+    return [dict(zip([key for (key, _) in grid_items], values)) for values in product(*[values for (_, values) in grid_items])]
+
+
 def _build_hpo_trials(model_variant: str, param_sets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     trials: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
@@ -170,7 +111,10 @@ def _build_hpo_trials(model_variant: str, param_sets: list[dict[str, Any]]) -> l
         if not params:
             trials.append({'params': {}, 'hpo_run_id': None, 'suffix': None})
             continue
-        signature = '' if not params else '__'.join([f"{key}={(f'{params[key]:g}' if isinstance(params[key], float) else str(params[key]))}" for key in sorted(params)])
+        signature = '__'.join(
+            f"{key}={(f'{params[key]:g}' if isinstance(params[key], float) else str(params[key]))}"
+            for key in sorted(params)
+        )
         base_id = _sanitize_component(f'{model_variant}__{signature}' if signature else str(model_variant))
         count = seen.get(base_id, 0) + 1
         seen[base_id] = count
@@ -180,36 +124,36 @@ def _build_hpo_trials(model_variant: str, param_sets: list[dict[str, Any]]) -> l
             suffix = _sanitize_component(f'{suffix}__{count}')
         trials.append({'params': params, 'hpo_run_id': hpo_run_id, 'suffix': suffix})
     return trials
+
+
 def _limit_hpo_trials(trials_by_model: Mapping[str, list[dict[str, Any]]], max_hpo_trials: int) -> tuple[dict[str, list[dict[str, Any]]], int]:
     if max_hpo_trials <= 0:
         return ({str(k): list(v) for (k, v) in trials_by_model.items()}, 0)
-    limited: dict[str, list[dict[str, Any]]] = {}
-    skipped = 0
-    for (model_variant, trials) in trials_by_model.items():
-        if len(trials) > max_hpo_trials:
-            limited[model_variant] = list(trials[:max_hpo_trials])
-            skipped += len(trials) - max_hpo_trials
-        else:
-            limited[model_variant] = list(trials)
+    limited = {model_variant: list(trials[:max_hpo_trials]) for (model_variant, trials) in trials_by_model.items()}
+    skipped = sum(max(len(trials) - max_hpo_trials, 0) for trials in trials_by_model.values())
     return (limited, skipped)
+
+
 def _build_train_plan(preprocess_variants: list[str], model_variants: list[str], trials_by_model: Mapping[str, list[dict[str, Any]]], *, max_jobs: int, max_hpo_trials: int) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, list[dict[str, Any]]]]:
     raw_trial_count = sum((len(trials_by_model.get(model, [])) for model in model_variants))
     raw_jobs = len(preprocess_variants) * raw_trial_count if preprocess_variants else 0
     (limited_trials, _) = _limit_hpo_trials(trials_by_model, max_hpo_trials)
-    jobs: list[dict[str, Any]] = []
-    for preprocess_variant in preprocess_variants:
-        for model_variant in model_variants:
-            for trial in limited_trials.get(model_variant, [{'params': {}, 'hpo_run_id': None, 'suffix': None}]):
-                jobs.append({'preprocess_variant': preprocess_variant, 'model_variant': model_variant, 'trial': trial})
-    planned_jobs = len(jobs)
-    if max_jobs > 0 and planned_jobs > max_jobs:
+    jobs = [
+        {'preprocess_variant': preprocess_variant, 'model_variant': model_variant, 'trial': trial}
+        for preprocess_variant in preprocess_variants
+        for model_variant in model_variants
+        for trial in limited_trials.get(model_variant, [{'params': {}, 'hpo_run_id': None, 'suffix': None}])
+    ]
+    if max_jobs > 0 and len(jobs) > max_jobs:
         jobs = jobs[:max_jobs]
     planned_jobs = len(jobs)
-    skipped_due_to_policy = raw_jobs - planned_jobs
-    if skipped_due_to_policy < 0:
-        skipped_due_to_policy = 0
-    info = {'raw_jobs': raw_jobs, 'planned_jobs': planned_jobs, 'skipped_due_to_policy': skipped_due_to_policy}
-    return (jobs, info, limited_trials)
+    return (
+        jobs,
+        {'raw_jobs': raw_jobs, 'planned_jobs': planned_jobs, 'skipped_due_to_policy': max(raw_jobs - planned_jobs, 0)},
+        limited_trials,
+    )
+
+
 def _resolve_hpo_trials(cfg: Any, model_variants: list[str]) -> tuple[bool, dict[str, list[dict[str, Any]]], dict[str, Any]]:
     enabled = bool(_cfg_value(cfg, 'pipeline.hpo.enabled'))
     params_cfg = _to_mapping(_cfg_value(cfg, 'pipeline.hpo.params'))
@@ -224,8 +168,12 @@ def _resolve_hpo_trials(cfg: Any, model_variants: list[str]) -> tuple[bool, dict
             param_sets = [{}]
         trials_by_model[model_variant] = _build_hpo_trials(model_variant, param_sets)
     return (enabled, trials_by_model, params_cfg)
+
+
 def _build_hpo_param_overrides(params: Mapping[str, Any]) -> dict[str, Any]:
     return {f'group.model.model_variant.params.{key}': value for (key, value) in params.items()}
+
+
 def _should_inject_task_uv_overrides(cfg: Any) -> bool:
     if _to_list(_cfg_value(cfg, 'run.clearml.env.uv.extras')):
         return False
@@ -233,15 +181,13 @@ def _should_inject_task_uv_overrides(cfg: Any) -> bool:
 
 
 def _resolve_optional_extras_for_model_variants(model_variants: Iterable[str]) -> list[str]:
-    extras: list[str] = []
-    for model_variant in model_variants:
-        extras.extend(
-            resolve_required_uv_extras(
-                task_name='train_model',
-                model_variant_name=_normalize_str(model_variant),
-            )
-        )
-    return _dedupe_tag_values(extras)
+    return _dedupe_tag_values(
+        [
+            extra
+            for model_variant in model_variants
+            for extra in resolve_required_uv_extras(task_name='train_model', model_variant_name=_normalize_str(model_variant))
+        ]
+    )
 
 
 def _build_task_uv_overrides(
@@ -254,15 +200,16 @@ def _build_task_uv_overrides(
 ) -> dict[str, Any]:
     if not _should_inject_task_uv_overrides(cfg):
         return {}
-    explicit_extras_list = list(explicit_extras) if explicit_extras is not None else None
     extras = resolve_required_uv_extras(
         task_name=task_name,
         model_variant_name=model_variant,
         infer_mode=infer_mode,
-        explicit_extras=explicit_extras_list,
+        explicit_extras=list(explicit_extras) if explicit_extras is not None else None,
         explicit_extras_provided=explicit_extras is not None,
     )
     return {'run.clearml.env.uv.extras': extras, 'run.clearml.env.uv.all_extras': False}
+
+
 def _ensure_override(overrides: list[str], key: str, value: Any) -> None:
     if value is None or key in {str(item).strip().split('=', 1)[0].strip().lstrip('+~') for item in overrides}:
         return
@@ -270,15 +217,22 @@ def _ensure_override(overrides: list[str], key: str, value: Any) -> None:
     if formatted is None:
         return
     overrides.append(f'{key}={formatted}')
+
+
 def _hydra_task_overrides() -> list[str]:
     try:
         from hydra.core.hydra_config import HydraConfig
-        overrides = getattr(getattr(HydraConfig.get(), 'overrides', None), 'task', None)
-        return [str(item) for item in overrides if item] if overrides else []
+
+        task_overrides = getattr(getattr(HydraConfig.get(), 'overrides', None), 'task', None) or []
+        return [str(item) for item in task_overrides if item]
     except (ImportError, AttributeError, TypeError, ValueError):
         return []
+
+
 def _merge_overrides(*items: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for item in items for (key, value) in dict(item).items()}
+
+
 def _apply_infer_reference_overrides(overrides: dict[str, Any], *, recommendation_payload: Mapping[str, Any] | None, explicit_model_id: str | None, explicit_train_task_id: str | None, error_message: str) -> dict[str, Any]:
     preferred = resolve_preferred_infer_reference(recommendation_payload)
     explicit = build_infer_reference(model_id=explicit_model_id, train_task_id=explicit_train_task_id)
@@ -423,57 +377,16 @@ def _build_run_root(base_output_dir: Path, grid_run_id: str, name: str) -> Path:
     return base_output_dir / 'grid' / str(grid_run_id) / _sanitize_component(name)
 def _stage_dir(run_root: Path, task_name: str) -> Path:
     return run_root / _STAGE_BY_TASK[task_name]
-def _clearml_project(cfg: Any, stage: str) -> str:
-    return build_project_name(_normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG', _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'unknown', stage, cfg=cfg)
-
-
-def _visible_pipeline_project(cfg: Any) -> str:
-    return build_pipeline_run_project_name(
-        _normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG',
-        _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'unknown',
-        layout=_cfg_value(cfg, 'run.clearml.project_layout'),
-        cfg=cfg,
-    )
-
-
-def _ui_clone_should_autogenerate_usecase_id(cfg: Any) -> bool:
-    usecase_id = _normalize_str(_cfg_value(cfg, 'run.usecase_id'))
-    if not usecase_id:
-        return False
-    template_usecase_id = _normalize_str(_cfg_value(cfg, 'run.clearml.template_usecase_id')) or 'TabularAnalysis'
-    return usecase_id == template_usecase_id
-
-
-def _normalize_ui_cloned_pipeline_cfg(cfg: Any) -> None:
-    raw_dataset_id = _normalize_str(_cfg_value(cfg, 'data.raw_dataset_id'))
-    if not raw_dataset_id or is_pipeline_placeholder_raw_dataset_id(raw_dataset_id):
-        return
-    if _ui_clone_should_autogenerate_usecase_id(cfg):
-        _set_cfg_value(cfg, 'run.usecase_id', '')
-    if resolve_pipeline_plan_only(cfg):
-        _set_cfg_value(cfg, 'pipeline.plan_only', False)
-        _set_cfg_value(cfg, 'pipeline.dry_run', False)
-        _set_cfg_value(cfg, 'pipeline.plan', False)
-    grid_run_id = _normalize_str(_cfg_value(cfg, 'run.grid_run_id'))
-    if grid_run_id.startswith('seed__'):
-        _set_cfg_value(cfg, 'run.grid_run_id', '')
-
-
-def _pipeline_child_project(cfg: Any, *, task_name: str, usecase_id: str | None = None) -> str:
-    return build_step_run_project_name(
-        _normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG',
-        usecase_id or _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'unknown',
-        _STAGE_BY_TASK[task_name],
-        process=task_name,
-        layout=_cfg_value(cfg, 'run.clearml.project_layout'),
-        cfg=cfg,
-    )
-
 
 def _resolve_base_task_id(cfg: Any, task_name: str, *, use_templates: bool) -> str:
     if use_templates:
         return resolve_template_task_id(cfg, task_name)
-    project = _clearml_project(cfg, _STAGE_BY_TASK[task_name])
+    project = build_project_name(
+        _normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG',
+        _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'unknown',
+        _STAGE_BY_TASK[task_name],
+        cfg=cfg,
+    )
     try:
         from clearml import Task as ClearMLTask
     except ImportError as exc:
@@ -500,7 +413,14 @@ def _build_pipeline_step_runtime_identity(*, cfg: Any, step: Mapping[str, Any], 
         )
     )
     usecase_id = _normalize_str(metadata.get('usecase_id')) or _normalize_str(_cfg_value(cfg_clone, 'run.usecase_id')) or 'unknown'
-    project_name = _pipeline_child_project(cfg_clone, task_name=task_name, usecase_id=usecase_id)
+    project_name = build_step_run_project_name(
+        _normalize_str(_cfg_value(cfg_clone, 'run.clearml.project_root')) or 'MFG',
+        usecase_id,
+        _STAGE_BY_TASK[task_name],
+        process=task_name,
+        layout=_cfg_value(cfg_clone, 'run.clearml.project_layout'),
+        cfg=cfg_clone,
+    )
     user_properties = dict(metadata.get('user_properties') or {})
     schema_version = _normalize_str(user_properties.get('schema_version')) or _normalize_str(_cfg_value(cfg_clone, 'run.schema_version')) or 'v1'
     preprocess_variant = _normalize_str(step.get('preprocess_variant'))
@@ -930,80 +850,6 @@ def _build_infer_step_overrides(*, cfg: Any, clearml_enabled: bool, run_override
     explicit_model_id = _normalize_str(getattr(infer_cfg, 'model_id', None))
     explicit_train_task_id = _normalize_str(getattr(infer_cfg, 'train_task_id', None))
     return _apply_infer_reference_overrides(overrides, recommendation_payload=leaderboard_out, explicit_model_id=explicit_model_id, explicit_train_task_id=explicit_train_task_id, error_message='infer requires model_id or train_task_id.')
-def _build_local_pipeline_run_summary(*, cfg: Any, plan: Mapping[str, Any], grid_run_id: str, dataset_register_ref: dict[str, Any] | None, preprocess_refs: list[dict[str, Any]], train_refs: list[dict[str, Any]], train_ensemble_refs: list[dict[str, Any]], leaderboard_ref: dict[str, Any] | None, infer_ref: dict[str, Any] | None, executed_jobs: int) -> dict[str, Any]:
-    selection = dict(plan.get('selection') or {})
-    return {
-        'grid_run_id': grid_run_id,
-        'plan_only': plan['plan_only'],
-        'requested_jobs': int(plan['plan_info'].get('requested_jobs', plan['plan_info'].get('raw_jobs', 0))),
-        'planned_jobs': int(plan['plan_info'].get('planned_jobs', 0)),
-        'executed_jobs': int(executed_jobs),
-        'disabled_jobs': int(plan['plan_info'].get('disabled_jobs', 0)),
-        'skipped_due_to_policy': int(plan['plan_info'].get('skipped_due_to_policy', 0)),
-        'disabled_selection': list(plan.get('disabled_selection') or []),
-        'dataset_register_ref': dataset_register_ref,
-        'preprocess_ref': preprocess_refs,
-        'train_refs': train_refs,
-        'train_ensemble_refs': train_ensemble_refs,
-        'leaderboard_ref': leaderboard_ref,
-        'infer_ref': infer_ref,
-        'grid': {
-            'preprocess_variants': plan['preprocess_variants'],
-            'model_variants': plan['model_variants'],
-            'max_jobs': plan['max_jobs'],
-            'max_hpo_trials': plan['max_hpo_trials'],
-            'hpo': {'enabled': plan['hpo_enabled'], 'params': plan['hpo_params_cfg']},
-        },
-        'selection': {
-            'requested_preprocess_variants': list(selection.get('requested_preprocess_variants') or []),
-            'active_preprocess_variants': list(selection.get('active_preprocess_variants') or []),
-            'disabled_preprocess_variants': list(selection.get('disabled_preprocess_variants') or []),
-            'requested_model_variants': list(selection.get('requested_model_variants') or []),
-            'active_model_variants': list(selection.get('active_model_variants') or []),
-            'disabled_model_variants': list(selection.get('disabled_model_variants') or []),
-            'requested_ensemble_methods': list(selection.get('requested_ensemble_methods') or []),
-            'active_ensemble_methods': list(selection.get('active_ensemble_methods') or []),
-            'disabled_ensemble_methods': list(selection.get('disabled_ensemble_methods') or []),
-        },
-        'policy': {'limits': dict(plan['limits']), 'selection': _resolve_exec_policy_selection(cfg)},
-    }
-
-
-def _normalize_pipeline_job_status(value: Any) -> str | None:
-    text = (_normalize_str(value) or '').lower()
-    if not text:
-        return None
-    if text in {'completed', 'closed', 'finished', 'published', 'success'}:
-        return 'completed'
-    if text in {'failed', 'error'}:
-        return 'failed'
-    if text in {'stopped', 'aborted'}:
-        return 'stopped'
-    if text in {'queued', 'created', 'pending'}:
-        return 'queued'
-    if text in {'in_progress', 'running'}:
-        return 'running'
-    return text
-
-
-def _resolve_pipeline_ref_status(cfg: Any, ref: Mapping[str, Any] | None) -> str | None:
-    if not isinstance(ref, Mapping):
-        return None
-    task_id = _normalize_str(ref.get('task_id') or ref.get('train_task_id'))
-    if task_id:
-        status = _normalize_pipeline_job_status(get_clearml_task_status(task_id))
-        if status:
-            return status
-    run_dir = _normalize_str(ref.get('run_dir'))
-    if run_dir:
-        out_path = Path(run_dir) / 'out.json'
-        if out_path.exists():
-            out_payload = _load_json(out_path)
-            status = _normalize_pipeline_job_status(out_payload.get('status'))
-            return status or 'completed'
-    return None
-
-
 def _finalize_pipeline_run_summary(
     cfg: Any,
     summary: dict[str, Any],
@@ -1011,65 +857,14 @@ def _finalize_pipeline_run_summary(
     status: str | None = None,
     queued_launch: bool = False,
 ) -> dict[str, Any]:
-    planned_jobs = int(summary.get('planned_jobs') or 0)
-    skipped_jobs = int(summary.get('skipped_due_to_policy') or 0)
-    if queued_launch:
-        summary['executed_jobs'] = 0
-        summary['completed_jobs'] = 0
-        summary['failed_jobs'] = 0
-        summary['stopped_jobs'] = 0
-        summary['running_jobs'] = 0
-        summary['queued_jobs'] = planned_jobs
-        summary['status'] = 'queued'
-        return summary
-    if bool(summary.get('plan_only')):
-        summary['executed_jobs'] = 0
-        summary['completed_jobs'] = 0
-        summary['failed_jobs'] = 0
-        summary['stopped_jobs'] = 0
-        summary['running_jobs'] = 0
-        summary['queued_jobs'] = 0
-        summary['status'] = _normalize_pipeline_job_status(status) or 'planned'
-        return summary
-    job_refs: list[Mapping[str, Any]] = []
-    for key in ('train_refs', 'train_ensemble_refs'):
-        refs = summary.get(key) or []
-        if isinstance(refs, list):
-            job_refs.extend((ref for ref in refs if isinstance(ref, Mapping)))
-    counts = {'completed': 0, 'failed': 0, 'stopped': 0, 'running': 0, 'queued': 0}
-    launched_jobs = 0
-    for ref in job_refs:
-        job_status = _resolve_pipeline_ref_status(cfg, ref)
-        if not job_status:
-            continue
-        launched_jobs += 1
-        if job_status in counts:
-            counts[job_status] += 1
-    if launched_jobs == 0:
-        launched_jobs = int(summary.get('executed_jobs') or 0)
-        if launched_jobs > 0:
-            counts['completed'] = launched_jobs
-    summary['executed_jobs'] = launched_jobs
-    summary['completed_jobs'] = counts['completed']
-    summary['failed_jobs'] = counts['failed']
-    summary['stopped_jobs'] = counts['stopped']
-    summary['running_jobs'] = counts['running']
-    summary['queued_jobs'] = counts['queued']
-    explicit_status = _normalize_pipeline_job_status(status)
-    if explicit_status in {'failed', 'stopped'}:
-        summary['status'] = explicit_status
-    elif counts['failed'] > 0:
-        summary['status'] = 'failed'
-    elif counts['stopped'] > 0:
-        summary['status'] = 'stopped'
-    elif counts['running'] > 0:
-        summary['status'] = 'running'
-    elif counts['queued'] > 0:
-        summary['status'] = 'queued'
-    else:
-        summary['status'] = explicit_status or 'completed'
-    summary['skipped_jobs'] = skipped_jobs
-    return summary
+    _ = cfg
+    return _finalize_pipeline_run_summary_payload(
+        summary,
+        status=status,
+        queued_launch=queued_launch,
+        status_loader=get_clearml_task_status,
+        json_loader=_load_json,
+    )
 def _run_local_pipeline_impl(cfg: Any, grid_run_id: str, *, clearml_enabled: bool) -> dict[str, Any]:
     plan = _build_pipeline_plan(cfg, grid_run_id)
     repo_root = _resolve_repo_root()
@@ -1390,7 +1185,9 @@ def _add_clearml_pipeline_template_steps(*, cfg: Any, plan: Mapping[str, Any], s
         controller=controller,
         use_templates=use_templates,
         step_requests=step_requests,
-        parameter_override_builder=lambda overrides: _build_pipeline_step_parameter_override_payload(_build_template_step_overrides(overrides, shared_defaults)),
+        parameter_override_builder=lambda overrides: _build_pipeline_step_parameter_override_payload(
+            _build_template_step_overrides(overrides, editable_defaults=shared_defaults)
+        ),
     )
 
 
@@ -1567,7 +1364,12 @@ def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str, allow_
         clearml_enabled=True,
         )
     )
-    metadata['project_name'] = _visible_pipeline_project(cfg)
+    metadata['project_name'] = build_pipeline_run_project_name(
+        _normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG',
+        _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'unknown',
+        layout=_cfg_value(cfg, 'run.clearml.project_layout'),
+        cfg=cfg,
+    )
     queue_name = _select_queue(plan['queues'], 'pipeline') or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name')) or 'controller'
     return _VisiblePipelineRunContract(
         plan=plan,
@@ -1648,7 +1450,8 @@ def _apply_visible_pipeline_run_defaults(*, target: Any, task_id: str, cfg: Any,
         pipeline_task_id=task_id,
     )
     reset_clearml_task_args(task_id, _overrides_to_args(runtime_defaults))
-    set_clearml_task_parameters(task_id, _template_pipeline_params(runtime_defaults), section='pipeline')
+    (sections, _) = _build_hparam_sections_from_values(runtime_defaults, cfg=cfg)
+    replace_clearml_task_parameter_sections(task_id, sections)
     set_clearml_task_configuration(
         task_id,
         build_pipeline_operator_inputs(runtime_defaults, pipeline_profile=contract.pipeline_profile),
@@ -1860,7 +1663,7 @@ def run(cfg: Any) -> None:
     execution = _normalize_str(_cfg_value(cfg, 'run.clearml.execution')) or 'local'
     clearml_enabled = is_clearml_enabled(cfg)
     if clearml_enabled and execution == 'pipeline_controller':
-        _normalize_ui_cloned_pipeline_cfg(cfg)
+        _normalize_ui_cloned_pipeline_cfg_impl(cfg)
     grid_run_id = _normalize_str(_cfg_value(cfg, 'run.grid_run_id'))
     if not grid_run_id:
         grid_run_id = uuid.uuid4().hex

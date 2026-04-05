@@ -11,13 +11,36 @@ _VERSION_RECOVERABLE_ERRORS = (AttributeError, RuntimeError, TypeError, ValueErr
 _DEFAULT_SECTION_ORDER = ('inputs', 'dataset', 'preprocess', 'model', 'eval', 'optimize', 'pipeline', 'clearml')
 def _drop_none(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for (key, value) in payload.items() if value is not None}
-def _flatten(prefix: str, params: Mapping[str, Any]) -> dict[str, Any]:
-    flattened: dict[str, Any] = {}
-    for (key, value) in params.items():
+def _merge_nested_mapping(target: dict[str, Any], payload: Mapping[str, Any]) -> None:
+    for (key, value) in payload.items():
+        text = str(key)
         if value is None:
             continue
-        flattened[f'{prefix}.{key}'] = value
-    return flattened
+        if isinstance(value, Mapping):
+            child = target.get(text)
+            if not isinstance(child, dict):
+                child = {}
+            target[text] = child
+            _merge_nested_mapping(child, value)
+            continue
+        target[text] = _to_builtin(value)
+
+
+def _build_nested_mapping(path: str, value: Any) -> dict[str, Any]:
+    text = _normalize_str(path)
+    if not text:
+        return {}
+    parts = [part for part in text.split('.') if part]
+    if not parts:
+        return {}
+    node: Any = _to_builtin(value)
+    for key in reversed(parts):
+        node = {key: node}
+    return node if isinstance(node, dict) else {}
+
+
+def _flatten(prefix: str, params: Mapping[str, Any]) -> dict[str, Any]:
+    return _build_nested_mapping(prefix, params)
 def _load_sections_from_file() -> dict[str, list[str]]:
     path = resolve_repo_root_fallback(fallback=Path(__file__).resolve().parents[3]) / 'conf' / 'clearml' / 'hyperparams_sections.yaml'
     if not path.exists():
@@ -57,18 +80,9 @@ def _section_key(sections_cfg: Mapping[str, Any], canonical: str) -> str:
 def _flatten_mapping(prefix: str, payload: Any, out: dict[str, Any]) -> None:
     if payload is None:
         return
-    payload = _to_builtin(payload)
-    if isinstance(payload, Mapping):
-        for (key, value) in payload.items():
-            if value is None:
-                continue
-            next_prefix = f'{prefix}.{key}' if prefix else str(key)
-            if isinstance(value, Mapping):
-                _flatten_mapping(next_prefix, value, out)
-            else:
-                out[next_prefix] = _to_builtin(value)
-        return
-    out[prefix] = _to_builtin(payload)
+    nested = _build_nested_mapping(prefix, payload)
+    if nested:
+        _merge_nested_mapping(out, nested)
 def _extract_sections(cfg: Any, sections_cfg: Mapping[str, Iterable[str]]) -> dict[str, dict[str, Any]]:
     sections: dict[str, dict[str, Any]] = {}
     for (name, paths) in sections_cfg.items():
@@ -86,7 +100,7 @@ def _extract_sections(cfg: Any, sections_cfg: Mapping[str, Iterable[str]]) -> di
             else:
                 value = _cfg_value(cfg, text)
                 if value is not None:
-                    payload[text] = _to_builtin(value)
+                    _merge_nested_mapping(payload, _build_nested_mapping(text, value))
         if payload:
             sections[str(name)] = payload
     return sections
@@ -99,7 +113,11 @@ def _merge_section(sections: dict[str, dict[str, Any]], name: str, payload: Mapp
     if not cleaned:
         return
     merged = dict(sections.get(name, {}))
-    merged.update(cleaned)
+    for (key, value) in cleaned.items():
+        if isinstance(value, Mapping) and '.' not in str(key):
+            _merge_nested_mapping(merged, {str(key): _to_builtin(value)})
+            continue
+        _merge_nested_mapping(merged, _build_nested_mapping(str(key), value))
     sections[name] = merged
 def _execution_hparams(cfg: Any) -> dict[str, Any]:
     usecase_id = _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or _normalize_str(_cfg_value(cfg, 'usecase_id'))
@@ -117,6 +135,38 @@ def _to_builtin(value: Any) -> Any:
     if OmegaConf is not None and OmegaConf.is_config(value):
         return OmegaConf.to_container(value, resolve=True)
     return value
+
+
+def _path_matches_section_rule(path: str, rule: str) -> bool:
+    if rule.endswith('.*'):
+        base = rule[:-2]
+        return path == base or path.startswith(f'{base}.')
+    return path == rule
+
+
+def build_sections_from_values(
+    values: Mapping[str, Any],
+    *,
+    cfg: Any | None = None,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    sections_cfg = _resolve_sections_cfg(cfg)
+    sections: dict[str, dict[str, Any]] = {}
+    normalized_values = {
+        _normalize_str(key): value
+        for (key, value) in dict(values).items()
+        if _normalize_str(key) and value is not None
+    }
+    section_order = _section_order(sections_cfg)
+    for (key, value) in normalized_values.items():
+        for name in section_order:
+            rules = list(sections_cfg.get(name) or [])
+            if not any(_path_matches_section_rule(key, _normalize_str(rule)) for rule in rules if _normalize_str(rule)):
+                continue
+            payload = dict(sections.get(str(name), {}))
+            _merge_nested_mapping(payload, _build_nested_mapping(key, value))
+            sections[str(name)] = payload
+            break
+    return (sections, section_order)
 def _connect_section(ctx: Any, name: str, payload: Mapping[str, Any]) -> None:
     cleaned = _drop_none(payload)
     if not cleaned:

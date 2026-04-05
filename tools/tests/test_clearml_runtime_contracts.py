@@ -17,6 +17,7 @@ for candidate in (_REPO, _SRC, _PLATFORM_SRC):
         sys.path.insert(0, str(candidate))
 
 from tabular_analysis.clearml import pipeline_templates as pipeline_template_module
+from tabular_analysis.clearml import hparams as clearml_hparams_module
 from tabular_analysis.clearml import templates as template_module
 from tabular_analysis.common.clearml_bootstrap import resolve_required_uv_extras
 from tabular_analysis.common.clearml_config import read_clearml_api_section
@@ -186,8 +187,8 @@ def _assert_visible_pipeline_seed_lookup() -> None:
         task_id = pipeline_template_module.resolve_pipeline_seed_task_id(
             {
                 "run": {
+                    "usecase_id": "TabularAnalysis",
                     "clearml": {
-                        "template_usecase_id": "TabularAnalysis",
                         "template_set_id": "default",
                     }
                 }
@@ -269,8 +270,8 @@ def _assert_visible_pipeline_seed_lookup_rejects_stale_version() -> None:
             pipeline_template_module.resolve_pipeline_seed_task_id(
                 {
                     "run": {
+                        "usecase_id": "TabularAnalysis",
                         "clearml": {
-                            "template_usecase_id": "TabularAnalysis",
                             "template_set_id": "default",
                         }
                     }
@@ -299,12 +300,10 @@ def _assert_project_layout_contract() -> None:
             "run": {
                 "clearml": {
                     "project_root": "LOCAL",
-                    "template_usecase_id": "TabularAnalysis",
                     "template_set_id": "default",
                     "project_layout": {
                         "solution_root": "TabularAnalysis",
                         "pipeline_root_group": "Pipelines",
-                        "pipeline_templates_group": "Templates",
                         "pipeline_runs_group": "Runs",
                         "templates_root_group": "Templates",
                         "step_templates_group": "Steps",
@@ -529,6 +528,132 @@ def _assert_set_clearml_task_parameters_normalizes_encoded_section_keys() -> Non
         raise AssertionError(f"selection section must keep the decoded key: {updated}")
     if pipeline_section.get("pipeline.profile") != "train_ensemble_full":
         raise AssertionError(f"target section update must still be applied: {updated}")
+
+
+def _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.payload = {
+                "dataset": {
+                    "data%2Eraw_dataset_id": "REPLACE_WITH_EXISTING_RAW_DATASET_ID",
+                    "data": {"raw_dataset_id": "dataset-old"},
+                },
+                "selection": {
+                    "pipeline%2Eselection%2Eenabled_model_variants": "[\"ridge\"]",
+                },
+                "pipeline": {
+                    "pipeline": {"profile": "pipeline"},
+                },
+            }
+            self.updated: dict[str, object] | None = None
+
+        def get_parameters_as_dict(self, cast: bool = False) -> dict[str, object]:
+            return dict(self.payload)
+
+        def set_parameters_as_dict(self, payload: dict[str, object]) -> None:
+            self.updated = dict(payload)
+            self.payload = dict(payload)
+
+    fake = _FakeTask()
+    originals = {
+        "_get_clearml_task": task_ops_module._get_clearml_task,
+    }
+    try:
+        task_ops_module._get_clearml_task = lambda _task_id: fake
+        changed = task_ops_module.replace_clearml_task_parameter_sections(
+            "task-123",
+            {
+                "dataset": {"data": {"raw_dataset_id": "dataset-new"}},
+                "selection": {"pipeline": {"selection": {"enabled_model_variants": ["lgbm", "xgboost"]}}},
+            },
+        )
+    finally:
+        task_ops_module._get_clearml_task = originals["_get_clearml_task"]
+    if not changed:
+        raise AssertionError("replace_clearml_task_parameter_sections should report stale section replacement")
+    updated = fake.updated or {}
+    dataset_section = updated.get("dataset") or {}
+    selection_section = updated.get("selection") or {}
+    if dataset_section != {"data": {"raw_dataset_id": "dataset-new"}}:
+        raise AssertionError(f"dataset section must be fully replaced with the normalized payload: {updated}")
+    if selection_section != {"pipeline": {"selection": {"enabled_model_variants": ["lgbm", "xgboost"]}}}:
+        raise AssertionError(f"selection section must be fully replaced with the normalized payload: {updated}")
+
+
+def _assert_hparam_sections_are_nested_for_clearml_ui() -> None:
+    cfg = OmegaConf.create(
+        {
+            "run": {
+                "usecase_id": "demo_usecase",
+                "clearml": {
+                    "enabled": True,
+                    "execution": "pipeline_controller",
+                    "project_root": "LOCAL",
+                },
+            },
+            "pipeline": {
+                "profile": "train_ensemble_full",
+                "plan_only": False,
+                "selection": {
+                    "enabled_preprocess_variants": ["stdscaler_ohe"],
+                    "enabled_model_variants": ["ridge", "lgbm"],
+                },
+            },
+            "ensemble": {
+                "selection": {"enabled_methods": ["mean_topk", "weighted"]},
+                "top_k": 3,
+            },
+            "data": {
+                "raw_dataset_id": "dataset-123",
+            },
+        }
+    )
+    (sections, _) = clearml_hparams_module.build_sections_from_values(
+        {
+            "run.usecase_id": "demo_usecase",
+            "run.grid_run_id": "grid-123",
+            "run.clearml.execution": "pipeline_controller",
+            "data.raw_dataset_id": "dataset-123",
+            "pipeline.profile": "train_ensemble_full",
+            "pipeline.plan_only": False,
+            "pipeline.selection.enabled_preprocess_variants": ["stdscaler_ohe"],
+            "pipeline.selection.enabled_model_variants": ["ridge", "lgbm"],
+            "ensemble.selection.enabled_methods": ["mean_topk", "weighted"],
+            "ensemble.top_k": 3,
+        },
+        cfg=cfg,
+    )
+    expected = {
+        "inputs": {"run": {"usecase_id": "demo_usecase"}},
+        "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+        "selection": {
+            "pipeline": {
+                "selection": {
+                    "enabled_preprocess_variants": ["stdscaler_ohe"],
+                    "enabled_model_variants": ["ridge", "lgbm"],
+                }
+            },
+            "ensemble": {"selection": {"enabled_methods": ["mean_topk", "weighted"]}},
+        },
+        "model": {
+            "ensemble": {
+                "top_k": 3,
+            }
+        },
+        "pipeline": {
+            "pipeline": {
+                "profile": "train_ensemble_full",
+                "plan_only": False,
+            }
+        },
+        "clearml": {"run": {"clearml": {"execution": "pipeline_controller"}}},
+    }
+    for section_name, expected_payload in expected.items():
+        if sections.get(section_name) != expected_payload:
+            raise AssertionError(f"unexpected nested section payload for {section_name}: {sections}")
+    serialized = json.dumps(sections, ensure_ascii=False)
+    if "%2E" in serialized or "run.usecase_id" in serialized or "data.raw_dataset_id" in serialized:
+        raise AssertionError(f"ClearML UI sections must use nested payloads instead of flat dotted keys: {sections}")
 
 
 def _assert_regression_model_set_contract() -> None:
@@ -1285,11 +1410,10 @@ def _assert_ui_clone_cfg_normalization_clears_seed_only_defaults() -> None:
             "run": {
                 "grid_run_id": "seed__train_ensemble_full",
                 "usecase_id": "TabularAnalysis",
-                "clearml": {"template_usecase_id": "TabularAnalysis"},
             },
         }
     )
-    pipeline_module._normalize_ui_cloned_pipeline_cfg(cfg)
+    pipeline_module._normalize_ui_cloned_pipeline_cfg_impl(cfg)
     if pipeline_module.resolve_pipeline_plan_only(cfg):
         raise AssertionError(f"actual UI clone should clear seed-only plan flags: {OmegaConf.to_container(cfg, resolve=False)}")
     if cfg.run.grid_run_id != "":
@@ -1306,11 +1430,10 @@ def _assert_ui_clone_cfg_normalization_clears_seed_only_defaults() -> None:
             "run": {
                 "grid_run_id": "seed__train_ensemble_full",
                 "usecase_id": "TabularAnalysis",
-                "clearml": {"template_usecase_id": "TabularAnalysis"},
             },
         }
     )
-    pipeline_module._normalize_ui_cloned_pipeline_cfg(seed_cfg)
+    pipeline_module._normalize_ui_cloned_pipeline_cfg_impl(seed_cfg)
     if seed_cfg.pipeline.plan_only is not True:
         raise AssertionError("seed placeholder runs must keep plan_only intact")
     if seed_cfg.run.grid_run_id != "seed__train_ensemble_full":
@@ -1325,11 +1448,10 @@ def _assert_ui_clone_cfg_normalization_clears_seed_only_defaults() -> None:
             "run": {
                 "grid_run_id": "seed__train_ensemble_full",
                 "usecase_id": "ui_train_ensemble_full_20260405_2200",
-                "clearml": {"template_usecase_id": "TabularAnalysis"},
             },
         }
     )
-    pipeline_module._normalize_ui_cloned_pipeline_cfg(explicit_cfg)
+    pipeline_module._normalize_ui_cloned_pipeline_cfg_impl(explicit_cfg)
     if explicit_cfg.run.usecase_id != "ui_train_ensemble_full_20260405_2200":
         raise AssertionError("explicit UI usecase_id must be preserved")
 
@@ -1459,7 +1581,6 @@ def _assert_manage_templates_pipeline_properties_follow_resolved_context() -> No
         solution_root=defaults.solution_root,
         pipeline_seed_namespace=defaults.pipeline_seed_namespace,
         pipeline_root_group=defaults.pipeline_root_group,
-        pipeline_templates_group=defaults.pipeline_templates_group,
         pipeline_runs_group=defaults.pipeline_runs_group,
         templates_root_group=defaults.templates_root_group,
         step_templates_group=defaults.step_templates_group,
@@ -1491,7 +1612,6 @@ def _assert_lock_context_payload_keeps_usecase_id() -> None:
         solution_root="TabularAnalysis",
         pipeline_seed_namespace=".pipelines",
         pipeline_root_group="Pipelines",
-        pipeline_templates_group="Templates",
         pipeline_runs_group="Runs",
         templates_root_group="Templates",
         step_templates_group="Steps",
@@ -1522,7 +1642,6 @@ def _assert_live_plan_context_prefers_lock_project_root() -> None:
             solution_root="TabularAnalysis",
             pipeline_seed_namespace=".pipelines",
             pipeline_root_group="Pipelines",
-            pipeline_templates_group="Templates",
             pipeline_runs_group="Runs",
             templates_root_group="Templates",
             step_templates_group="Steps",
@@ -1557,7 +1676,6 @@ def _assert_live_plan_context_fails_on_layout_drift() -> None:
                 "  solution_root: LegacySolution\n"
                 "  pipeline_seed_namespace: legacy.pipelines\n"
                 "  pipeline_root_group: Pipelines\n"
-                "  pipeline_templates_group: Templates\n"
                 "  pipeline_runs_group: Runs\n"
                 "  templates_root_group: Templates\n"
                 "  step_templates_group: Steps\n"
@@ -1575,7 +1693,6 @@ def _assert_live_plan_context_fails_on_layout_drift() -> None:
             solution_root="TabularAnalysis",
             pipeline_seed_namespace=".pipelines",
             pipeline_root_group="Pipelines",
-            pipeline_templates_group="Templates",
             pipeline_runs_group="Runs",
             templates_root_group="Templates",
             step_templates_group="Steps",
@@ -1722,7 +1839,6 @@ def _assert_pipeline_seed_controller_uses_profile_model_set() -> None:
         solution_root=defaults.solution_root,
         pipeline_seed_namespace=defaults.pipeline_seed_namespace,
         pipeline_root_group=defaults.pipeline_root_group,
-        pipeline_templates_group=defaults.pipeline_templates_group,
         pipeline_runs_group=defaults.pipeline_runs_group,
         templates_root_group=defaults.templates_root_group,
         step_templates_group=defaults.step_templates_group,
@@ -2160,7 +2276,7 @@ def _assert_pipeline_report_primary_summary_fields() -> None:
             raise AssertionError(f"pipeline report must derive ranked_candidates from leaderboard rows: {summary}")
         if summary.get("models_tried") != 2:
             raise AssertionError(f"pipeline report must keep models_tried as the legacy executed_jobs mirror: {summary}")
-        for required in ("- executed_jobs: 2", "- ranked_candidates: 3", "- models_tried_legacy: 2"):
+        for required in ("- executed_jobs: 2", "- ranked_candidates: 3"):
             if required not in bundle.markdown:
                 raise AssertionError(f"pipeline report markdown missing {required!r}: {bundle.markdown}")
 
@@ -2193,6 +2309,8 @@ def main() -> int:
     _assert_entrypoint_reads_clearml_slash_overrides()
     _assert_reset_clearml_task_args_replaces_stale_args()
     _assert_set_clearml_task_parameters_normalizes_encoded_section_keys()
+    _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads()
+    _assert_hparam_sections_are_nested_for_clearml_ui()
     _assert_regression_model_set_contract()
     _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_profile_defaults_clear_stale_model_variants()
