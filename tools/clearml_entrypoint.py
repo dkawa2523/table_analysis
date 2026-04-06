@@ -48,10 +48,13 @@ def _collect_flattened_overrides_from_mapping(
     priorities: dict[str, int],
     *,
     priority_offset: int = 0,
+    allow_bare_keys: bool = True,
 ) -> None:
     flattened: dict[str, Any] = {}
     _flatten_params("", payload, flattened, sep="/")
     for flat_key, flat_value in flattened.items():
+        if (not allow_bare_keys) and ("/" not in flat_key) and ("." not in flat_key):
+            continue
         if flat_key:
             _store_loaded_override(
                 overrides,
@@ -123,6 +126,18 @@ _SLASH_OVERRIDE_PREFIXES = (
     "group/",
     "ops/",
 )
+
+_ALLOWED_NAMED_OVERRIDE_SECTIONS = {
+    "clearml",
+    "dataset",
+    "eval",
+    "inputs",
+    "model",
+    "optimize",
+    "pipeline",
+    "preprocess",
+    "selection",
+}
 
 
 def _fully_unquote(text: str, *, max_rounds: int = 8) -> str:
@@ -582,13 +597,18 @@ def _load_clearml_overrides() -> dict[str, Any]:
             if isinstance(args_section, dict):
                 _collect_flattened_overrides_from_mapping(args_section, overrides, priorities)
             for section_name, section_payload in params_dict.items():
-                if section_name == "Args" or not isinstance(section_payload, dict):
+                if (
+                    section_name == "Args"
+                    or not isinstance(section_payload, dict)
+                    or str(section_name) not in _ALLOWED_NAMED_OVERRIDE_SECTIONS
+                ):
                     continue
                 _collect_flattened_overrides_from_mapping(
                     section_payload,
                     overrides,
                     priorities,
                     priority_offset=100,
+                    allow_bare_keys=False,
                 )
         if overrides:
             return overrides
@@ -601,13 +621,18 @@ def _load_clearml_overrides() -> dict[str, Any]:
         if isinstance(args_section, dict):
             _collect_flattened_overrides_from_mapping(args_section, overrides, priorities)
             for section_name, section_payload in params.items():
-                if section_name == "Args" or not isinstance(section_payload, dict):
+                if (
+                    section_name == "Args"
+                    or not isinstance(section_payload, dict)
+                    or str(section_name) not in _ALLOWED_NAMED_OVERRIDE_SECTIONS
+                ):
                     continue
                 _collect_flattened_overrides_from_mapping(
                     section_payload,
                     overrides,
                     priorities,
                     priority_offset=100,
+                    allow_bare_keys=False,
                 )
         elif isinstance(params, dict):
             for key, value in params.items():

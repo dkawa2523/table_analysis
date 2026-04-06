@@ -757,6 +757,60 @@ def _assert_replace_clearml_task_parameter_sections_replaces_stale_section_paylo
         raise AssertionError(f"selection section must be fully replaced with the normalized payload: {updated}")
 
 
+def _assert_replace_clearml_task_hyperparameters_drops_unexpected_sections() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.payload = {
+                "Args": {
+                    "task": "pipeline",
+                    "run.usecase_id": "old_usecase",
+                },
+                "pipeline": {
+                    "add_pipeline_tags": "False",
+                    "target_project": "True",
+                    "pipeline": {"plan_only": "True"},
+                },
+                "properties": {
+                    "pipeline_profile": "train_model_full",
+                    "task_kind": "seed",
+                },
+                "dataset": {
+                    "data": {"raw_dataset_id": "REPLACE_WITH_EXISTING_RAW_DATASET_ID"},
+                },
+            }
+            self.updated: dict[str, object] | None = None
+
+        def get_parameters_as_dict(self, cast: bool = False) -> dict[str, object]:
+            return dict(self.payload)
+
+        def set_parameters_as_dict(self, payload: dict[str, object]) -> None:
+            self.updated = dict(payload)
+            self.payload = dict(payload)
+
+    fake = _FakeTask()
+    original = task_ops_module._get_clearml_task
+    try:
+        task_ops_module._get_clearml_task = lambda _task_id: fake
+        changed = task_ops_module.replace_clearml_task_hyperparameters(
+            "task-123",
+            args=["task=pipeline", "run.usecase_id=new_usecase"],
+            sections={
+                "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+                "pipeline": {"pipeline": {"plan_only": False}},
+                "inputs": {"run": {"usecase_id": "new_usecase"}},
+            },
+        )
+    finally:
+        task_ops_module._get_clearml_task = original
+    if not changed:
+        raise AssertionError("replace_clearml_task_hyperparameters should replace stale payloads")
+    updated = fake.updated or {}
+    if set(updated.keys()) != {"Args", "dataset", "pipeline", "inputs"}:
+        raise AssertionError(f"full payload replacement must drop unexpected sections: {updated}")
+    if updated.get("Args") != {"task": "pipeline", "run.usecase_id": "new_usecase"}:
+        raise AssertionError(f"Args must be canonical after full replacement: {updated}")
+
+
 def _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads() -> None:
     class _FakeTask:
         def __init__(self) -> None:
@@ -1023,6 +1077,57 @@ def _assert_entrypoint_prefers_named_sections_over_stale_args() -> None:
         raise AssertionError(f"named pipeline section must override stale Args plan_only: {overrides}")
     if overrides.get("run.usecase_id") != "ui_demo_20260407_0030":
         raise AssertionError(f"named inputs section must override stale Args usecase_id: {overrides}")
+
+
+def _assert_entrypoint_ignores_internal_named_section_metadata() -> None:
+    class _FakeTask:
+        def get_parameters_as_dict(self) -> dict[str, object]:
+            return {
+                "Args": {
+                    "task": "pipeline",
+                },
+                "pipeline": {
+                    "add_pipeline_tags": False,
+                    "target_project": True,
+                    "default_queue": "default",
+                    "pipeline": {"plan_only": True, "run_train": True},
+                },
+                "properties": {
+                    "pipeline_profile": "train_model_full",
+                    "task_kind": "seed",
+                },
+                "clearml": {
+                    "run": {"clearml": {"execution": "pipeline_controller"}},
+                },
+            }
+
+        def get_parameters(self) -> dict[str, object]:
+            return {}
+
+    class _FakeTaskApi:
+        @staticmethod
+        def current_task() -> object:
+            return _FakeTask()
+
+    import sys
+    import types
+
+    clearml_pkg = types.ModuleType("clearml")
+    clearml_pkg.Task = _FakeTaskApi
+    original = sys.modules.get("clearml")
+    sys.modules["clearml"] = clearml_pkg
+    try:
+        overrides = _load_clearml_overrides()
+    finally:
+        if original is not None:
+            sys.modules["clearml"] = original
+        else:
+            sys.modules.pop("clearml", None)
+    for unexpected in ("add_pipeline_tags", "target_project", "default_queue", "pipeline_profile", "task_kind"):
+        if unexpected in overrides:
+            raise AssertionError(f"entrypoint must ignore internal metadata override {unexpected}: {overrides}")
+    if overrides.get("pipeline.plan_only") not in (True, "True", "true"):
+        raise AssertionError(f"entrypoint must preserve canonical pipeline overrides from named sections: {overrides}")
 
 
 def _assert_regression_model_set_contract() -> None:
@@ -2697,12 +2802,14 @@ def main() -> int:
     _assert_reset_clearml_task_args_replaces_stale_args()
     _assert_set_clearml_task_parameters_normalizes_encoded_section_keys()
     _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads()
+    _assert_replace_clearml_task_hyperparameters_drops_unexpected_sections()
     _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads()
     _assert_hparam_sections_are_nested_for_clearml_ui()
     _assert_extract_sections_prefers_first_matching_section_from_cfg()
     _assert_connect_hyperparameters_canonicalizes_payload()
     _assert_split_values_by_sections_minimizes_pipeline_args()
     _assert_entrypoint_prefers_named_sections_over_stale_args()
+    _assert_entrypoint_ignores_internal_named_section_metadata()
     _assert_regression_model_set_contract()
     _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_profile_defaults_clear_stale_model_variants()

@@ -37,9 +37,8 @@ from ..platform_adapter_task_ops import (
     ensure_clearml_task_properties,
     ensure_clearml_task_tags,
     get_clearml_task_status,
-    replace_clearml_task_parameter_sections,
+    replace_clearml_task_hyperparameters,
     replace_clearml_task_tags,
-    reset_clearml_task_args,
     set_clearml_task_configuration,
     set_clearml_task_project,
 )
@@ -1476,8 +1475,11 @@ def _apply_visible_pipeline_run_defaults(*, target: Any, task_id: str, cfg: Any,
         pipeline_task_id=task_id,
     )
     (sections, _, runtime_args) = _split_hparam_values_by_sections(runtime_defaults, cfg=cfg)
-    reset_clearml_task_args(task_id, _overrides_to_args(runtime_args))
-    replace_clearml_task_parameter_sections(task_id, sections)
+    replace_clearml_task_hyperparameters(
+        task_id,
+        args=_overrides_to_args(runtime_args),
+        sections=sections,
+    )
     set_clearml_task_configuration(
         task_id,
         build_pipeline_operator_inputs(runtime_defaults, pipeline_profile=contract.pipeline_profile),

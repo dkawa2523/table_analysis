@@ -75,10 +75,9 @@ from tabular_analysis.platform_adapter_task_ops import (
     ensure_clearml_task_properties,
     ensure_clearml_task_script,
     ensure_clearml_task_tags,
-    replace_clearml_task_parameter_sections,
+    replace_clearml_task_hyperparameters,
     replace_clearml_task_tags,
     reset_clearml_task,
-    reset_clearml_task_args,
     set_clearml_task_project,
     set_clearml_task_configuration,
     set_clearml_task_runtime_properties,
@@ -1108,8 +1107,11 @@ def _restore_pipeline_seed_task(
 ) -> None:
     seed_defaults = _seed_runtime_defaults(seed_definition)
     (sections, _, runtime_args) = split_values_by_sections(seed_defaults, cfg=resolved.cfg)
-    reset_clearml_task_args(task_id, overrides_to_args(runtime_args))
-    replace_clearml_task_parameter_sections(task_id, sections)
+    replace_clearml_task_hyperparameters(
+        task_id,
+        args=overrides_to_args(runtime_args),
+        sections=sections,
+    )
     replace_clearml_task_tags(task_id, resolved.expected_tags)
     ensure_clearml_task_tags(task_id, ["pipeline"])
     ensure_clearml_task_properties(task_id, resolved.expected_properties)

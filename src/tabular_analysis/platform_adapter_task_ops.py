@@ -273,6 +273,26 @@ def replace_clearml_task_parameter_sections(task_id: str, sections: Mapping[str,
         setter(payload)
         return True
     raise PlatformAdapterError('ClearML Task.set_parameters_as_dict is not available.')
+def replace_clearml_task_hyperparameters(task_id: str, *, args: Iterable[str] | None=None, sections: Mapping[str, Mapping[str, Any]] | None=None) -> bool:
+    desired_payload: dict[str, Any] = {}
+    if args is not None:
+        desired_payload['Args'] = canonicalize_clearml_args_payload(_parse_task_args(args))
+    for (section, values) in dict(sections or {}).items():
+        section_name = str(section)
+        if not section_name or section_name == 'Args':
+            continue
+        desired_payload[section_name] = canonicalize_clearml_section_payload(_normalize_parameter_input_value(values))
+    if not desired_payload:
+        return False
+    task = _get_clearml_task(task_id)
+    current_payload = _task_parameter_sections(task)
+    if current_payload == desired_payload:
+        return False
+    setter = getattr(task, 'set_parameters_as_dict', None)
+    if callable(setter):
+        setter(desired_payload)
+        return True
+    raise PlatformAdapterError('ClearML Task.set_parameters_as_dict is not available.')
 def set_clearml_task_configuration(task_id: str, config: Mapping[str, Any], *, name: str='effective', description: str | None=None) -> bool:
     if not config:
         return False
@@ -554,4 +574,4 @@ def get_task_artifact_local_copy(cfg: Any, task_id: str, artifact_name: str) -> 
     return _get_task_artifact_local_copy_impl(cfg, task_id, artifact_name)
 def resolve_clearml_task_url(cfg: Any, task_id: str) -> str | None:
     return _resolve_clearml_task_url_impl(cfg, task_id)
-__all__ = ['clearml_task_exists', 'create_clearml_task', 'list_clearml_tasks_by_tags', 'clearml_task_id', 'clearml_task_tags', 'clearml_task_script', 'clearml_task_status_from_obj', 'clearml_task_type_from_obj', 'clearml_task_project_name', 'find_clearml_task_id_by_tags', 'get_clearml_task_tags', 'get_clearml_task_script', 'get_clearml_task_args', 'clone_clearml_task', 'set_clearml_task_entry_point', 'set_clearml_task_parameters', 'replace_clearml_task_parameter_sections', 'set_clearml_task_configuration', 'get_clearml_task_configuration', 'set_clearml_task_project', 'upload_clearml_task_artifact', 'set_clearml_task_runtime_properties', 'enqueue_clearml_task', 'reset_clearml_task', 'get_clearml_task_status', 'ensure_clearml_task_tags', 'replace_clearml_task_tags', 'update_clearml_task_tags', 'ensure_clearml_task_requirements', 'ensure_clearml_task_properties', 'ensure_clearml_task_args', 'reset_clearml_task_args', 'apply_clearml_task_overrides', 'ensure_clearml_task_script', 'get_task_artifact_local_copy', 'resolve_clearml_task_url']
+__all__ = ['clearml_task_exists', 'create_clearml_task', 'list_clearml_tasks_by_tags', 'clearml_task_id', 'clearml_task_tags', 'clearml_task_script', 'clearml_task_status_from_obj', 'clearml_task_type_from_obj', 'clearml_task_project_name', 'find_clearml_task_id_by_tags', 'get_clearml_task_tags', 'get_clearml_task_script', 'get_clearml_task_args', 'clone_clearml_task', 'set_clearml_task_entry_point', 'set_clearml_task_parameters', 'replace_clearml_task_parameter_sections', 'replace_clearml_task_hyperparameters', 'set_clearml_task_configuration', 'get_clearml_task_configuration', 'set_clearml_task_project', 'upload_clearml_task_artifact', 'set_clearml_task_runtime_properties', 'enqueue_clearml_task', 'reset_clearml_task', 'get_clearml_task_status', 'ensure_clearml_task_tags', 'replace_clearml_task_tags', 'update_clearml_task_tags', 'ensure_clearml_task_requirements', 'ensure_clearml_task_properties', 'ensure_clearml_task_args', 'reset_clearml_task_args', 'apply_clearml_task_overrides', 'ensure_clearml_task_script', 'get_task_artifact_local_copy', 'resolve_clearml_task_url']
