@@ -21,16 +21,28 @@ from threading import RLock
 from typing import Any, Mapping
 import uuid
 from ..clearml.hparams import connect_pipeline
-from ..clearml.hparams import build_sections_from_values as _build_hparam_sections_from_values
+from ..clearml.hparams import split_values_by_sections as _split_hparam_values_by_sections
 from ..clearml.pipeline_templates import (
     resolve_pipeline_seed_task_id,
 )
 from ..clearml.templates import resolve_template_task_id
 from ..clearml.ui_logger import log_scalar
 from ..platform_adapter_artifacts import upload_artifact
-from ..platform_adapter_clearml_env import clearml_task_type_controller, is_clearml_enabled
+from ..platform_adapter_clearml_env import is_clearml_enabled
+from ..platform_adapter_clearml_policy import clearml_task_type_controller
 from ..platform_adapter_pipeline import apply_clearml_task_overrides, clone_pipeline_controller, create_pipeline_controller, enqueue_pipeline_controller, load_pipeline_controller_from_task, pipeline_require_clearml_agent, pipeline_step_task_id_ref
-from ..platform_adapter_task import clearml_task_id, get_clearml_task_status, report_markdown, reset_clearml_task_args, replace_clearml_task_parameter_sections, set_clearml_task_configuration, set_clearml_task_project, replace_clearml_task_tags, ensure_clearml_task_properties, ensure_clearml_task_tags
+from ..platform_adapter_task_context import report_markdown
+from ..platform_adapter_task_ops import (
+    clearml_task_id,
+    ensure_clearml_task_properties,
+    ensure_clearml_task_tags,
+    get_clearml_task_status,
+    replace_clearml_task_parameter_sections,
+    replace_clearml_task_tags,
+    reset_clearml_task_args,
+    set_clearml_task_configuration,
+    set_clearml_task_project,
+)
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
 from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_run_project_name, build_runtime_properties, build_runtime_tags, build_step_run_project_name, build_project_name, resolve_clearml_metadata
 from .pipeline_support import apply_exec_policy_selection as _apply_exec_policy_selection, apply_pipeline_profile_defaults, build_disabled_selection_entries as _build_disabled_selection_entries, build_pipeline_operator_inputs, build_pipeline_run_summary_payload as _build_local_pipeline_run_summary, build_pipeline_step_parameter_override_payload as _build_pipeline_step_parameter_override_payload, build_pipeline_step_specs, build_pipeline_template_defaults as _build_pipeline_template_runtime_defaults, build_pipeline_template_params as _template_pipeline_params, build_pipeline_template_step_overrides as _build_template_step_overrides, build_pipeline_ui_parameter_whitelist, extract_pipeline_editable_defaults, finalize_pipeline_run_summary_payload as _finalize_pipeline_run_summary_payload, is_pipeline_placeholder_raw_dataset_id, normalize_pipeline_profile, normalize_pipeline_template_value as _normalize_template_arg_value, normalize_ui_cloned_pipeline_cfg as _normalize_ui_cloned_pipeline_cfg_impl, resolve_ensemble_methods as _resolve_ensemble_methods, resolve_exec_policy_limits as _resolve_exec_policy_limits, resolve_exec_policy_queues as _resolve_exec_policy_queues, resolve_exec_policy_selection as _resolve_exec_policy_selection, resolve_pipeline_controller_queue_name as _resolve_pipeline_queue_name, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection, select_pipeline_queue as _select_queue, validate_pipeline_operator_inputs
@@ -1276,10 +1288,6 @@ def build_pipeline_seed_controller(*, cfg: Any, controller: Any, pipeline_profil
         'report_bundle': report_bundle,
         'out_payload': {'pipeline_run': pipeline_run},
     }
-def _resolve_pipeline_template_profile(cfg: Any, plan: Mapping[str, Any]) -> str:
-    return resolve_pipeline_profile(cfg, plan)
-
-
 def _apply_pipeline_run_task_identity(*, task_id: str, cfg: Any, pipeline_profile: str, metadata: Mapping[str, Any]) -> None:
     properties = dict(metadata.get('user_properties') or {})
     schema_version = _normalize_str(properties.get('schema_version')) or _normalize_str(_cfg_value(cfg, 'run.schema_version')) or 'v1'
@@ -1372,7 +1380,7 @@ def _current_pipeline_task_is_seed_materialization(task: Any, cfg: Any) -> bool:
 def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str, allow_placeholder_raw_dataset: bool = False) -> _VisiblePipelineRunContract:
     validate_pipeline_operator_inputs(cfg, allow_placeholder_raw_dataset=allow_placeholder_raw_dataset)
     plan = _build_pipeline_plan(cfg, grid_run_id, child_execution='logging')
-    pipeline_profile = _resolve_pipeline_template_profile(cfg, plan)
+    pipeline_profile = resolve_pipeline_profile(cfg, plan)
     _assert_visible_pipeline_graph_contract(cfg=cfg, plan=plan, pipeline_profile=pipeline_profile)
     metadata = dict(
         resolve_clearml_metadata(
@@ -1467,8 +1475,8 @@ def _apply_visible_pipeline_run_defaults(*, target: Any, task_id: str, cfg: Any,
         pipeline_profile=contract.pipeline_profile,
         pipeline_task_id=task_id,
     )
-    reset_clearml_task_args(task_id, _overrides_to_args(runtime_defaults))
-    (sections, _) = _build_hparam_sections_from_values(runtime_defaults, cfg=cfg)
+    (sections, _, runtime_args) = _split_hparam_values_by_sections(runtime_defaults, cfg=cfg)
+    reset_clearml_task_args(task_id, _overrides_to_args(runtime_args))
     replace_clearml_task_parameter_sections(task_id, sections)
     set_clearml_task_configuration(
         task_id,

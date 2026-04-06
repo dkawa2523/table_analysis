@@ -5,7 +5,7 @@ from ..common.schema_version import build_schema_tag as _build_schema_tag, norma
 from ..clearml.naming import _extract_dataset_token, _sanitize_identifier
 from ..common.repo_utils import resolve_repo_root_fallback
 from ..platform_adapter_clearml_env import is_clearml_enabled
-from ..platform_adapter_core import build_clearml_properties, build_clearml_tags
+from ..platform_adapter_clearml_policy import build_clearml_properties, build_clearml_tags
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import os

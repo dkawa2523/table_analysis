@@ -2,7 +2,12 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 from typing import Any, Iterable, Mapping, Optional
-from .platform_adapter_core import PlatformAdapterError, _RECOVERABLE_ERRORS, _apply_clearml_files_host_substitution, _load_clearml_dataset, is_clearml_enabled
+from .platform_adapter_clearml_env import load_clearml_dataset, is_clearml_enabled
+from .platform_adapter_common import (
+    PlatformAdapterError,
+    RECOVERABLE_CLEARML_ERRORS,
+    apply_clearml_files_host_substitution,
+)
 def _connect_dataset_task_sections(dataset: Any, sections: Mapping[str, Mapping[str, Any]] | None, order: Iterable[str] | None) -> None:
     if not sections:
         return
@@ -18,7 +23,7 @@ def _connect_dataset_task_sections(dataset: Any, sections: Mapping[str, Mapping[
             return
         try:
             connector(dict(cleaned), name=name)
-        except _RECOVERABLE_ERRORS as exc:
+        except RECOVERABLE_CLEARML_ERRORS as exc:
             print(f'[warn] Failed to connect dataset HyperParameters ({name}): {exc}', file=sys.stderr)
     seen: set[str] = set()
     if order:
@@ -35,7 +40,7 @@ def _connect_dataset_task_sections(dataset: Any, sections: Mapping[str, Mapping[
 def register_dataset(cfg: Any, *, dataset_path: Path, dataset_name: str, dataset_project: str | None=None, dataset_tags: Optional[Iterable[str]]=None, dataset_version: str | None=None, description: str | None=None, parent_dataset_ids: Optional[Iterable[str]]=None, task_sections: Optional[Mapping[str, Mapping[str, Any]]]=None, task_section_order: Optional[Iterable[str]]=None) -> str:
     if not is_clearml_enabled(cfg):
         raise PlatformAdapterError('ClearML is disabled; cannot register dataset.')
-    ClearMLDataset = _load_clearml_dataset(clearml_enabled=True)
+    ClearMLDataset = load_clearml_dataset(clearml_enabled=True)
     try:
         parents = [str(parent) for parent in parent_dataset_ids or [] if parent]
         dataset = ClearMLDataset.create(dataset_name=dataset_name, dataset_project=dataset_project, dataset_tags=list(dataset_tags) if dataset_tags else None, dataset_version=dataset_version, description=description, parent_datasets=parents or None)
@@ -44,22 +49,22 @@ def register_dataset(cfg: Any, *, dataset_path: Path, dataset_name: str, dataset
         dataset.upload()
         dataset.finalize()
         return str(dataset.id)
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to register dataset via ClearML: {exc}') from exc
 def get_dataset_local_copy(cfg: Any, dataset_id: str) -> Path:
     if not is_clearml_enabled(cfg):
         raise PlatformAdapterError('ClearML is disabled; cannot fetch dataset.')
-    ClearMLDataset = _load_clearml_dataset(clearml_enabled=True)
-    _apply_clearml_files_host_substitution()
+    ClearMLDataset = load_clearml_dataset(clearml_enabled=True)
+    apply_clearml_files_host_substitution()
     try:
         dataset = ClearMLDataset.get(dataset_id=str(dataset_id))
         local_path = dataset.get_local_copy()
-    except _RECOVERABLE_ERRORS:
-        _apply_clearml_files_host_substitution()
+    except RECOVERABLE_CLEARML_ERRORS:
+        apply_clearml_files_host_substitution()
         try:
             dataset = ClearMLDataset.get(dataset_id=str(dataset_id))
             local_path = dataset.get_local_copy()
-        except _RECOVERABLE_ERRORS as exc_retry:
+        except RECOVERABLE_CLEARML_ERRORS as exc_retry:
             raise PlatformAdapterError(f'Failed to fetch dataset via ClearML: {exc_retry}') from exc_retry
     if not local_path:
         raise PlatformAdapterError('ClearML Dataset.get_local_copy returned an empty path.')
@@ -67,10 +72,10 @@ def get_dataset_local_copy(cfg: Any, dataset_id: str) -> Path:
 def get_dataset_info(cfg: Any, dataset_id: str) -> dict[str, Any]:
     if not is_clearml_enabled(cfg):
         raise PlatformAdapterError('ClearML is disabled; cannot fetch dataset info.')
-    ClearMLDataset = _load_clearml_dataset(clearml_enabled=True)
+    ClearMLDataset = load_clearml_dataset(clearml_enabled=True)
     try:
         dataset = ClearMLDataset.get(dataset_id=str(dataset_id))
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to fetch dataset info via ClearML: {exc}') from exc
     info: dict[str, Any] = {'dataset_id': str(getattr(dataset, 'id', dataset_id))}
     version = getattr(dataset, 'version', None)

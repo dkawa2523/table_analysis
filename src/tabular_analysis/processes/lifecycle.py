@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 from ..platform_adapter_artifacts import hash_config, hash_recipe, hash_split, save_config_resolved, write_manifest, write_out_json
 from ..platform_adapter_clearml_env import is_clearml_enabled, resolve_version_props
-from ..platform_adapter_task import init_task_context
+from ..platform_adapter_task_context import init_task_context
 def start_runtime(cfg: Any, *, stage: str, task_name: str, tags: list[str] | None, properties: Mapping[str, Any] | None, task_type: Any | None=None, system_tags: list[str] | None=None) -> Any:
     """Create task context and persist config_resolved in one place."""
     ctx = init_task_context(cfg, stage=stage, task_name=task_name, tags=tags, properties=properties, task_type=task_type, system_tags=system_tags)

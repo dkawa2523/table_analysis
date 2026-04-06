@@ -18,7 +18,7 @@ from ..platform_adapter_clearml_env import (
     resolve_clearml_script_spec,
     resolve_version_props,
 )
-from ..platform_adapter_task import (
+from ..platform_adapter_task_query import (
     clearml_task_id,
     clearml_task_script,
     clearml_task_status_from_obj,

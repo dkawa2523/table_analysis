@@ -16,9 +16,16 @@ from ..clearml.hparams import connect_leaderboard
 from ..clearml.ui_logger import log_debug_table, log_plotly, log_scalar
 from ..io.bundle_io import load_bundle
 from ..ops.clearml_identity import apply_clearml_identity
-from ..platform_adapter_artifacts import upload_artifact
+from ..platform_adapter_artifacts import get_task_artifact_local_copy, upload_artifact
 from ..platform_adapter_clearml_env import is_clearml_enabled
-from ..platform_adapter_task import PlatformAdapterError, clearml_task_id, clearml_task_tags, get_task_artifact_local_copy, list_clearml_tasks_by_tags, update_recommended_registry_model_tags_multi, update_task_properties
+from ..platform_adapter_common import PlatformAdapterError
+from ..platform_adapter_model import update_recommended_registry_model_tags_multi
+from ..platform_adapter_task_context import update_task_properties
+from ..platform_adapter_task_query import (
+    clearml_task_id,
+    clearml_task_tags,
+    list_clearml_tasks_by_tags,
+)
 from ..viz.leaderboard_plots import build_leaderboard_table, build_pareto_scatter, build_top_k_bar, write_top_k_bar_png
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 def _normalize_direction(value: Any) -> str | None:

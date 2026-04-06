@@ -7,7 +7,7 @@ from typing import Any, Mapping
 from ..common.collection_utils import to_list as _to_list, to_mapping as _to_mapping
 from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _normalize_str, set_cfg_value as _set_cfg_value, to_int as _to_int
 from ..common.json_utils import load_json as _load_json
-from ..platform_adapter_task import get_clearml_task_status
+from ..platform_adapter_task_query import get_clearml_task_status
 
 
 @dataclass(frozen=True)

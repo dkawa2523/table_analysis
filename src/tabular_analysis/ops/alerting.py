@@ -7,7 +7,7 @@ from typing import Any, Mapping
 import urllib.error
 import urllib.request
 from ..platform_adapter_artifacts import resolve_output_dir
-from ..platform_adapter_task import TaskContext, add_task_tags, update_task_properties
+from ..platform_adapter_task_context import TaskContext, add_task_tags, update_task_properties
 _CONTEXT_CFG_KEY = '_cfg'
 _CONTEXT_CTX_KEY = '_ctx'
 _CONTEXT_OUTPUT_DIR_KEY = '_output_dir'

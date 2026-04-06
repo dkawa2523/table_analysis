@@ -23,7 +23,7 @@ from ..ops.clearml_identity import apply_clearml_identity
 from ..ops.data_quality import raise_on_quality_fail, run_data_quality_gate
 from ..platform_adapter_artifacts import hash_recipe, hash_split, upload_artifact
 from ..platform_adapter_clearml_env import is_clearml_enabled
-from ..platform_adapter_task import update_task_properties
+from ..platform_adapter_task_context import update_task_properties
 from ..viz.data_profile import build_missing_rate_comparison_bar, build_profile_comparison_table, build_profile_summary
 from .artifact_writers import write_json_artifact, write_split_artifacts, write_text_artifact
 from .contracts import ArtifactBundle, ExecutionResult, ReferenceInfo, ResolvedInputs, RuntimeSettings

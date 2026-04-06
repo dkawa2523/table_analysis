@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any, Mapping
 import uuid
 from ..ops.clearml_identity import apply_clearml_identity, build_project_name
-from ..platform_adapter_artifacts import resolve_output_dir, upload_artifact
+from ..platform_adapter_artifacts import get_task_artifact_local_copy, resolve_output_dir, upload_artifact
 from ..platform_adapter_clearml_env import is_clearml_enabled
-from ..platform_adapter_task import get_task_artifact_local_copy, report_markdown, update_task_properties
+from ..platform_adapter_task_context import report_markdown, update_task_properties
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 from . import pipeline as pipeline_process
 def _ensure_run_id(cfg: Any, path: str) -> str:

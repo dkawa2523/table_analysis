@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
-from .platform_adapter_core import PlatformAdapterError, _RECOVERABLE_ERRORS, _dedupe_tags
+from .platform_adapter_artifacts import get_task_artifact_local_copy
+from .platform_adapter_common import PlatformAdapterError, RECOVERABLE_CLEARML_ERRORS, dedupe_tags
 from .platform_adapter_task_context import TaskContext
-from .platform_adapter_task_ops import get_task_artifact_local_copy
 @dataclass(frozen=True)
 class ResolvedModelReference:
     kind: str
@@ -36,13 +36,13 @@ def register_model_artifact(ctx: TaskContext, *, model_path: Path, model_name: s
         raise PlatformAdapterError('ClearML is disabled; cannot register model.')
     try:
         from clearml import OutputModel
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError('clearml.OutputModel is required for model promotion.') from exc
     model_path = Path(model_path).expanduser().resolve()
     if not model_path.exists():
         raise PlatformAdapterError(f'Model file does not exist: {model_path}')
     try:
-        output_model = OutputModel(task=ctx.task, name=str(model_name), tags=_dedupe_tags(tags or []), comment=comment, framework=framework)
+        output_model = OutputModel(task=ctx.task, name=str(model_name), tags=dedupe_tags(tags or []), comment=comment, framework=framework)
         output_model.update_weights(weights_filename=str(model_path), auto_delete_file=False, async_enable=False)
         if metadata:
             for (key, value) in metadata.items():
@@ -56,7 +56,7 @@ def register_model_artifact(ctx: TaskContext, *, model_path: Path, model_name: s
                     continue
                 output_model.set_metadata(str(key), text)
         return str(output_model.id)
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to register model via ClearML: {exc}') from exc
 def register_promoted_model(ctx: TaskContext, *, model_path: Path, model_name: str, tags: Iterable[str] | None=None, metadata: Mapping[str, Any] | None=None, comment: str | None=None, framework: str | None=None) -> str:
     """Register a promoted model artifact in ClearML model registry and tag it."""
@@ -65,12 +65,12 @@ def get_clearml_model_local_copy(model_id: str) -> Path:
     """Download a ClearML registry model artifact and return the local path."""
     try:
         from clearml import Model
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError('clearml.Model is required for registry model downloads.') from exc
     try:
         model = Model(model_id=str(model_id))
         local_path = model.get_local_copy(raise_on_error=True)
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to download ClearML model {model_id}: {exc}') from exc
     if not local_path:
         raise PlatformAdapterError(f'ClearML model {model_id} did not return a local copy path.')
@@ -102,14 +102,14 @@ def resolve_registry_model_bundle_by_stage(*, stage: str, usecase_id: str | None
     """Resolve a ClearML registry model bundle by stage tags."""
     try:
         from clearml import Model
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError('clearml.Model is required for registry queries.') from exc
     tags = ['__$all', f'stage:{stage}']
     if usecase_id:
         tags.append(f'usecase:{usecase_id}')
     try:
         models = Model.query_models(tags=tags, only_published=False, include_archived=True, max_results=1)
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to query ClearML registry for stage {stage}: {exc}') from exc
     if not models:
         suffix = f' usecase={usecase_id}' if usecase_id else ''
@@ -119,7 +119,7 @@ def resolve_registry_model_bundle_by_stage(*, stage: str, usecase_id: str | None
     model_id_str = str(model_id) if model_id is not None else 'unknown'
     try:
         local_path = model.get_local_copy(raise_on_error=True)
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to download ClearML model {model_id_str}: {exc}') from exc
     if not local_path:
         raise PlatformAdapterError(f'ClearML model {model_id_str} did not return a local copy path.')
@@ -135,12 +135,12 @@ def _model_tags(model: Any) -> list[str]:
         return [str(tags)]
     try:
         return [str(item) for item in tags]
-    except _RECOVERABLE_ERRORS:
+    except RECOVERABLE_CLEARML_ERRORS:
         return []
 def _set_model_tags(model: Any, tags: Iterable[str]) -> None:
     try:
         model.tags = list(tags)
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to update model tags via ClearML: {exc}') from exc
 def _strip_tag_prefixes(tags: Iterable[str], prefixes: Iterable[str]) -> list[str]:
     prefix_list = [str(prefix) for prefix in prefixes if prefix is not None]
@@ -159,26 +159,26 @@ def update_registry_model_tags(*, model_id: str, add_tags: Iterable[str] | None=
     """Update tags on a ClearML registry model and return the final tags."""
     try:
         from clearml import Model
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError('clearml.Model is required for registry tag updates.') from exc
     model = Model(model_id=str(model_id))
     tags = _model_tags(model)
     if remove_prefixes:
         tags = _strip_tag_prefixes(tags, remove_prefixes)
     if add_tags:
-        tags = _dedupe_tags([*tags, *list(add_tags)])
+        tags = dedupe_tags([*tags, *list(add_tags)])
     _set_model_tags(model, tags)
     return tags
 def update_recommended_registry_model_tags(*, usecase_id: str, processed_dataset_id: str, recommended_model_id: str, tags_to_add: Iterable[str], remove_prefixes: Iterable[str]) -> dict[str, Any]:
     """Mark the recommended model and clear old recommendation tags for the same dataset."""
     try:
         from clearml import Model
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError('clearml.Model is required for registry queries.') from exc
     base_tags = ['__$all', f'usecase:{usecase_id}', f'dataset:{processed_dataset_id}']
     try:
         models = Model.query_models(tags=base_tags, only_published=False, include_archived=True, max_results=200)
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to query ClearML registry for dataset={processed_dataset_id}: {exc}') from exc
     updated = 0
     for model in models:
@@ -186,7 +186,7 @@ def update_recommended_registry_model_tags(*, usecase_id: str, processed_dataset
         model_id_str = str(model_id) if model_id is not None else ''
         tags = _strip_tag_prefixes(_model_tags(model), remove_prefixes)
         if model_id_str == recommended_model_id:
-            tags = _dedupe_tags([*tags, *list(tags_to_add)])
+            tags = dedupe_tags([*tags, *list(tags_to_add)])
         _set_model_tags(model, tags)
         updated += 1
     return {'updated_models': updated, 'matched_models': len(models)}
@@ -194,7 +194,7 @@ def update_recommended_registry_model_tags_multi(*, usecase_id: str, processed_d
     """Update recommendation tags for multiple models (latest-only per dataset)."""
     try:
         from clearml import Model
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError('clearml.Model is required for registry queries.') from exc
     rec_map = {str(model_id): {'tags': list(tags), 'metadata': metadata or {}} for (model_id, tags, metadata) in recommendations if model_id}
     base_tags = ['__$all', f'usecase:{usecase_id}', f'dataset:{processed_dataset_id}']
@@ -204,7 +204,7 @@ def update_recommended_registry_model_tags_multi(*, usecase_id: str, processed_d
         base_tags.append(f'recipe:{recipe_hash}')
     try:
         models = Model.query_models(tags=base_tags, only_published=False, include_archived=True, max_results=200)
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError(f'Failed to query ClearML registry for dataset={processed_dataset_id}: {exc}') from exc
     updated = 0
     for model in models:
@@ -213,7 +213,7 @@ def update_recommended_registry_model_tags_multi(*, usecase_id: str, processed_d
         tags = _strip_tag_prefixes(_model_tags(model), remove_prefixes)
         if model_id_str in rec_map:
             payload = rec_map[model_id_str]
-            tags = _dedupe_tags([*tags, *payload.get('tags', [])])
+            tags = dedupe_tags([*tags, *payload.get('tags', [])])
             metadata = payload.get('metadata') or {}
             if metadata:
                 _update_model_metadata(model, metadata)
@@ -229,7 +229,7 @@ def _update_model_metadata(model: Any, metadata: Mapping[str, Any]) -> None:
             continue
         try:
             setter(str(key), str(value))
-        except _RECOVERABLE_ERRORS as exc:
+        except RECOVERABLE_CLEARML_ERRORS as exc:
             raise PlatformAdapterError(f'Failed to update model metadata via ClearML: {exc}') from exc
 def _model_snapshot(model: Any | None) -> dict[str, Any] | None:
     if model is None:
@@ -239,7 +239,7 @@ def rollback_registry_stage(*, usecase_id: str, stage: str, target_model_id: str
     """Rollback ClearML model registry stage to previous production (best-effort)."""
     try:
         from clearml import Model
-    except _RECOVERABLE_ERRORS as exc:
+    except RECOVERABLE_CLEARML_ERRORS as exc:
         raise PlatformAdapterError('clearml.Model is required for model registry rollback.') from exc
     tags = ['__$all', f'usecase:{usecase_id}', f'stage:{stage}']
     models = Model.query_models(tags=tags, only_published=False, include_archived=True, max_results=20)
@@ -251,11 +251,11 @@ def rollback_registry_stage(*, usecase_id: str, stage: str, target_model_id: str
         target = models[1]
     if target is None:
         raise PlatformAdapterError('No previous model found for rollback.')
-    target_tags = _dedupe_tags([*_model_tags(target), f'usecase:{usecase_id}', f'stage:{stage}', 'rollback:true'])
+    target_tags = dedupe_tags([*_model_tags(target), f'usecase:{usecase_id}', f'stage:{stage}', 'rollback:true'])
     _set_model_tags(target, target_tags)
     _update_model_metadata(target, {'promotion_stage': stage, 'rollback_reason': reason, 'rollback_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')})
     if current is not None and getattr(current, 'id', None) != getattr(target, 'id', None):
         current_tags = [tag for tag in _model_tags(current) if tag != f'stage:{stage}']
-        _set_model_tags(current, _dedupe_tags(current_tags))
+        _set_model_tags(current, dedupe_tags(current_tags))
     return {'before': _model_snapshot(current), 'after': _model_snapshot(target)}
 __all__ = ['ResolvedModelReference', 'register_model_artifact', 'register_promoted_model', 'get_clearml_model_local_copy', 'resolve_model_reference', 'resolve_registry_model_bundle_by_stage', 'update_registry_model_tags', 'update_recommended_registry_model_tags', 'update_recommended_registry_model_tags_multi', 'rollback_registry_stage']

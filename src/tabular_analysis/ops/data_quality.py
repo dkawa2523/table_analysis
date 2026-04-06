@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from ..ops.alerting import emit_alert
 from ..platform_adapter_artifacts import upload_artifact
-from ..platform_adapter_task import TaskContext, update_task_properties
+from ..platform_adapter_task_context import TaskContext, update_task_properties
 from ..quality.data_quality import compute_data_quality, render_data_quality_markdown, summarize_data_quality
 _DEFAULT_THRESHOLDS = {'missing_rate_warn': 0.2, 'missing_rate_fail': 0.5, 'duplicates_rate_warn': 0.01, 'duplicates_rate_fail': 0.05, 'constant_columns_warn': 1, 'constant_columns_fail': 5, 'mixed_type_columns_warn': 1, 'mixed_type_columns_fail': 5, 'high_cardinality_ratio_warn': 0.8, 'high_cardinality_ratio_fail': 1.01, 'high_cardinality_min_unique': 20, 'high_cardinality_count_fail': 9999, 'id_like_ratio_warn': 0.98, 'id_like_ratio_fail': 1.01, 'id_like_min_unique': 20, 'leak_near_match_warn': 0.98, 'leak_correlation_warn': 0.98, 'leak_mapping_accuracy_warn': 0.98}
 _DEFAULT_NAME_PATTERNS = {'leak_suspect': ['target', 'label', 'outcome', 'response'], 'id_suspect': ['id', 'uuid', 'guid']}

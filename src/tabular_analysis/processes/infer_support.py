@@ -10,8 +10,8 @@ from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _nor
 from ..common.dataset_utils import load_tabular_frame as _load_dataframe, select_tabular_file as _select_tabular_file
 from ..common.json_utils import load_json as _load_json
 from ..common.model_reference import build_infer_reference
-from ..platform_adapter_task import PlatformAdapterError, get_task_artifact_local_copy
-from ..platform_adapter_artifacts import upload_artifact
+from ..platform_adapter_artifacts import get_task_artifact_local_copy, upload_artifact
+from ..platform_adapter_common import PlatformAdapterError
 from .lifecycle import emit_outputs_and_manifest
 
 _BOOL_TRUTHY = {"true", "1", "yes", "y", "t"}

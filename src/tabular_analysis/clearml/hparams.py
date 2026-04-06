@@ -4,7 +4,7 @@ from ..common.repo_utils import resolve_repo_root_fallback
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 from ..platform_adapter_clearml_env import resolve_version_props
-from ..platform_adapter_task import connect_hyperparameters
+from ..platform_adapter_task_context import connect_hyperparameters
 _OPTIONAL_IMPORT_ERRORS = (ImportError, ModuleNotFoundError)
 _OMEGACONF_RECOVERABLE_ERRORS = (AttributeError, RuntimeError, TypeError, ValueError)
 _VERSION_RECOVERABLE_ERRORS = (AttributeError, RuntimeError, TypeError, ValueError)
@@ -83,11 +83,25 @@ def _flatten_mapping(prefix: str, payload: Any, out: dict[str, Any]) -> None:
     nested = _build_nested_mapping(prefix, payload)
     if nested:
         _merge_nested_mapping(out, nested)
+def _flatten_cfg_rule_values(prefix: str, payload: Any, out: dict[str, Any]) -> None:
+    if payload is None:
+        return
+    if isinstance(payload, Mapping):
+        for (key, value) in payload.items():
+            text = _normalize_str(key)
+            if not text:
+                continue
+            next_prefix = f'{prefix}.{text}' if prefix else text
+            _flatten_cfg_rule_values(next_prefix, value, out)
+        return
+    if prefix and prefix not in out:
+        out[prefix] = payload
+
+
 def _extract_sections(cfg: Any, sections_cfg: Mapping[str, Iterable[str]]) -> dict[str, dict[str, Any]]:
-    sections: dict[str, dict[str, Any]] = {}
-    for (name, paths) in sections_cfg.items():
-        payload: dict[str, Any] = {}
-        for path in list(paths or []):
+    candidate_values: dict[str, Any] = {}
+    for name in _section_order(sections_cfg):
+        for path in list(sections_cfg.get(name) or []):
             text = _normalize_str(path)
             if not text:
                 continue
@@ -96,13 +110,14 @@ def _extract_sections(cfg: Any, sections_cfg: Mapping[str, Iterable[str]]) -> di
                 value = _cfg_value(cfg, base)
                 if value is None:
                     continue
-                _flatten_mapping(base, value, payload)
-            else:
-                value = _cfg_value(cfg, text)
-                if value is not None:
-                    _merge_nested_mapping(payload, _build_nested_mapping(text, value))
-        if payload:
-            sections[str(name)] = payload
+                _flatten_cfg_rule_values(base, value, candidate_values)
+                continue
+            if text in candidate_values:
+                continue
+            value = _cfg_value(cfg, text)
+            if value is not None:
+                candidate_values[text] = value
+    (sections, _) = build_sections_from_values(candidate_values, cfg=cfg)
     return sections
 def _section_order(sections_cfg: Mapping[str, Any]) -> list[str]:
     if sections_cfg:
@@ -167,6 +182,41 @@ def build_sections_from_values(
             sections[str(name)] = payload
             break
     return (sections, section_order)
+
+
+def _flatten_nested_payload(payload: Any, out: dict[str, Any], *, prefix: str = '') -> None:
+    if isinstance(payload, Mapping):
+        for (key, value) in payload.items():
+            text = _normalize_str(key)
+            if not text:
+                continue
+            next_prefix = f'{prefix}.{text}' if prefix else text
+            _flatten_nested_payload(value, out, prefix=next_prefix)
+        return
+    if prefix:
+        out[prefix] = payload
+
+
+def split_values_by_sections(
+    values: Mapping[str, Any],
+    *,
+    cfg: Any | None = None,
+) -> tuple[dict[str, dict[str, Any]], list[str], dict[str, Any]]:
+    (sections, order) = build_sections_from_values(values, cfg=cfg)
+    covered: dict[str, Any] = {}
+    for payload in sections.values():
+        _flatten_nested_payload(payload, covered)
+    normalized_values = {
+        _normalize_str(key): _to_builtin(value)
+        for (key, value) in dict(values).items()
+        if _normalize_str(key) and value is not None
+    }
+    remaining = {
+        key: value
+        for (key, value) in normalized_values.items()
+        if key not in covered
+    }
+    return (sections, order, remaining)
 def _connect_section(ctx: Any, name: str, payload: Mapping[str, Any]) -> None:
     cleaned = _drop_none(payload)
     if not cleaned:

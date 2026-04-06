@@ -16,9 +16,17 @@ from ..io.bundle_io import load_bundle, save_bundle
 from ..metrics.regression import REGRESSION_METRIC_ORDER, compute_regression_metrics
 from ..ops.clearml_identity import apply_clearml_identity
 from .train_shared import build_plotly_confusion_matrix as _build_plotly_confusion_matrix, build_plotly_roc_curve as _build_plotly_roc_curve, build_prediction_sample as _build_prediction_sample
-from ..platform_adapter_artifacts import upload_artifact
+from ..platform_adapter_artifacts import get_task_artifact_local_copy, upload_artifact
 from ..platform_adapter_clearml_env import is_clearml_enabled, resolve_version_props
-from ..platform_adapter_task import PlatformAdapterError, clearml_task_id, clearml_task_status_from_obj, clearml_task_tags, get_task_artifact_local_copy, list_clearml_tasks_by_tags, register_model_artifact, update_task_properties
+from ..platform_adapter_common import PlatformAdapterError
+from ..platform_adapter_model import register_model_artifact
+from ..platform_adapter_task_context import update_task_properties
+from ..platform_adapter_task_query import (
+    clearml_task_id,
+    clearml_task_status_from_obj,
+    clearml_task_tags,
+    list_clearml_tasks_by_tags,
+)
 from ..registry.metrics import get_metric, metric_direction
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 from ..viz.plots import plot_confusion_matrix, plot_regression_residuals, plot_roc_curve

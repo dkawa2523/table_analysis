@@ -42,6 +42,26 @@ def _flatten_params(prefix: str, value: Any, out: dict[str, Any], *, sep: str = 
         out[prefix] = value
 
 
+def _collect_flattened_overrides_from_mapping(
+    payload: dict[str, Any],
+    overrides: dict[str, Any],
+    priorities: dict[str, int],
+    *,
+    priority_offset: int = 0,
+) -> None:
+    flattened: dict[str, Any] = {}
+    _flatten_params("", payload, flattened, sep="/")
+    for flat_key, flat_value in flattened.items():
+        if flat_key:
+            _store_loaded_override(
+                overrides,
+                flat_key,
+                flat_value,
+                priorities=priorities,
+                priority_offset=priority_offset,
+            )
+
+
 def _extract_cli_keys(argv: list[str]) -> set[str]:
     keys: set[str] = set()
     for item in argv:
@@ -144,6 +164,7 @@ def _store_loaded_override(
     value: Any,
     *,
     priorities: dict[str, int] | None = None,
+    priority_offset: int = 0,
 ) -> None:
     normalized = _normalize_loaded_override_key(str(key))
     if not normalized:
@@ -155,7 +176,7 @@ def _store_loaded_override(
         normalized = f"+{normalized}"
     plain_key = bare_key
     appended_key = f"+{bare_key}"
-    priority = _loaded_override_priority(str(key), normalized)
+    priority = _loaded_override_priority(str(key), normalized) + int(priority_offset)
     if priorities is not None:
         existing_priority = priorities.get(normalized, -1)
         if existing_priority > priority:
@@ -551,40 +572,43 @@ def _load_clearml_overrides() -> dict[str, Any]:
     def _collect_overrides(task: Any) -> dict[str, Any]:
         overrides: dict[str, Any] = {}
         priorities: dict[str, int] = {}
+        params_dict: Any = {}
+        try:
+            params_dict = task.get_parameters_as_dict() or {}
+        except Exception:
+            params_dict = {}
+        if isinstance(params_dict, dict):
+            args_section = params_dict.get("Args")
+            if isinstance(args_section, dict):
+                _collect_flattened_overrides_from_mapping(args_section, overrides, priorities)
+            for section_name, section_payload in params_dict.items():
+                if section_name == "Args" or not isinstance(section_payload, dict):
+                    continue
+                _collect_flattened_overrides_from_mapping(
+                    section_payload,
+                    overrides,
+                    priorities,
+                    priority_offset=100,
+                )
+        if overrides:
+            return overrides
         params: Any = {}
         try:
             params = task.get_parameters() or {}
         except Exception:
             params = {}
-        if isinstance(params, dict):
-            args_section = params.get("Args")
-            if isinstance(args_section, dict):
-                for key, value in args_section.items():
-                    flattened: dict[str, Any] = {}
-                    _flatten_params(str(key), value, flattened, sep="/")
-                    for flat_key, flat_value in flattened.items():
-                        _store_loaded_override(overrides, flat_key, flat_value, priorities=priorities)
-            else:
-                for key, value in params.items():
-                    if not isinstance(key, str) or not key.startswith("Args/"):
-                        continue
-                    override_key = key[5:]
-                    if override_key:
-                        _store_loaded_override(overrides, override_key, value, priorities=priorities)
-        if overrides:
-            return overrides
-        params = {}
-        try:
-            params = task.get_parameters_as_dict() or {}
-        except Exception:
-            params = {}
         args_section = params.get("Args") if isinstance(params, dict) else None
         if isinstance(args_section, dict):
-            for key, value in args_section.items():
-                flattened: dict[str, Any] = {}
-                _flatten_params(str(key), value, flattened, sep="/")
-                for flat_key, flat_value in flattened.items():
-                    _store_loaded_override(overrides, flat_key, flat_value, priorities=priorities)
+            _collect_flattened_overrides_from_mapping(args_section, overrides, priorities)
+            for section_name, section_payload in params.items():
+                if section_name == "Args" or not isinstance(section_payload, dict):
+                    continue
+                _collect_flattened_overrides_from_mapping(
+                    section_payload,
+                    overrides,
+                    priorities,
+                    priority_offset=100,
+                )
         elif isinstance(params, dict):
             for key, value in params.items():
                 if not isinstance(key, str) or not key.startswith("Args/"):

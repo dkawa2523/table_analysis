@@ -22,6 +22,7 @@ from tabular_analysis.clearml import templates as template_module
 from tabular_analysis.common.clearml_bootstrap import resolve_required_uv_extras
 from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.ops import clearml_identity as clearml_identity_module
+from tabular_analysis import platform_adapter_task_context as task_context_module
 from tabular_analysis import platform_adapter_task_ops as task_ops_module
 from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.reporting import pipeline_report as pipeline_report_module
@@ -39,6 +40,7 @@ from tools.clearml_templates import manage_templates as manage_templates_module
 from tools.rehearsal import run_pipeline_v2 as rehearsal_module
 from tools.clearml_entrypoint import (
     _extract_cli_keys,
+    _load_clearml_overrides,
     _normalize_loaded_override_key,
     _resolve_bootstrap_mode,
     _resolve_uv_settings,
@@ -689,18 +691,18 @@ def _assert_set_clearml_task_parameters_normalizes_encoded_section_keys() -> Non
     pipeline_section = updated.get("pipeline") or {}
     if "run%2Eusecase_id" in clearml_section:
         raise AssertionError(f"encoded clearml key must be removed: {updated}")
-    if clearml_section.get("run.usecase_id") != "test_demo_20260405_2200":
-        raise AssertionError(f"plain clearml key must win over encoded seed placeholder: {updated}")
+    if clearml_section != {"run": {"usecase_id": "test_demo_20260405_2200"}}:
+        raise AssertionError(f"clearml section must be canonical nested payload: {updated}")
     if "data%2Eraw_dataset_id" in dataset_section:
         raise AssertionError(f"encoded dataset key must be removed: {updated}")
-    if dataset_section.get("data.raw_dataset_id") != "dataset-123":
-        raise AssertionError(f"plain dataset key must be preserved: {updated}")
+    if dataset_section != {"data": {"raw_dataset_id": "dataset-123"}}:
+        raise AssertionError(f"dataset section must be canonical nested payload: {updated}")
     if "pipeline%2Eselection%2Eenabled_model_variants" in selection_section:
         raise AssertionError(f"encoded selection key must be removed: {updated}")
-    if selection_section.get("pipeline.selection.enabled_model_variants") != "[\"ridge\"]":
-        raise AssertionError(f"selection section must keep the decoded key: {updated}")
-    if pipeline_section.get("pipeline.profile") != "train_ensemble_full":
-        raise AssertionError(f"target section update must still be applied: {updated}")
+    if selection_section != {"pipeline": {"selection": {"enabled_model_variants": "[\"ridge\"]"}}}:
+        raise AssertionError(f"selection section must be canonical nested payload: {updated}")
+    if pipeline_section != {"pipeline": {"profile": "train_ensemble_full"}}:
+        raise AssertionError(f"target section update must still be canonical nested payload: {updated}")
 
 
 def _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads() -> None:
@@ -843,7 +845,7 @@ def _assert_hparam_sections_are_nested_for_clearml_ui() -> None:
         cfg=cfg,
     )
     expected = {
-        "inputs": {"run": {"usecase_id": "demo_usecase"}},
+        "inputs": {"run": {"usecase_id": "demo_usecase", "grid_run_id": "grid-123"}},
         "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
         "selection": {
             "pipeline": {
@@ -873,6 +875,154 @@ def _assert_hparam_sections_are_nested_for_clearml_ui() -> None:
     serialized = json.dumps(sections, ensure_ascii=False)
     if "%2E" in serialized or "run.usecase_id" in serialized or "data.raw_dataset_id" in serialized:
         raise AssertionError(f"ClearML UI sections must use nested payloads instead of flat dotted keys: {sections}")
+
+
+def _assert_extract_sections_prefers_first_matching_section_from_cfg() -> None:
+    cfg = OmegaConf.create(
+        {
+            "pipeline": {
+                "selection": {
+                    "enabled_model_variants": ["ridge", "lgbm"],
+                }
+            },
+            "ensemble": {
+                "selection": {"enabled_methods": ["mean_topk", "weighted"]},
+                "top_k": 3,
+            },
+        }
+    )
+    sections_cfg = clearml_hparams_module._resolve_sections_cfg(cfg)
+    sections = clearml_hparams_module._extract_sections(cfg, sections_cfg)
+    selection_section = sections.get("selection") or {}
+    model_section = sections.get("model") or {}
+    expected_selection = {
+        "pipeline": {"selection": {"enabled_model_variants": ["ridge", "lgbm"]}},
+        "ensemble": {"selection": {"enabled_methods": ["mean_topk", "weighted"]}},
+    }
+    if selection_section != expected_selection:
+        raise AssertionError(f"selection section must keep first-match wildcard values only: {sections}")
+    if model_section != {"ensemble": {"top_k": 3}}:
+        raise AssertionError(f"model section must not duplicate selection payloads: {sections}")
+
+
+def _assert_connect_hyperparameters_canonicalizes_payload() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.payload = None
+            self.name = None
+
+        def connect(self, payload, name=None):
+            self.payload = payload
+            self.name = name
+
+    fake_task = _FakeTask()
+    ctx = task_context_module.TaskContext(
+        task=fake_task,
+        project_name="LOCAL/TabularAnalysis/Tests",
+        task_name="canon",
+        output_dir=Path("."),
+    )
+    task_context_module.connect_hyperparameters(
+        ctx,
+        {
+            "data%2Eraw_dataset_id": "dataset-old",
+            "data.raw_dataset_id": "dataset-mid",
+            "data": {"raw_dataset_id": "dataset-new"},
+        },
+        name="dataset",
+    )
+    if fake_task.name != "dataset":
+        raise AssertionError(f"section name must be preserved: {fake_task.name}")
+    if fake_task.payload != {"data": {"raw_dataset_id": "dataset-new"}}:
+        raise AssertionError(f"connect_hyperparameters must send canonical nested payloads: {fake_task.payload}")
+
+
+def _assert_split_values_by_sections_minimizes_pipeline_args() -> None:
+    values = {
+        "task": "pipeline",
+        "run.usecase_id": "demo_usecase",
+        "data.raw_dataset_id": "dataset-123",
+        "pipeline.plan_only": False,
+        "pipeline.run_train": True,
+        "run.clearml.execution": "pipeline_controller",
+        "run.clearml.env.bootstrap": "uv",
+        "run.clearml.pipeline_task_id": "task-123",
+    }
+    (sections, _, remaining) = clearml_hparams_module.split_values_by_sections(values)
+    if remaining.get("task") != "pipeline":
+        raise AssertionError(f"task must remain in Args-compatible payload: {remaining}")
+    for removed_key in (
+        "run.usecase_id",
+        "data.raw_dataset_id",
+        "pipeline.plan_only",
+        "pipeline.run_train",
+        "run.clearml.execution",
+        "run.clearml.env.bootstrap",
+        "run.clearml.pipeline_task_id",
+    ):
+        if removed_key in remaining:
+            raise AssertionError(f"{removed_key} should be sourced from named sections instead of Args: {remaining}")
+    if sections.get("inputs") != {"run": {"usecase_id": "demo_usecase"}}:
+        raise AssertionError(f"unexpected inputs section: {sections}")
+    if sections.get("dataset") != {"data": {"raw_dataset_id": "dataset-123"}}:
+        raise AssertionError(f"unexpected dataset section: {sections}")
+    if sections.get("pipeline") != {"pipeline": {"plan_only": False, "run_train": True}}:
+        raise AssertionError(f"unexpected pipeline section: {sections}")
+    if sections.get("clearml") != {
+        "run": {
+            "clearml": {
+                "execution": "pipeline_controller",
+                "env": {"bootstrap": "uv"},
+                "pipeline_task_id": "task-123",
+            }
+        }
+    }:
+        raise AssertionError(f"unexpected clearml section: {sections}")
+
+
+def _assert_entrypoint_prefers_named_sections_over_stale_args() -> None:
+    class _FakeTask:
+        def get_parameters_as_dict(self) -> dict[str, object]:
+            return {
+                "Args": {
+                    "data": {"raw_dataset_id": "REPLACE_WITH_EXISTING_RAW_DATASET_ID"},
+                    "pipeline": {"plan_only": True},
+                    "run": {"usecase_id": "TabularAnalysis"},
+                },
+                "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+                "pipeline": {"pipeline": {"plan_only": False}},
+                "inputs": {"run": {"usecase_id": "ui_demo_20260407_0030"}},
+                "clearml": {"run": {"clearml": {"execution": "pipeline_controller"}}},
+            }
+
+        def get_parameters(self) -> dict[str, object]:
+            return {}
+
+    class _FakeTaskApi:
+        @staticmethod
+        def current_task() -> object:
+            return _FakeTask()
+
+    import sys
+    import types
+
+    clearml_pkg = types.ModuleType("clearml")
+    clearml_pkg.Task = _FakeTaskApi
+    original = sys.modules.get("clearml")
+    sys.modules["clearml"] = clearml_pkg
+    try:
+        overrides = _load_clearml_overrides()
+    finally:
+        if original is not None:
+            sys.modules["clearml"] = original
+        else:
+            sys.modules.pop("clearml", None)
+    if overrides.get("data.raw_dataset_id") != "dataset-123":
+        raise AssertionError(f"named dataset section must override stale Args placeholder: {overrides}")
+    if overrides.get("pipeline.plan_only") not in (False, "False", "false"):
+        raise AssertionError(f"named pipeline section must override stale Args plan_only: {overrides}")
+    if overrides.get("run.usecase_id") != "ui_demo_20260407_0030":
+        raise AssertionError(f"named inputs section must override stale Args usecase_id: {overrides}")
 
 
 def _assert_regression_model_set_contract() -> None:
@@ -2549,6 +2699,10 @@ def main() -> int:
     _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads()
     _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads()
     _assert_hparam_sections_are_nested_for_clearml_ui()
+    _assert_extract_sections_prefers_first_matching_section_from_cfg()
+    _assert_connect_hyperparameters_canonicalizes_payload()
+    _assert_split_values_by_sections_minimizes_pipeline_args()
+    _assert_entrypoint_prefers_named_sections_over_stale_args()
     _assert_regression_model_set_contract()
     _assert_explicit_pipeline_variants_override_model_set()
     _assert_pipeline_profile_defaults_clear_stale_model_variants()

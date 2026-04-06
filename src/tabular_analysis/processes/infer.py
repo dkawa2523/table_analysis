@@ -25,9 +25,20 @@ from ..ops.alerting import emit_alert
 from ..ops.clearml_identity import apply_clearml_identity, build_project_name
 from ..ops.data_quality import raise_on_quality_fail, run_data_quality_gate
 from .drift_report import append_drift_summary, annotate_profile, resolve_drift_settings, sample_frame
-from ..platform_adapter_artifacts import hash_recipe, upload_artifact
+from ..platform_adapter_artifacts import get_task_artifact_local_copy, hash_recipe, resolve_clearml_task_url, upload_artifact
 from ..platform_adapter_clearml_env import is_clearml_enabled
-from ..platform_adapter_task import PlatformAdapterError, clone_clearml_task, enqueue_clearml_task, get_clearml_task_status, get_task_artifact_local_copy, resolve_clearml_task_url, resolve_model_reference, reset_clearml_task_args, set_clearml_task_entry_point, set_clearml_task_parameters, update_clearml_task_tags, update_task_properties
+from ..platform_adapter_common import PlatformAdapterError
+from ..platform_adapter_model import resolve_model_reference
+from ..platform_adapter_task_context import update_task_properties
+from ..platform_adapter_task_ops import (
+    clone_clearml_task,
+    enqueue_clearml_task,
+    get_clearml_task_status,
+    reset_clearml_task_args,
+    set_clearml_task_entry_point,
+    set_clearml_task_parameters,
+    update_clearml_task_tags,
+)
 from ..uncertainty.conformal import apply_split_conformal_interval
 from .infer_support import build_model_reference_payload, build_optimize_hparams as _build_optimize_hparams, ensure_drift_frame as _ensure_drift_frame, frame_from_payload as _frame_from_payload, handle_infer_dry_run as _handle_infer_dry_run, iter_tabular_chunks as _iter_tabular_chunks, load_batch_inputs as _load_batch_inputs, load_train_profile as _load_train_profile, parse_bool as _parse_bool, resolve_batch_children_settings as _resolve_batch_children_settings, resolve_batch_execution_mode, resolve_batch_settings as _resolve_batch_settings, resolve_calibration_info as _resolve_calibration_info, resolve_class_labels as _resolve_class_labels, resolve_optimize_settings as _resolve_optimize_settings, resolve_preprocess_columns as _resolve_preprocess_columns, resolve_threshold_used as _resolve_threshold_used, to_int_or_none as _to_int_or_none
 from .lifecycle import emit_outputs_and_manifest, start_runtime
@@ -1933,7 +1944,7 @@ def run(cfg: Any) -> None:
     if clearml_enabled:
         summary_lines = [f'mode: {mode}', f'input_source: {settings.input_source}', f'batch_execution: {settings.batch_execution}', f"model_id: {settings.model_id_value or 'n/a'}", f"train_task_id: {settings.train_task_id_value or 'n/a'}", f"search_space: {('set' if settings.has_search_space else 'none')}"]
         log_debug_text(ctx.task, 'infer', 'settings', '\n'.join(summary_lines), step=0)
-    if _handle_dry_run(ctx, cfg, clearml_enabled=clearml_enabled, infer_cfg=settings.infer_cfg, mode=mode, validation_mode=validation_mode, input_source=settings.input_source, input_path_value=settings.input_path_value, input_json_label=settings.input_json_label, include_dataset=settings.include_dataset, include_execution=settings.include_execution, optimize_settings=settings.optimize_settings, optimize_hparams=settings.optimize_hparams):
+    if _handle_infer_dry_run(ctx, cfg, clearml_enabled=clearml_enabled, infer_cfg=settings.infer_cfg, mode=mode, validation_mode=validation_mode, input_source=settings.input_source, input_path_value=settings.input_path_value, input_json_label=settings.input_json_label, include_dataset=settings.include_dataset, include_execution=settings.include_execution, optimize_settings=settings.optimize_settings, optimize_hparams=settings.optimize_hparams):
         return
     model_ctx = _resolve_infer_model_context(cfg, clearml_enabled=clearml_enabled, validation_mode=validation_mode)
     connect_reference = build_model_reference_payload(model_ctx.meta, model_bundle_path=model_ctx.model_bundle_path)

@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -32,7 +31,11 @@ from tabular_analysis.clearml.pipeline_templates import (
     build_pipeline_template_tags,
     is_pipeline_template_name,
 )
-from tabular_analysis.clearml.hparams import build_sections_from_values
+from tabular_analysis.clearml.live_cleanup import (
+    cleanup_stale_pipeline_tasks as _cleanup_stale_pipeline_tasks_live,
+    deprecate_pipeline_task as _deprecate_pipeline_task,
+)
+from tabular_analysis.clearml.hparams import split_values_by_sections
 from tabular_analysis.common.hydra_overrides import overrides_to_args
 from tabular_analysis.common.hydra_config import compose_config
 from tabular_analysis.processes.pipeline_support import (
@@ -48,33 +51,37 @@ from tabular_analysis.platform_adapter_clearml_env import (
     resolve_clearml_script_spec,
     resolve_version_props,
 )
-from tabular_analysis.platform_adapter_core import _ensure_clearml_project_system_tags, _get_clearml_project_system_tags
+from tabular_analysis.platform_adapter_clearml_policy import (
+    ensure_clearml_project_system_tags as _ensure_clearml_project_system_tags,
+    get_clearml_project_system_tags as _get_clearml_project_system_tags,
+)
 from tabular_analysis.platform_adapter_pipeline import (
     create_pipeline_seed_controller,
     load_pipeline_controller_from_task,
 )
-from tabular_analysis.platform_adapter_task import (
+from tabular_analysis.platform_adapter_task_query import (
     clearml_task_exists,
     clearml_task_id,
-    get_clearml_task_configuration,
     clearml_task_project_name,
     clearml_task_script,
     clearml_task_tags,
-    create_clearml_task,
     clearml_task_type_from_obj,
+    get_clearml_task_configuration,
+)
+from tabular_analysis.platform_adapter_task_ops import (
+    create_clearml_task,
+    enqueue_clearml_task,
     ensure_clearml_task_requirements,
     ensure_clearml_task_properties,
-    reset_clearml_task_args,
-    replace_clearml_task_tags,
     ensure_clearml_task_script,
-    set_clearml_task_configuration,
-    replace_clearml_task_parameter_sections,
-    set_clearml_task_project,
-    set_clearml_task_runtime_properties,
     ensure_clearml_task_tags,
-    update_clearml_task_tags,
-    enqueue_clearml_task,
+    replace_clearml_task_parameter_sections,
+    replace_clearml_task_tags,
     reset_clearml_task,
+    reset_clearml_task_args,
+    set_clearml_task_project,
+    set_clearml_task_configuration,
+    set_clearml_task_runtime_properties,
 )
 from tabular_analysis.processes.pipeline import _build_pipeline_plan, build_pipeline_seed_controller
 
@@ -859,60 +866,51 @@ def _pipeline_disallowed_arg_keys(task: Any) -> set[str]:
     return hits
 
 
-def _deprecated_pipeline_project_name(project_name: str) -> str:
-    text = str(project_name).rstrip("/")
-    for (source, target) in (
-        ("/.pipelines/", "/_DeprecatedPipelines/"),
-        ("/Pipelines/", "/_DeprecatedPipelines/"),
-    ):
-        if source in text:
-            return text.replace(source, target, 1)
-    if text.endswith("/Pipelines"):
-        return text.rsplit("/Pipelines", 1)[0] + "/_DeprecatedPipelines/legacy_seed_root"
-    if text.endswith("/Templates"):
-        text = text.rsplit("/", 1)[0]
-    return f"{text}/_Deprecated"
+def _pipeline_noncanonical_parameter_paths(task: Any) -> set[str]:
+    visible_sections = {
+        "Args",
+        "inputs",
+        "dataset",
+        "selection",
+        "preprocess",
+        "model",
+        "eval",
+        "optimize",
+        "pipeline",
+        "clearml",
+    }
+    issues: set[str] = set()
+    for text in _iter_parameter_paths(_task_parameters(task)):
+        value = str(text)
+        if value.startswith("Args/"):
+            arg_key = value.split("/", 1)[1]
+            if "%" in arg_key or "/" in arg_key:
+                issues.add(value)
+            continue
+        if "/" not in value:
+            continue
+        section, remainder = value.split("/", 1)
+        if section not in visible_sections or not remainder:
+            continue
+        if "%" in remainder:
+            issues.add(value)
+            continue
+        if any("." in segment for segment in remainder.split("/") if segment):
+            issues.add(value)
+    return issues
 
 
-def _project_regex(prefix: str) -> str:
-    return "^" + re.escape(str(prefix)).replace("/", "\\/") + ".*$"
-
-
-def _list_clearml_project_names(prefix: str) -> list[str]:
-    try:
-        from clearml.backend_api.session.client import APIClient
-    except ImportError as exc:
-        raise RuntimeError("clearml is required to inspect pipeline projects.") from exc
-    client = APIClient()
-    try:
-        projects = client.projects.get_all(name=_project_regex(prefix))
-    except Exception as exc:
-        raise RuntimeError(f"Failed to list ClearML projects for prefix {prefix!r}: {exc}") from exc
-    names: list[str] = []
-    for project in projects or []:
-        name = str(getattr(project, "name", "") or "").strip()
-        if name:
-            names.append(name)
-    return sorted(set(names))
-
-
-def _list_clearml_task_ids_by_name_prefix(prefix: str) -> list[str]:
-    try:
-        from clearml.backend_api.session.client import APIClient
-    except ImportError as exc:
-        raise RuntimeError("clearml is required to inspect ClearML tasks.") from exc
-    client = APIClient()
-    try:
-        tasks = client.tasks.get_all(name=prefix)
-    except Exception as exc:
-        raise RuntimeError(f"Failed to list ClearML tasks for prefix {prefix!r}: {exc}") from exc
-    task_ids: list[str] = []
-    for task in tasks or []:
-        name = str(getattr(task, "name", "") or "").strip()
-        task_id = str(getattr(task, "id", "") or "").strip()
-        if task_id and name.startswith(prefix):
-            task_ids.append(task_id)
-    return sorted(set(task_ids))
+def _pipeline_visible_arg_keys(task: Any, *, expected_param_keys: set[str]) -> set[str]:
+    hits: set[str] = set()
+    for text in _iter_parameter_paths(_task_parameters(task)):
+        value = str(text)
+        if not value.startswith("Args/"):
+            continue
+        arg_key = value.split("/", 1)[1]
+        canonical = arg_key.replace(".", "/")
+        if canonical in expected_param_keys:
+            hits.add(arg_key)
+    return hits
 
 
 def _resolve_template_spec(
@@ -967,83 +965,11 @@ def _resolve_template_spec(
     )
 
 
-def _task_system_tags(task: Any) -> list[str]:
-    getter = getattr(task, "get_system_tags", None)
-    if callable(getter):
-        try:
-            values = getter()
-        except Exception:
-            values = None
-        if isinstance(values, (list, tuple, set)):
-            return [str(item) for item in values if item is not None]
-        if values is not None:
-            return [str(values)]
-    values = getattr(task, "system_tags", None)
-    if isinstance(values, (list, tuple, set)):
-        return [str(item) for item in values if item is not None]
-    if values is not None:
-        return [str(values)]
-    return []
-
-
-def _remove_task_system_tags(task_id: str, remove_tags: Iterable[str]) -> None:
-    remove_set = {str(tag).strip() for tag in remove_tags if str(tag).strip()}
-    if not remove_set:
-        return
-    task = _load_clearml_task(task_id)
-    current = _task_system_tags(task)
-    updated = [tag for tag in current if tag not in remove_set]
-    if updated == current:
-        return
-    persisted = False
-    setter = getattr(task, "set_system_tags", None)
-    if callable(setter):
-        try:
-            setter(updated)
-            persisted = set(_task_system_tags(_load_clearml_task(task_id))) == set(updated)
-        except Exception:
-            persisted = False
-    if persisted:
-        return
-    try:
-        from clearml.backend_api.session import Session
-    except ImportError:
-        editor = getattr(task, "_edit", None)
-        if callable(editor):
-            editor(system_tags=updated)
-        return
-    session = Session()
-    response = session.send_request(service="tasks", action="edit", json={"task": str(task_id), "system_tags": updated})
-    if not getattr(response, "ok", False):
-        raise RuntimeError(f"Failed to remove task system tags for {task_id!r}.")
-
-
-def _remove_project_pipeline_visibility(project_name: str | None) -> None:
-    text = str(project_name or "").strip()
-    if not text:
-        return
-    _ensure_clearml_project_system_tags(text, remove_tags=["pipeline"])
-
-
-def _deprecate_pipeline_task(
-    task_id: str,
-    *,
-    actual_project: str | None = None,
-    remove_source_project_pipeline_tag: bool = False,
-    fallback_target_project: str | None = None,
-) -> None:
-    actual_project = str(actual_project or "").strip()
-    update_clearml_task_tags(task_id, add=["template:deprecated"], remove=["pipeline"])
-    _remove_task_system_tags(task_id, ["pipeline"])
-    if "/_DeprecatedPipelines/" in actual_project:
-        target_project = actual_project
-    else:
-        target_project = fallback_target_project or (_deprecated_pipeline_project_name(actual_project) if actual_project else "")
-    if target_project:
-        set_clearml_task_project(task_id, target_project)
-        _remove_project_pipeline_visibility(target_project)
-    if remove_source_project_pipeline_tag and actual_project:
-        _remove_project_pipeline_visibility(actual_project)
+def _sync_pipeline_seed_identity(task_id: str, *, resolved: ResolvedTemplateSpec) -> None:
+    replace_clearml_task_tags(task_id, resolved.expected_tags)
+    ensure_clearml_task_tags(task_id, ["pipeline"])
+    ensure_clearml_task_properties(task_id, resolved.expected_properties)
+    _ensure_pipeline_seed_project(task_id, resolved.spec.project_name)
 
 
 def _ensure_pipeline_seed_project(task_id: str, project_name: str) -> None:
@@ -1126,6 +1052,12 @@ def _pipeline_seed_drift_reasons(
     disallowed_arg_keys = sorted(_pipeline_disallowed_arg_keys(task))
     if disallowed_arg_keys:
         reasons.append(f"stale policy args {disallowed_arg_keys}")
+    noncanonical_param_paths = sorted(_pipeline_noncanonical_parameter_paths(task))
+    if noncanonical_param_paths:
+        reasons.append(f"non-canonical hyperparameters {noncanonical_param_paths}")
+    visible_arg_keys = sorted(_pipeline_visible_arg_keys(task, expected_param_keys=expected_param_keys))
+    if visible_arg_keys:
+        reasons.append(f"duplicate visible args {visible_arg_keys}")
     runtime = _task_runtime(task)
     pipeline_hash = str(runtime.get("_pipeline_hash") or "").strip()
     if not pipeline_hash:
@@ -1160,7 +1092,12 @@ def _pipeline_seed_drift_reasons(
 
 
 def _pipeline_seed_requires_recreate(reasons: Iterable[str]) -> bool:
-    return any("stale policy args" in str(reason) for reason in reasons)
+    recreate_markers = (
+        "stale policy args",
+        "non-canonical hyperparameters",
+        "duplicate visible args",
+    )
+    return any(any(marker in str(reason) for marker in recreate_markers) for reason in reasons)
 
 
 def _restore_pipeline_seed_task(
@@ -1169,8 +1106,9 @@ def _restore_pipeline_seed_task(
     resolved: ResolvedTemplateSpec,
     seed_definition: Mapping[str, Any],
 ) -> None:
-    reset_clearml_task_args(task_id, overrides_to_args(_seed_runtime_defaults(seed_definition)))
-    (sections, _) = build_sections_from_values(_seed_runtime_defaults(seed_definition), cfg=resolved.cfg)
+    seed_defaults = _seed_runtime_defaults(seed_definition)
+    (sections, _, runtime_args) = split_values_by_sections(seed_defaults, cfg=resolved.cfg)
+    reset_clearml_task_args(task_id, overrides_to_args(runtime_args))
     replace_clearml_task_parameter_sections(task_id, sections)
     replace_clearml_task_tags(task_id, resolved.expected_tags)
     ensure_clearml_task_tags(task_id, ["pipeline"])
@@ -1185,18 +1123,7 @@ def _restore_pipeline_seed_task(
         version_num=resolved.script_spec.version_num,
         diff="",
     )
-    _ensure_pipeline_seed_project(task_id, resolved.spec.project_name)
-
-
-def _restore_pipeline_seed_identity(
-    task_id: str,
-    *,
-    resolved: ResolvedTemplateSpec,
-) -> None:
-    replace_clearml_task_tags(task_id, resolved.expected_tags)
-    ensure_clearml_task_tags(task_id, ["pipeline"])
-    ensure_clearml_task_properties(task_id, resolved.expected_properties)
-    _ensure_pipeline_seed_project(task_id, resolved.spec.project_name)
+    _sync_pipeline_seed_identity(task_id, resolved=resolved)
 
 
 def _canonical_seed_pipeline_hash(task: Any) -> str | None:
@@ -1270,8 +1197,7 @@ def _materialize_pipeline_seed(
     pipeline_hash = _canonical_seed_pipeline_hash(refreshed)
     if pipeline_hash:
         set_clearml_task_runtime_properties(task_id, {"_pipeline_hash": pipeline_hash})
-    _restore_pipeline_seed_identity(task_id, resolved=resolved)
-    _ensure_pipeline_seed_project(task_id, resolved.spec.project_name)
+    _sync_pipeline_seed_identity(task_id, resolved=resolved)
     _validate_materialized_seed(task_id, resolved=resolved)
 
 
@@ -1453,54 +1379,10 @@ def _cleanup_stale_pipeline_tasks(
     active_seed_projects = {str(spec.project_name) for spec in pipeline_specs if spec.project_name}
     if not active_seed_projects:
         return
-    solution_prefix = next(iter(active_seed_projects)).split("/.pipelines/", 1)[0]
-    candidate_projects = (
-        active_seed_projects
-        | set(_list_clearml_project_names(f"{solution_prefix}/.pipelines/"))
-        | set(_list_clearml_project_names(f"{solution_prefix}/_debug_seed_probe/.pipelines/"))
-        | {f"{solution_prefix}/Pipelines", f"{solution_prefix}/Pipelines/Templates"}
+    _cleanup_stale_pipeline_tasks_live(
+        active_seed_ids=active_seed_ids,
+        active_seed_projects=active_seed_projects,
     )
-    cleanup_projects = {
-        project_name
-        for project_name in candidate_projects
-        if (
-            project_name in active_seed_projects
-            or "/.pipelines/" in project_name
-            or project_name.endswith("/Pipelines")
-            or "/Pipelines/Templates" in project_name
-        )
-    }
-    for project_name in sorted(cleanup_projects):
-        remove_source_project_pipeline_tag = project_name not in active_seed_projects
-        for task in _list_clearml_tasks(project_name):
-            task_id = clearml_task_id(task)
-            if not task_id or (project_name in active_seed_projects and task_id in active_seed_ids):
-                continue
-            _deprecate_pipeline_task(
-                task_id,
-                actual_project=project_name,
-                remove_source_project_pipeline_tag=remove_source_project_pipeline_tag,
-            )
-    for task_id in _list_clearml_task_ids_by_name_prefix("seed_probe_"):
-        task = _load_clearml_task(task_id)
-        actual_project = str(clearml_task_project_name(task) or "").strip()
-        _deprecate_pipeline_task(
-            task_id,
-            actual_project=actual_project,
-            remove_source_project_pipeline_tag=True,
-            fallback_target_project=f"{solution_prefix}/_DeprecatedPipelines/debug_probe",
-        )
-    for project_name in sorted(
-        project_name
-        for project_name in candidate_projects
-        if project_name not in active_seed_projects
-        and (
-            "/_debug_seed_probe/.pipelines/" in project_name
-            or project_name.endswith("/Pipelines")
-            or "/Pipelines/Templates" in project_name
-        )
-    ):
-        _remove_project_pipeline_visibility(project_name)
 
 
 def _apply_templates(

@@ -6,8 +6,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from ..platform_adapter_artifacts import get_task_artifact_local_copy, resolve_clearml_task_url
 from ..platform_adapter_clearml_env import is_clearml_enabled
-from ..platform_adapter_task import get_task_artifact_local_copy, resolve_clearml_task_url
 _RECOVERABLE_ERRORS = (AttributeError, ImportError, KeyError, LookupError, OSError, RuntimeError, TypeError, ValueError, FloatingPointError, json.JSONDecodeError)
 @dataclass
 class PipelineReportBundle:
