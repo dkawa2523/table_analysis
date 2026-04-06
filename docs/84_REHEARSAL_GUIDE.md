@@ -1,68 +1,32 @@
-﻿# 84 Rehearsal Guide
+# Rehearsal Guide
 
-## 目的
+このドキュメントは、UI と local smoke の両方で ClearML pipeline を安全にリハーサルするための要点をまとめる。
 
-rehearsal は、最小の toy dataset を使って local から ClearML 運用までを一通り確認するための手順です。
+## 学習 pipeline の UI リハーサル
 
-## canonical tool
+1. `Pipelines` タブで seed card を開く
+2. `NEW RUN`
+3. `Configuration > OperatorInputs` で確認
+4. `Hyperparameters` で `data.raw_dataset_id` を実値に変更
+5. 実行
 
-- `tools/rehearsal/run_pipeline_v2.py`
+## leaderboard から infer へ進む
 
-この runner は:
+1. `99_Leaderboard` を開く
+2. `PLOTS -> leaderboard/table` で `infer_key` と `infer_value` を確認
+3. または `recommendation.json` から `infer_model_id` / `infer_train_task_id` を確認
+4. `Templates/Steps/05_Infer` の `infer` task を clone
+5. `Hyperparameters` に `infer_key=infer_value` を設定して実行
 
-- toy dataset を作る
-- `dataset_register` で `raw_dataset_id` を作り、その後に fixed-DAG の `pipeline` を回す
-- `usecase_id`, `raw_dataset_id`, `pipeline_task_id` をまとめる
+## local smoke
 
-## 推奨フロー
+- `python tools/tests/smoke_local.py --repo . --until pipeline`
+- `python tools/tests/test_pipeline_report.py`
+- `python tools/tests/test_leaderboard_ui_contract.py`
 
-### 1. local
+## よくある確認点
 
-```bash
-python tools/rehearsal/run_pipeline_v2.py \
-  --execution local \
-  --task-type regression \
-  --preprocess stdscaler_ohe \
-  --models ridge,elasticnet
-```
-
-### 2. logging
-
-```bash
-python tools/rehearsal/run_pipeline_v2.py \
-  --execution logging \
-  --task-type regression \
-  --preprocess stdscaler_ohe \
-  --models ridge,elasticnet \
-  --project-root LOCAL
-```
-
-### 3. pipeline controller
-
-```bash
-python tools/clearml_templates/manage_templates.py --apply --project-root LOCAL
-python tools/clearml_templates/manage_templates.py --validate --project-root LOCAL
-
-python tools/rehearsal/run_pipeline_v2.py \
-  --execution agent \
-  --queue-name controller \
-  --task-type regression \
-  --preprocess stdscaler_ohe \
-  --models ridge,elasticnet \
-  --project-root LOCAL \
-  --skip-ui-verify
-```
-
-## よく見る出力
-
-- `work/rehearsal/out/<mode>/<usecase_id>/rehearsal_summary.json`
-- `99_pipeline/report.json`
-- `99_pipeline/report_links.json`
-
-## UI 監査
-
-```bash
-python tools/tests/rehearsal_verify_clearml_ui.py --usecase-id <USECASE_ID> --project-root LOCAL
-```
-
-
+- seed は `.pipelines/<profile>` にあるか
+- actual run は `Pipelines/Runs/<usecase_id>` に作られるか
+- child task は `Runs/<usecase_id>/<group>` に分かれるか
+- fresh task に `%2E` key が残っていないか

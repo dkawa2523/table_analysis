@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: table-analysis-clearml-agent:latest
+    image: ${CLEARML_AGENT_IMAGE:-table-analysis-clearml-agent:latest}
     container_name: clearml-controller
     restart: unless-stopped
     environment:
@@ -19,7 +19,7 @@ services:
     command: ["clearml-agent", "daemon", "--queue", "controller"]
 
   clearml-default:
-    image: table-analysis-clearml-agent:latest
+    image: ${CLEARML_AGENT_IMAGE:-table-analysis-clearml-agent:latest}
     container_name: clearml-default
     restart: unless-stopped
     depends_on:
@@ -37,7 +37,7 @@ services:
     command: ["clearml-agent", "daemon", "--queue", "default"]
 
   clearml-heavy-model:
-    image: table-analysis-clearml-agent:latest
+    image: ${CLEARML_AGENT_IMAGE:-table-analysis-clearml-agent:latest}
     container_name: clearml-heavy-model
     restart: unless-stopped
     depends_on:
@@ -57,7 +57,7 @@ services:
 networks:
   default:
     external: true
-    name: docker_backend
+    name: ${CLEARML_DOCKER_NETWORK:-docker_backend}
 
 volumes:
   clearml-controller-home:

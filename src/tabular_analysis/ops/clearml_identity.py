@@ -105,7 +105,12 @@ def _resolve_template_usecase_id(cfg: Any | None, value: Any | None = None) -> s
     if explicit:
         return explicit
     if cfg is not None:
-        return _normalize_str(_cfg_value(cfg, 'run.clearml.template_usecase_id')) or _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'TabularAnalysis'
+        # Prefer the canonical runtime usecase_id; keep template_usecase_id only as a legacy fallback.
+        return (
+            _normalize_str(_cfg_value(cfg, 'run.usecase_id'))
+            or _normalize_str(_cfg_value(cfg, 'run.clearml.template_usecase_id'))
+            or 'TabularAnalysis'
+        )
     return 'TabularAnalysis'
 
 

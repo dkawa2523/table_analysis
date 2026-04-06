@@ -21,9 +21,13 @@ Seed pipelines are a separate first-class contract:
 These tasks are stored as `TaskTypes.controller` so operators can inspect, clone,
 edit, and run them directly from the ClearML Pipelines tab.
 They live in the seed pipeline projects `<project_root>/TabularAnalysis/.pipelines/<profile>`.
+They are not step templates and therefore do not carry `template:true`.
 
 ## Required Config
 - `run.clearml.template_usecase_id`
+  - legacy read fallback only; current seed/default/operator flow does not expose or require it
+- `run.clearml.pipeline.template_task_id`
+  - legacy read fallback only; use explicit helper overrides only when intentionally bypassing seed lookup
 - `run.clearml.template_set_id`
 - `run.schema_version`
 - `run.clearml.project_root`
@@ -50,6 +54,7 @@ Supported operations are `--plan`, `--apply`, and `--validate`. Historical examp
 - When a template generation is intentionally replaced, mark the older template as `template:deprecated` instead of keeping multiple active variants.
 - Run `--apply` before `--validate` when tags, script, repo, or branch changed.
 - Do not pin runtime to template task IDs; always resolve by canonical tags.
+- Treat `Hyperparameters` as the edit source of truth and `Configuration > OperatorInputs` as a read-only mirror for operator review.
 
 ## Source Of Truth
 - `conf/clearml/templates.yaml`

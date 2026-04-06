@@ -9,6 +9,8 @@
 - ローカル実行、ClearML logging、ClearML Pipeline Controller 実行の違い
 - どのシーンでどのコマンドを使えばよいか
 
+新しい Git repository / 新しい PC / 新しい ClearML サーバーへ持っていく場合は、まず [SETUP.md](SETUP.md) を読んでください。
+
 ## 1. このリポジトリでできること
 
 - CSV / Parquet からのデータ登録
@@ -237,8 +239,10 @@ operator が UI から安全に触る前提は `run.usecase_id`, `data.raw_datas
 
 UI で設定を確認するときは、まず controller task の `Configuration > OperatorInputs` を見てください。  
 operator が日常的に触る項目だけを mirror しており、詳細な override や互換 key は `Hyperparameters` 側に残しています。
-seed pipeline の `data.raw_dataset_id` は placeholder なので、`NEW RUN` 前に `OperatorInputs` で確認し、必要なら `Hyperparameters` 側で既存 raw dataset id へ差し替えてください。
+seed pipeline の `data.raw_dataset_id` は意図的に placeholder `REPLACE_WITH_EXISTING_RAW_DATASET_ID` を持つので、seed card 上で placeholder が見えても正常です。`NEW RUN` 前に `OperatorInputs` で確認し、実値は `Hyperparameters` 側で既存 raw dataset id へ差し替えてください。
 `NEW RUN` 後の run controller では `OperatorInputs` も current values に更新されますが、実編集の正本は引き続き `Hyperparameters` です。placeholder のまま実行すると fail-fast します。
+seed clone の `run.usecase_id` を seed 既定値 `TabularAnalysis` のまま起動した場合は、runtime が actual run 用の一意な usecase に自動採番し、controller は `Pipelines/Runs/<usecase_id>`、child task は `Runs/<usecase_id>/*` に切り替わります。
+古い historical run では ClearML が保存した cloned payload の都合で `%2E` を含む key が見えることがありますが、current seed と新規 `NEW RUN` は plain dotted key に正規化されます。
 
 seed pipeline は profile ごとに次 project に置かれます。
 
@@ -491,16 +495,32 @@ optional dependency は model 単位で分離しています。
 
 ## 14. ドキュメントの読み順
 
-まずはここから読むのがおすすめです。
+まずは [docs/INDEX.md](docs/INDEX.md) を開いてください。  
+そのうえで、立場ごとの最短導線は次です。
 
-1. [docs/INDEX.md](docs/INDEX.md)
-2. [docs/02_ARCHITECTURE.md](docs/02_ARCHITECTURE.md)
-3. [docs/05_PROCESS_CATALOG.md](docs/05_PROCESS_CATALOG.md)
-4. [docs/10_OPERATION_MODES.md](docs/10_OPERATION_MODES.md)
-5. [docs/65_DEV_GUIDE_DIRECTORY_MAP.md](docs/65_DEV_GUIDE_DIRECTORY_MAP.md)
-6. [docs/67_REHEARSAL_COMMANDS.md](docs/67_REHEARSAL_COMMANDS.md)
-7. [docs/81_CLEARML_TEMPLATE_POLICY.md](docs/81_CLEARML_TEMPLATE_POLICY.md)
-8. [docs/82_CLEARML_PROJECT_LAYOUT.md](docs/82_CLEARML_PROJECT_LAYOUT.md)
+### operator
+
+1. [docs/17_OPERATOR_QUICKSTART.md](docs/17_OPERATOR_QUICKSTART.md)
+2. [docs/16_OPERATIONS_RUNBOOK.md](docs/16_OPERATIONS_RUNBOOK.md)
+3. [docs/55_CLEARML_UI_CHECKLIST.md](docs/55_CLEARML_UI_CHECKLIST.md)
+4. [docs/69_CLEARML_TROUBLESHOOTING.md](docs/69_CLEARML_TROUBLESHOOTING.md)
+
+### developer
+
+1. [docs/02_ARCHITECTURE.md](docs/02_ARCHITECTURE.md)
+2. [docs/05_PROCESS_CATALOG.md](docs/05_PROCESS_CATALOG.md)
+3. [docs/65_DEV_GUIDE_DIRECTORY_MAP.md](docs/65_DEV_GUIDE_DIRECTORY_MAP.md)
+4. [docs/86_CLEARML_INTERNALS_FOR_DEVELOPERS.md](docs/86_CLEARML_INTERNALS_FOR_DEVELOPERS.md)
+
+### ClearML internals / contract を追いたいとき
+
+1. [docs/03_CLEARML_UI_CONTRACT.md](docs/03_CLEARML_UI_CONTRACT.md)
+2. [docs/52_CLEARML_PIPELINE_CONTROLLER_CONTRACT.md](docs/52_CLEARML_PIPELINE_CONTROLLER_CONTRACT.md)
+3. [docs/61_CLEARML_HPARAMS_SECTIONS.md](docs/61_CLEARML_HPARAMS_SECTIONS.md)
+4. [docs/63_CLEARML_PIPELINES_VISIBILITY.md](docs/63_CLEARML_PIPELINES_VISIBILITY.md)
+5. [docs/81_CLEARML_TEMPLATE_POLICY.md](docs/81_CLEARML_TEMPLATE_POLICY.md)
+6. [docs/82_CLEARML_PROJECT_LAYOUT.md](docs/82_CLEARML_PROJECT_LAYOUT.md)
+7. [docs/87_CLEARML_PIPELINE_WORKFLOW_DETAILS.md](docs/87_CLEARML_PIPELINE_WORKFLOW_DETAILS.md)
 
 ## 15. テストと確認
 

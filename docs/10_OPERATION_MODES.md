@@ -24,7 +24,7 @@
 
 1. `manage_templates --apply`
 2. `manage_templates --validate`
-3. ClearML UI で `.pipelines/<profile>` の seed pipeline card を開き、`NEW RUN` 後に `Configuration > OperatorInputs` を確認し、実値は `Hyperparameters` で更新して実行
+3. ClearML UI で `.pipelines/<profile>` の seed pipeline card を開き、`NEW RUN` 後に `Configuration > OperatorInputs` を確認し、seed placeholder や seed 既定値を把握したうえで、実値は `Hyperparameters` で更新して実行
 
 ## 各モードの詳細
 
@@ -83,9 +83,10 @@ python -m tabular_analysis.cli task=train_model \
 ### pipeline_controller
 
 - `.pipelines/<profile>` の seed pipeline card から `NEW RUN` して controller として実行する
-- `Configuration > OperatorInputs` では placeholder や最小入力を確認する
+- seed card の `Configuration > OperatorInputs` では placeholder や最小入力を確認する
 - 実際の `run.usecase_id` / `data.raw_dataset_id` は `Hyperparameters` 側で更新する
-- `data.raw_dataset_id` は placeholder のままにせず、既存 raw dataset id へ置き換える
+- seed card の `data.raw_dataset_id=REPLACE_WITH_EXISTING_RAW_DATASET_ID` は正常だが、actual run では placeholder のまま開始しない
+- `run.usecase_id` を seed 既定値 `TabularAnalysis` のまま起動した場合も、runtime が actual run 用の一意な usecase を自動採番する
 - operator 向けの正本
 - `controller/default/heavy-model` の queue 分割前提
 

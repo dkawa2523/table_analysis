@@ -29,31 +29,14 @@ from ..platform_adapter_artifacts import hash_recipe, upload_artifact
 from ..platform_adapter_clearml_env import is_clearml_enabled
 from ..platform_adapter_task import PlatformAdapterError, clone_clearml_task, enqueue_clearml_task, get_clearml_task_status, get_task_artifact_local_copy, resolve_clearml_task_url, resolve_model_reference, reset_clearml_task_args, set_clearml_task_entry_point, set_clearml_task_parameters, update_clearml_task_tags, update_task_properties
 from ..uncertainty.conformal import apply_split_conformal_interval
-from .infer_support import build_model_reference_payload, build_optimize_hparams as _build_optimize_hparams, iter_tabular_chunks as _iter_tabular_chunks, load_batch_inputs as _load_batch_inputs, resolve_batch_children_settings as _resolve_batch_children_settings, resolve_batch_execution_mode, resolve_batch_settings as _resolve_batch_settings, resolve_optimize_settings as _resolve_optimize_settings, resolve_preprocess_columns as _resolve_preprocess_columns
+from .infer_support import build_model_reference_payload, build_optimize_hparams as _build_optimize_hparams, ensure_drift_frame as _ensure_drift_frame, frame_from_payload as _frame_from_payload, handle_infer_dry_run as _handle_infer_dry_run, iter_tabular_chunks as _iter_tabular_chunks, load_batch_inputs as _load_batch_inputs, load_train_profile as _load_train_profile, parse_bool as _parse_bool, resolve_batch_children_settings as _resolve_batch_children_settings, resolve_batch_execution_mode, resolve_batch_settings as _resolve_batch_settings, resolve_calibration_info as _resolve_calibration_info, resolve_class_labels as _resolve_class_labels, resolve_optimize_settings as _resolve_optimize_settings, resolve_preprocess_columns as _resolve_preprocess_columns, resolve_threshold_used as _resolve_threshold_used, to_int_or_none as _to_int_or_none
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 from ..viz.infer_plots import build_input_output_table, build_label_distribution, build_prediction_histogram
 from ..viz.optuna_plots import build_contour, build_optimization_history, build_parallel_coordinate, build_param_importance
 from ..viz.plots import plot_interval_width_histogram
 _COERCE_FAILURE_SAMPLE_LIMIT = 200
 _INTERVAL_WIDTH_SAMPLE_LIMIT = 10000
-_BOOL_TRUTHY = {'true', '1', 'yes', 'y', 't'}
-_BOOL_FALSY = {'false', '0', 'no', 'n', 'f'}
 _RECOVERABLE_ERRORS = (AttributeError, ImportError, KeyError, LookupError, OSError, RuntimeError, TypeError, ValueError, FloatingPointError, json.JSONDecodeError)
-def _parse_bool(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, numbers.Integral):
-        return bool(int(value))
-    text = str(value).strip().lower()
-    if not text:
-        return False
-    if text in _BOOL_TRUTHY:
-        return True
-    if text in _BOOL_FALSY:
-        return False
-    return False
 def _get_child_reported_single_value(task_id: str, name: str) -> float | None:
     if not task_id:
         return None
@@ -154,11 +137,6 @@ def _emit_drift_alert(cfg: Any, ctx: Any, summary: Mapping[str, Any], drift_sett
     if sample_rows is not None:
         context['sample_rows'] = sample_rows
     emit_alert('drift', severity, title, message, context)
-def _to_int_or_none(value: Any) -> int | None:
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError, OverflowError):
-        return None
 def _build_optuna_sampler(name: str, seed: int | None) -> Any:
     try:
         import optuna
@@ -421,19 +399,6 @@ def _parse_json_payload(value: Any, *, key_name: str) -> Any | None:
         except json.JSONDecodeError as exc:
             raise ValueError(f'{key_name} must be valid JSON.') from exc
     return payload
-def _frame_from_payload(payload: Any):
-    try:
-        import pandas as pd
-    except ImportError as exc:
-        raise RuntimeError('pandas is required for infer.') from exc
-    if isinstance(payload, Mapping):
-        return pd.DataFrame([dict(payload)])
-    if isinstance(payload, Sequence) and (not isinstance(payload, (str, bytes))):
-        if not payload:
-            return pd.DataFrame()
-        if all((isinstance(item, Mapping) for item in payload)):
-            return pd.DataFrame([dict(item) for item in payload])
-    raise ValueError('infer.input_json must be a JSON object or list of objects.')
 def _frame_to_records(df: Any) -> list[dict[str, Any]]:
     try:
         records = df.to_dict(orient='records')
@@ -543,18 +508,6 @@ def _select_distribution_samples(output_df: Any) -> tuple[list[float] | None, li
         labels = output_df['pred_label'].tolist()
         return (None, labels)
     return (None, None)
-def _coerce_threshold(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        num = float(value)
-    except _RECOVERABLE_ERRORS:
-        return None
-    if not math.isfinite(num):
-        return None
-    if num < 0.0 or num > 1.0:
-        return None
-    return num
 def _resolve_top_k(cfg: Any, *, n_classes: int | None) -> int | None:
     value = _cfg_value(cfg, 'eval.classification.top_k', None)
     if value is None:
@@ -568,43 +521,6 @@ def _resolve_top_k(cfg: Any, *, n_classes: int | None) -> int | None:
     if n_classes is not None and top_k > n_classes:
         top_k = n_classes
     return top_k if top_k > 1 else None
-def _load_train_profile(cfg: Any, bundle: Mapping[str, Any], model_bundle_path: Path, *, train_task_id: str | None, clearml_enabled: bool) -> tuple[dict[str, Any] | None, Path | None]:
-    profile = None
-    if isinstance(bundle, Mapping):
-        candidate = bundle.get('train_profile')
-        if isinstance(candidate, Mapping):
-            profile = dict(candidate)
-    if profile is not None:
-        return (profile, None)
-    profile_path = model_bundle_path.parent / 'train_profile.json'
-    if profile_path.exists():
-        return (_load_json(profile_path), profile_path)
-    if clearml_enabled and train_task_id:
-        try:
-            profile_path = get_task_artifact_local_copy(cfg, train_task_id, 'train_profile.json')
-            return (_load_json(profile_path), profile_path)
-        except PlatformAdapterError:
-            return (None, None)
-    return (None, None)
-def _ensure_drift_frame(data, feature_names: Sequence[str] | None):
-    try:
-        import pandas as pd
-    except _RECOVERABLE_ERRORS as exc:
-        raise RuntimeError('pandas is required for drift reporting.') from exc
-    if isinstance(data, pd.DataFrame):
-        return data
-    values = data
-    if hasattr(values, 'toarray'):
-        values = values.toarray()
-    shape = getattr(values, 'shape', None)
-    if shape is None or len(shape) < 2:
-        return pd.DataFrame(values)
-    n_cols = int(shape[1])
-    if feature_names and len(feature_names) == n_cols:
-        columns = list(feature_names)
-    else:
-        columns = [f'f{i}' for i in range(n_cols)]
-    return pd.DataFrame(values, columns=columns)
 def _maybe_attach_feature_names(data: Any, feature_names: Sequence[str] | None):
     if not feature_names:
         return data
@@ -619,35 +535,6 @@ def _maybe_attach_feature_names(data: Any, feature_names: Sequence[str] | None):
     if len(feature_names) != n_cols:
         return data
     return pd.DataFrame(data, columns=list(feature_names))
-def _resolve_threshold_used(bundle: Mapping[str, Any], *, n_classes: int | None) -> float | None:
-    if n_classes != 2:
-        return None
-    candidates: list[Any] = []
-    postprocess = bundle.get('postprocess')
-    if isinstance(postprocess, Mapping):
-        candidates.append(postprocess.get('threshold'))
-        candidates.append(postprocess.get('best_threshold'))
-    candidates.append(bundle.get('best_threshold'))
-    for value in candidates:
-        threshold = _coerce_threshold(value)
-        if threshold is not None:
-            return threshold
-    return None
-def _resolve_calibration_info(bundle: Mapping[str, Any]) -> dict[str, Any] | None:
-    postprocess = bundle.get('postprocess')
-    if isinstance(postprocess, Mapping):
-        calibration = postprocess.get('calibration')
-        if isinstance(calibration, Mapping):
-            return dict(calibration)
-    calibration = bundle.get('calibration')
-    if isinstance(calibration, Mapping):
-        return dict(calibration)
-    metrics = bundle.get('metrics')
-    if isinstance(metrics, Mapping):
-        calibration = metrics.get('calibration')
-        if isinstance(calibration, Mapping):
-            return dict(calibration)
-    return None
 def _resolve_model_bundle_path(cfg: Any, *, clearml_enabled: bool) -> tuple[Path, dict[str, Any]]:
     infer_cfg = getattr(cfg, 'infer', None)
     model_id = _normalize_str(getattr(infer_cfg, 'model_id', None))
@@ -1112,18 +999,6 @@ def _update_interval_width_sample(sample: list[float], widths: list[float], *, r
         sample = list(np.asarray(sample)[rng.choice(len(sample), size=_INTERVAL_WIDTH_SAMPLE_LIMIT, replace=False)])
         return sample
     return sample[:_INTERVAL_WIDTH_SAMPLE_LIMIT]
-def _resolve_class_labels(bundle: Mapping[str, Any], model: Any) -> list[Any] | None:
-    labels = bundle.get('class_labels')
-    if isinstance(labels, (list, tuple)):
-        return list(labels)
-    label_encoder = bundle.get('label_encoder')
-    classes = getattr(label_encoder, 'classes_', None)
-    if classes is not None:
-        return list(classes)
-    model_classes = getattr(model, 'classes_', None)
-    if model_classes is not None:
-        return list(model_classes)
-    return None
 def _build_proba_column_labels(labels: Sequence[Any]) -> list[str]:
     seen: set[str] = set()
     safe_labels: list[str] = []
@@ -1304,46 +1179,6 @@ def _resolve_infer_runtime_settings(cfg: Any, *, clearml_enabled: bool) -> Infer
     if not dry_run and (not (model_id_value or train_task_id_value)):
         raise ValueError('infer.model_id or infer.train_task_id is required.')
     return InferRuntimeSettings(mode=mode, validation_mode=validation_mode, optimize_settings=optimize_settings, infer_cfg=infer_cfg, batch_cfg=batch_cfg, model_id_value=model_id_value, train_task_id_value=train_task_id_value, input_payload=input_payload, batch_inputs_payload=batch_inputs_payload, batch_inputs_path_value=batch_inputs_path_value, input_path_value=input_path_value, batch_execution=batch_execution, use_batch_children=use_batch_children, use_optimize_children=use_optimize_children, is_child_task=is_child_task, input_source=input_source, input_json_label=input_json_label, table_settings=table_settings, include_dataset=include_dataset, include_execution=include_execution, optimize_hparams=optimize_hparams, has_search_space=has_search_space, dry_run=dry_run)
-def _handle_dry_run(ctx: Any, cfg: Any, *, clearml_enabled: bool, infer_cfg: Any, mode: str, validation_mode: str, input_source: str, input_path_value: str | None, input_json_label: str | None, include_dataset: bool, include_execution: bool, optimize_settings: dict[str, Any] | None, optimize_hparams: dict[str, Any] | None) -> bool:
-    dry_run = bool(getattr(infer_cfg, 'dry_run', False))
-    if not dry_run:
-        return False
-    model_id = _normalize_str(getattr(infer_cfg, 'model_id', None))
-    train_task_id = _normalize_str(getattr(infer_cfg, 'train_task_id', None))
-    reference = build_infer_reference(model_id=model_id or 'dry_run', train_task_id=train_task_id)
-    connect_infer(ctx, cfg, model_id=reference.get('infer_model_id') or reference.get('infer_train_task_id') or 'dry_run', model_abbr=None, infer_mode=mode, schema_policy=validation_mode, input_source=input_source, input_path=input_path_value, input_json=input_json_label, provenance={'train_task_id': train_task_id}, optimize_payload=optimize_hparams, include_dataset=include_dataset, include_execution=include_execution)
-    if mode == 'optimize':
-        trials_path = ctx.output_dir / 'optimize_trials.csv'
-        trials_path.write_text('', encoding='utf-8')
-        summary_path = ctx.output_dir / 'optimize_summary.json'
-        summary_payload = {'n_trials': optimize_settings.get('n_trials') if optimize_settings else None, 'direction': optimize_settings.get('direction') if optimize_settings else None, 'objective_keys': optimize_settings.get('objective_keys') if optimize_settings else None, 'search_space': optimize_settings.get('search_space') if optimize_settings else None}
-        summary_path.write_text(json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding='utf-8')
-        if clearml_enabled:
-            upload_artifact(ctx, trials_path.name, trials_path)
-            upload_artifact(ctx, summary_path.name, summary_path)
-        out = {'mode': mode, 'model_id': model_id or 'dry_run', 'train_task_id': train_task_id, 'infer_model_id': reference.get('infer_model_id') or 'dry_run', 'infer_train_task_id': reference.get('infer_train_task_id'), 'reference_kind': reference.get('reference_kind'), 'schema_validation': {'mode': validation_mode, 'ok': True, 'warnings_count': 0, 'errors_count': 0}, 'optimize': {'n_trials': optimize_settings.get('n_trials') if optimize_settings else None, 'direction': optimize_settings.get('direction') if optimize_settings else None, 'objective_keys': optimize_settings.get('objective_keys') if optimize_settings else None}, 'optimize_trials_path': str(trials_path), 'optimize_summary_path': str(summary_path), 'dry_run': True}
-        inputs = {'model_id': model_id, 'train_task_id': train_task_id, 'infer_model_id': reference.get('infer_model_id'), 'infer_train_task_id': reference.get('infer_train_task_id'), 'mode': mode, 'input_path': input_path_value, 'dry_run': True}
-        outputs = {'optimize_trials_path': str(trials_path), 'optimize_summary_path': str(summary_path)}
-        emit_outputs_and_manifest(ctx, cfg, process='infer', out=out, inputs=inputs, outputs=outputs, hash_payloads={'config_hash': ('config', cfg), 'split_hash': 'dry_run', 'recipe_hash': 'dry_run'}, clearml_enabled=clearml_enabled)
-        return True
-    if mode == 'single':
-        predictions_path = ctx.output_dir / 'prediction.json'
-        predictions_path.write_text(json.dumps({'prediction': None}, ensure_ascii=False, indent=2), encoding='utf-8')
-        input_preview_path = ctx.output_dir / 'input_preview.json'
-        input_preview_path.write_text('{}', encoding='utf-8')
-    else:
-        predictions_path = ctx.output_dir / 'predictions.csv'
-        predictions_path.write_text('', encoding='utf-8')
-        input_preview_path = ctx.output_dir / 'input_preview.csv'
-        input_preview_path.write_text('', encoding='utf-8')
-    if clearml_enabled:
-        upload_artifact(ctx, predictions_path.name, predictions_path)
-        upload_artifact(ctx, input_preview_path.name, input_preview_path)
-    out = {'predictions_path': str(predictions_path), 'input_preview_path': str(input_preview_path), 'mode': mode, 'model_id': model_id or 'dry_run', 'train_task_id': train_task_id, 'infer_model_id': reference.get('infer_model_id') or 'dry_run', 'infer_train_task_id': reference.get('infer_train_task_id'), 'reference_kind': reference.get('reference_kind'), 'schema_validation': {'mode': validation_mode, 'ok': True, 'warnings_count': 0, 'errors_count': 0}, 'dry_run': True}
-    inputs = {'model_id': model_id, 'train_task_id': train_task_id, 'infer_model_id': reference.get('infer_model_id'), 'infer_train_task_id': reference.get('infer_train_task_id'), 'mode': mode, 'input_path': input_path_value, 'dry_run': True}
-    outputs = {'predictions_path': str(predictions_path), 'input_preview_path': str(input_preview_path)}
-    emit_outputs_and_manifest(ctx, cfg, process='infer', out=out, inputs=inputs, outputs=outputs, hash_payloads={'config_hash': ('config', cfg), 'split_hash': 'dry_run', 'recipe_hash': 'dry_run'}, clearml_enabled=clearml_enabled)
-    return True
 def _run_infer_drift_analysis(cfg: Any, ctx: Any, *, clearml_enabled: bool, drift_settings: dict[str, Any], validation_mode: str, bundle: dict[str, Any], model_bundle_path: Path, meta: dict[str, Any], summary_path: Path, drift_source: Any | None, feature_names: list[str] | None, sample_rows_override: int | None=None, sample_n_override: int | None=None) -> tuple[Path | None, bool | None]:
     if not drift_settings['enabled']:
         return (None, None)

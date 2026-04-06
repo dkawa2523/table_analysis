@@ -36,12 +36,12 @@ templates:
     kind: template
     updated_at: '2026-04-05T00:41:18Z'
   pipeline:
-    task_id: 2267ab1d897a48c99d8a0722f181ffd1
+    task_id: a957c79574744542b305aa1b27ad9074
     project_name: LOCAL/TabularAnalysis/.pipelines/pipeline
     task_name: pipeline
     entrypoint: python tools/clearml_entrypoint.py task=pipeline
     kind: seed
-    updated_at: '2026-04-05T03:47:49Z'
+    updated_at: '2026-04-05T23:55:50Z'
   train_ensemble:
     task_id: 4b519544f8e241c7af22b5f785873647
     project_name: LOCAL/TabularAnalysis/Templates/Steps/04_Ensembles
@@ -50,19 +50,19 @@ templates:
     kind: template
     updated_at: '2026-04-05T00:41:18Z'
   train_model_full:
-    task_id: 54c726ec1f944f968ba1fbc8275137df
+    task_id: d4f6a9ea3ffa451786558fdd0c5823e6
     project_name: LOCAL/TabularAnalysis/.pipelines/train_model_full
     task_name: train_model_full
     entrypoint: python tools/clearml_entrypoint.py task=pipeline
     kind: seed
-    updated_at: '2026-04-05T03:47:49Z'
+    updated_at: '2026-04-05T23:55:50Z'
   train_ensemble_full:
-    task_id: 264e853a222349e293ff5bafa3716a92
+    task_id: 95168f5821e442a0b2e4a9ef6b393b97
     project_name: LOCAL/TabularAnalysis/.pipelines/train_ensemble_full
     task_name: train_ensemble_full
     entrypoint: python tools/clearml_entrypoint.py task=pipeline
     kind: seed
-    updated_at: '2026-04-05T03:47:49Z'
+    updated_at: '2026-04-05T23:55:50Z'
 context:
   project_root: LOCAL
   usecase_id: TabularAnalysis
@@ -71,7 +71,6 @@ context:
   solution_root: TabularAnalysis
   pipeline_seed_namespace: .pipelines
   pipeline_root_group: Pipelines
-  pipeline_templates_group: Templates
   pipeline_runs_group: Runs
   templates_root_group: Templates
   step_templates_group: Steps

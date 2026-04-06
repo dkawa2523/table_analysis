@@ -228,6 +228,31 @@
 - `ensemble.top_k`
 - `exec_policy.*`
 
+### built-in seed profiles
+
+- `pipeline`
+  - preprocess + single-model train + leaderboard
+- `train_model_full`
+  - preprocess + single-model train
+- `train_ensemble_full`
+  - preprocess + single-model train + 3 ensemble + leaderboard
+
+### UI での標準運用
+
+- seed card は `.pipelines/<profile>` にある
+- `NEW RUN` 後の実編集は `Hyperparameters` で行う
+- `Configuration > OperatorInputs` は確認用 mirror
+- seed card の `data.raw_dataset_id=REPLACE_WITH_EXISTING_RAW_DATASET_ID` は正常
+- `run.usecase_id` を seed 既定値 `TabularAnalysis` のまま actual run すると、runtime が一意な usecase を自動採番する
+
+### subset の表現
+
+固定 DAG の profile を維持したまま subset を表現するため、UI 標準では次を使う。
+
+- `pipeline.selection.enabled_preprocess_variants`
+- `pipeline.selection.enabled_model_variants`
+- `ensemble.selection.enabled_methods`
+
 ### 主な出力
 
 - `pipeline_run.json`
@@ -236,10 +261,20 @@
 - `report_links.json`
 - `run_summary.json`
 
+### project の見え方
+
+- seed
+  - `<project_root>/TabularAnalysis/.pipelines/<profile>`
+- run controller
+  - `<project_root>/TabularAnalysis/Pipelines/Runs/<usecase_id>`
+- child task
+  - `<project_root>/TabularAnalysis/Runs/<usecase_id>/<group>`
+
 ### どんなときに使うか
 
 - 前処理から leaderboard までを一括で回したいとき
 - seed pipeline から controller 実行したいとき
+- ClearML UI 上で第三者が flow と成果物を追える形で運用したいとき
 
 ### 主なコード
 

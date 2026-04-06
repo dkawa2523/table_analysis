@@ -18,6 +18,11 @@ Visible pipeline controllers use dedicated roots:
 - `usecase_id`: `run.usecase_id`
 - `process_group`: `run.clearml.project_layout.group_map[process]`
 
+Notes:
+- seed card は `.pipelines/<profile>` に固定で置かれるため、seed 既定値 `run.usecase_id=TabularAnalysis` を持っていても project path は変わりません
+- actual run では `run.usecase_id` がそのまま使われるか、seed 既定値のままなら runtime が一意な `<usecase_id>` を採番します
+- child task は常に `Runs/<usecase_id>/<process_group>` 配下へ着地します
+
 ## Typical groups
 - `01_Datasets`
 - `02_Preprocess`

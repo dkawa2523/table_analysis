@@ -69,6 +69,9 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 - controller は `controller`
 - heavy model は `heavy-model`
 - light child は `default`
+- seed card の `Configuration > OperatorInputs` に placeholder が見えても正常である
+- actual run では `Hyperparameters` で `data.raw_dataset_id` を差し替えた値が使われる
+- `run.usecase_id` を seed 既定値のまま起動した場合も、actual run では一意な usecase に切り替わる
 
 ## Phase 5: operator UI
 
@@ -77,6 +80,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 - `.pipelines/<profile>` project で seed pipeline card が見える
 - `NEW RUN` / rerun ができる
 - project tree から child task を辿れる
+- run controller が `Pipelines/Runs/<usecase_id>`、child task が `Runs/<usecase_id>/*` に分離されている
 
 ## 推奨 gate
 

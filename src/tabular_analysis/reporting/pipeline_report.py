@@ -277,8 +277,6 @@ def _render_report_markdown(payload: Mapping[str, Any], *, max_models: int) -> s
         lines.append(f"- executed_jobs: {_format_value(summary.get('executed_jobs'))}")
     if summary.get('ranked_candidates') is not None:
         lines.append(f"- ranked_candidates: {_format_value(summary.get('ranked_candidates'))}")
-    if summary.get('models_tried') is not None:
-        lines.append(f"- models_tried_legacy: {_format_value(summary.get('models_tried'))}")
     if summary.get('pipeline_url'):
         lines.append(f"- pipeline_url: {_format_value(summary.get('pipeline_url'))}")
     if summary.get('planned_jobs') is not None:

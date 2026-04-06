@@ -22,8 +22,6 @@ clearml:
   # Project root for solution tasks, e.g. MFG/<UseCase>/<Stage>.
   project_root: "MFG"
 
-  # Template tasks use a stable usecase id and template set.
-  template_usecase_id: "TabularAnalysis"
   template_set_id: "default"
 
   queue_name: null
@@ -34,8 +32,6 @@ clearml:
   pipeline:
     # Visible pipeline seeds live in Pipelines, and concrete runs live under Pipelines/Runs.
     project_name: null
-    # Explicit seed/base task id override. The legacy key name is kept for compatibility.
-    template_task_id: null
 
   extra_tags: []
 

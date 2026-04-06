@@ -16,9 +16,9 @@ as visible controller tasks under their canonical seed and run projects.
 1. Run `python tools/clearml_templates/manage_templates.py --apply --project-root <ROOT>`.
 2. Open the seed pipeline project `<ROOT>/TabularAnalysis/.pipelines/<profile>` and confirm the seed pipeline card is visible.
 3. Open that seed pipeline card and launch `NEW RUN` when needed.
-4. Inspect `Configuration > OperatorInputs` first, verify whether `data.raw_dataset_id` is still the placeholder, then use `Hyperparameters` for the actual edit when needed.
+4. Inspect `Configuration > OperatorInputs` first. The seed card is allowed to keep `data.raw_dataset_id=REPLACE_WITH_EXISTING_RAW_DATASET_ID`; use `Hyperparameters` for the actual edit before launch.
 5. Replace `data.raw_dataset_id` with an existing raw dataset id before launch. The cloned run keeps `Hyperparameters` as the source of truth and mirrors the resolved values back into `OperatorInputs`.
-6. Leave `run.usecase_id` empty or unchanged only when you want the runtime to auto-generate a unique value from `run.usecase_id_policy`. If you set it explicitly, choose a unique value so child tasks do not mix with older runs.
+6. Leaving `run.usecase_id` at the seed default `TabularAnalysis` is valid; runtime will auto-generate a unique `<usecase_id>` for the actual run. If you set it explicitly, choose a unique value so child tasks do not mix with older runs.
 7. Run the cloned task, or launch the same profile from CLI with `run.clearml.execution=pipeline_controller`.
 8. Verify that the seed card remains visible in `.pipelines/<profile>` and the run controller remains visible in `Pipelines/Runs/<usecase_id>`.
 

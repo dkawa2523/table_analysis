@@ -308,12 +308,25 @@ def _compare_comparability(entry: dict[str, Any], ref: dict[str, Any]) -> list[s
             mismatches.append('seed mismatch')
     return mismatches
 def _write_leaderboard_csv(path: Path, rows: Iterable[dict[str, Any]], *, metric_names: Iterable[str]=()) -> None:
-    fieldnames = ['rank', 'model_family', 'ensemble_method', 'n_base_models', 'composite_score', 'best_score', 'primary_metric_ci_low', 'primary_metric_ci_mid', 'primary_metric_ci_high', 'primary_metric', 'primary_metric_source', 'task_type', *[name for name in metric_names], 'model_id', 'preprocess_variant', 'model_variant', 'train_task_ref', 'processed_dataset_id', 'split_hash']
+    fieldnames = ['rank', 'model_family', 'ensemble_method', 'n_base_models', 'composite_score', 'best_score', 'primary_metric_ci_low', 'primary_metric_ci_mid', 'primary_metric_ci_high', 'primary_metric', 'primary_metric_source', 'task_type', *[name for name in metric_names], 'model_id', 'infer_selector', 'infer_target', 'reference_kind', 'infer_model_id', 'infer_train_task_id', 'train_task_id', 'preprocess_variant', 'model_variant', 'train_task_ref', 'processed_dataset_id', 'split_hash']
     with path.open('w', newline='', encoding='utf-8') as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+def _resolve_infer_selector(entry: Mapping[str, Any]) -> str | None:
+    if _normalize_str(entry.get('infer_model_id')):
+        return 'infer.model_id'
+    if _normalize_str(entry.get('infer_train_task_id')):
+        return 'infer.train_task_id'
+    return None
+def _resolve_infer_target(entry: Mapping[str, Any]) -> str | None:
+    selector = _resolve_infer_selector(entry)
+    if selector == 'infer.model_id':
+        return _normalize_str(entry.get('infer_model_id'))
+    if selector == 'infer.train_task_id':
+        return _normalize_str(entry.get('infer_train_task_id'))
+    return None
 def _copy_recommended_plot(cfg: Any, recommended: dict[str, Any], output_dir: Path, *, clearml_enabled: bool) -> Path | None:
     candidates = ['confusion_matrix.png', 'residuals.png', 'feature_importance.png', 'roc_curve.png']
     if clearml_enabled:
@@ -603,7 +616,7 @@ def _build_leaderboard_rows(entries_sorted: list[dict[str, Any]], *, top_k: int,
     effective_top_k = top_k if top_k > 0 else len(entries_sorted)
     rows = []
     for (idx, entry) in enumerate(entries_sorted[:effective_top_k], start=1):
-        row = {'rank': idx, 'model_family': entry.get('model_family'), 'ensemble_method': entry.get('ensemble_method'), 'n_base_models': entry.get('n_base_models'), 'composite_score': entry.get('composite_score'), 'best_score': entry['best_score'], 'primary_metric_ci_low': entry.get('primary_metric_ci_low'), 'primary_metric_ci_mid': entry.get('primary_metric_ci_mid'), 'primary_metric_ci_high': entry.get('primary_metric_ci_high'), 'primary_metric': entry['primary_metric'], 'primary_metric_source': entry.get('primary_metric_source'), 'task_type': entry.get('task_type'), 'model_id': entry['model_id'], 'preprocess_variant': entry['preprocess_variant'], 'model_variant': entry['model_variant'], 'train_task_ref': entry['train_task_ref'], 'processed_dataset_id': entry['processed_dataset_id'], 'split_hash': entry['split_hash']}
+        row = {'rank': idx, 'model_family': entry.get('model_family'), 'ensemble_method': entry.get('ensemble_method'), 'n_base_models': entry.get('n_base_models'), 'composite_score': entry.get('composite_score'), 'best_score': entry['best_score'], 'primary_metric_ci_low': entry.get('primary_metric_ci_low'), 'primary_metric_ci_mid': entry.get('primary_metric_ci_mid'), 'primary_metric_ci_high': entry.get('primary_metric_ci_high'), 'primary_metric': entry['primary_metric'], 'primary_metric_source': entry.get('primary_metric_source'), 'task_type': entry.get('task_type'), 'model_id': entry['model_id'], 'infer_selector': _resolve_infer_selector(entry), 'infer_target': _resolve_infer_target(entry), 'reference_kind': entry.get('reference_kind'), 'infer_model_id': entry.get('infer_model_id'), 'infer_train_task_id': entry.get('infer_train_task_id'), 'train_task_id': entry.get('train_task_id'), 'preprocess_variant': entry['preprocess_variant'], 'model_variant': entry['model_variant'], 'train_task_ref': entry['train_task_ref'], 'processed_dataset_id': entry['processed_dataset_id'], 'split_hash': entry['split_hash']}
         for name in scoring_metrics:
             row[name] = entry.get(name)
         rows.append(row)

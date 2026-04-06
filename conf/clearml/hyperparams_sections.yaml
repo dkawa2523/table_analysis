@@ -49,6 +49,5 @@ sections:
     - run.clearml.project_root
     - run.clearml.project_name
     - run.clearml.queue_name
-    - run.clearml.template_usecase_id
     - run.clearml.template_set_id
     - run.clearml.code_ref.*

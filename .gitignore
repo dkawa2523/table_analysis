@@ -58,3 +58,4 @@ work/_exec_policy/
 work/_quality_gate/
 work/_test_*/
 work/_tmp_*/
+work/clearml_seed_materialization/

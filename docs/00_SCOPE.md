@@ -64,7 +64,8 @@ ClearML を使う場合は、project、tags、properties、artifacts、HyperPara
 ## この repo の主な利用者
 
 - operator
-  - ClearML UI の `<project_root>/TabularAnalysis/.pipelines/<profile>` にある seed pipeline card を開き、`NEW RUN` 前に `Configuration > OperatorInputs` を確認し、実値は `Hyperparameters` で更新して pipeline を実行する
+  - ClearML UI の `<project_root>/TabularAnalysis/.pipelines/<profile>` にある seed pipeline card を開き、`NEW RUN` 前に `Configuration > OperatorInputs` で seed 既定値を確認し、実値は `Hyperparameters` で更新して pipeline を実行する
+  - seed 既定値 `run.usecase_id=TabularAnalysis` をそのまま使っても、actual run では runtime が一意な usecase を採番する
 - ML engineer
   - 前処理、モデル、評価、report を実装・改善する
 - reviewer / newcomer

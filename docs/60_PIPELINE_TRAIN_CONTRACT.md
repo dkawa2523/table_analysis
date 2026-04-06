@@ -19,6 +19,8 @@
 
 seed pipeline の正規運用では、dataset 登録は含めず、既存 `raw_dataset_id` を入力にします。
 `pipeline.model_variants` と `pipeline.preprocess_variant` は local / ad hoc 実行の互換入力として残りますが、fixed-DAG seed pipeline の operator UI では `selection` 系を使います。
+seed card では `Configuration > OperatorInputs` に placeholder `REPLACE_WITH_EXISTING_RAW_DATASET_ID` が見えても正常で、actual run では `Hyperparameters` 側の実値が正本になります。
+`run.usecase_id` を seed 既定値 `TabularAnalysis` のまま起動した場合も、actual run では runtime が一意な usecase を採番します。
 
 ## 実行フロー
 
@@ -99,6 +101,8 @@ pipeline は最低でも次を出します。
   - ローカル実行しつつ ClearML に記録
 - `pipeline_controller`
   - `.pipelines/<profile>` の seed pipeline card から `NEW RUN` して controller 実行
+  - seed card は確認用、実編集は `Hyperparameters`
+  - actual run は `Pipelines/Runs/<usecase_id>` と `Runs/<usecase_id>/*` へ切り替わる
 
 ## queue ルール
 

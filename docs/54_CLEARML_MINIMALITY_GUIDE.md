@@ -1,38 +1,37 @@
-﻿# 54 ClearML Minimality Guide
+# ClearML Minimality Guide
 
-## 目的
+このドキュメントは、ClearML 連携で複雑さを増やさないための設計方針をまとめる。
 
-ClearML 対応コードが散らかるのを防ぐための設計ガイドです。
+## 基本原則
 
-## 原則
+- UI 正本は seed pipeline のみ
+- 実行正本は actual run のみ
+- operator が編集するのは `Hyperparameters` のみ
+- `Configuration > OperatorInputs` は確認用 mirror のみ
+- pipeline 固有の特別扱いは増やさず、step template と同じ task 契約を優先する
 
-1. ClearML API 呼び出しは adapter family か `src/tabular_analysis/clearml/` に寄せる
-2. process file は orchestration と domain logic に集中させる
-3. compatibility alias より canonical contract を優先する
-4. hidden fallback より fail-fast を優先する
+## 避けること
 
-## どこに何を書くか
+- `NEW PIPELINE` 前提の UI authoring
+- seed と template の dual-write
+- old project namespace を lookup 対象に残すこと
+- `%2E` のような encoded key を実行経路に流すこと
 
-### process file
+## 現在の正本
 
-- task の流れ
-- domain の判断
+- seed: `<project_root>/TabularAnalysis/.pipelines/<profile>`
+- controller run: `<project_root>/TabularAnalysis/Pipelines/Runs/<usecase_id>`
+- child task: `<project_root>/TabularAnalysis/Runs/<usecase_id>/<group>`
 
-### adapter family
+## 実装上の最小責務
 
-- Task / artifact / project / queue / script / model / env の接続
+- seed task は `NEW RUN` の起点
+- controller は DAG と child orchestration
+- leaderboard は推薦と infer 参照の決定
+- infer は standalone task として実行
 
-### clearml package
+関連:
 
-- template
-- hparams
-- seed pipeline
-- UI logger
-
-## やってはいけないこと
-
-- 同じ tag 生成を複数ファイルに書く
-- process 本体から ClearML SDK を直接散発的に呼ぶ
-- template lookup に曖昧な fallback を足す
-
-
+- [03_CLEARML_UI_CONTRACT.md](03_CLEARML_UI_CONTRACT.md)
+- [52_CLEARML_PIPELINE_CONTROLLER_CONTRACT.md](52_CLEARML_PIPELINE_CONTROLLER_CONTRACT.md)
+- [81_CLEARML_TEMPLATE_POLICY.md](81_CLEARML_TEMPLATE_POLICY.md)

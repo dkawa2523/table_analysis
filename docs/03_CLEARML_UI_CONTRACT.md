@@ -2,6 +2,28 @@
 
 このドキュメントは **非DSユーザーが ClearML UI だけで判断できる**ための契約です。
 
+## 全体像
+
+現在の ClearML UI 契約は、**seed pipeline を UI 上の正本**として見せ、実行時はその clone を **actual run controller** に正規化する、という二段構えです。
+
+```mermaid
+flowchart TD
+    A["manage_templates --apply"] --> B["seed pipeline<br/>.pipelines/<profile>"]
+    B --> C["Operator opens seed card"]
+    C --> D["NEW RUN"]
+    D --> E["clone task is created"]
+    E --> F["runtime normalizes clone<br/>task_kind:seed -> task_kind:run"]
+    F --> G["controller project<br/>Pipelines/Runs/<usecase_id>"]
+    G --> H["child tasks<br/>Runs/<usecase_id>/<group>"]
+    H --> I["pipeline_run.json / report.json / run_summary.json"]
+```
+
+この契約のポイント:
+
+- operator が直接触る起点は `.pipelines/<profile>` の seed card
+- `NEW RUN` 後の clone は、そのまま seed の metadata を持ち続けるのではなく runtime が run metadata へ正規化する
+- controller と child task は、project tree 上で `Pipelines/Runs/<usecase_id>` と `Runs/<usecase_id>/<group>` に分離される
+
 ## Project 階層（config-driven）
 
 operator が主に見る階層:
@@ -28,6 +50,11 @@ operator が主に見る階層:
 - `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/05_Infer`
 - `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/05_Infer_Children`（batch/optimize の child）
 - `MFG/TabularAnalysis/Runs/test_toy_20260101_120000/99_Leaderboard`
+
+補足:
+
+- seed card 自体は `.pipelines/<profile>` に固定で置かれるため、seed の `run.usecase_id=TabularAnalysis` が project path に反映されることはありません
+- actual run では `run.usecase_id` が明示値か、自動採番された値に置き換わり、その値が `Pipelines/Runs/<usecase_id>` と `Runs/<usecase_id>/<group>` に反映されます
 
 ## Task 名（推奨）
 `<process>__<variant>__v<schema_version>`
@@ -68,6 +95,38 @@ seed pipeline について:
 - operator が UI から編集してよいのは `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants`、必要時のみ `ensemble.selection.enabled_methods`, `ensemble.top_k` などの限定された項目だけです
 - `pipeline.model_set` や `pipeline.grid.model_variants` は fixed profile を支える内部の graph-shaping 値として扱い、通常の clone / run 導線では触りません
 - seed pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、dataset 登録は rehearsal / 準備系導線に分けます
+- seed card の `Configuration > OperatorInputs` は read-only mirror で、`data.raw_dataset_id=REPLACE_WITH_EXISTING_RAW_DATASET_ID` が見えても正常です
+- 実際に編集する場所は `Hyperparameters` です
+- `run.usecase_id` を seed 既定値 `TabularAnalysis` のまま起動した場合でも、actual run では runtime が一意な `<usecase_id>` を採番し、run controller は `Pipelines/Runs/<usecase_id>`、child task は `Runs/<usecase_id>/<process_group>` に着地します
+
+### operator が UI で触る面
+
+| 画面 | 用途 | 書き換えてよいか | 代表項目 |
+| --- | --- | --- | --- |
+| `Configuration > OperatorInputs` | 確認用 mirror | いいえ | `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.*`, `ensemble.selection.*` |
+| `Hyperparameters` | 実編集の正本 | はい | `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.*`, `ensemble.selection.*`, `ensemble.top_k` |
+
+### seed card と actual run の差
+
+| 項目 | seed card | actual run |
+| --- | --- | --- |
+| `task_kind` | `seed` | `run` |
+| project | `.pipelines/<profile>` | `Pipelines/Runs/<usecase_id>` |
+| `data.raw_dataset_id` | placeholder 可 | placeholder 不可 |
+| `run.usecase_id` | `TabularAnalysis` 既定値を持ってよい | 明示値または runtime 自動採番値 |
+| `OperatorInputs` | seed 既定値の mirror | current values の mirror |
+
+### 実装正本
+
+- project path / group map
+  - `conf/clearml/project_layout.yaml`
+  - `src/tabular_analysis/ops/clearml_identity.py`
+- seed profile / whitelist / placeholder / UI clone 正規化
+  - `src/tabular_analysis/processes/pipeline_support.py`
+- controller orchestration
+  - `src/tabular_analysis/processes/pipeline.py`
+- seed apply / validate / stale cleanup
+  - `tools/clearml_templates/manage_templates.py`
 
 ## Artifacts（全タスク必須）
 - `config_resolved.yaml`
@@ -81,6 +140,19 @@ seed pipeline について:
 - leaderboard: `leaderboard.csv`, `recommendation.json`, `summary.md`, `decision_summary.md`, `decision_summary.json`, `recommended_plot.png` (optional)
 - pipeline: `pipeline_run.json`, `plan.json`, `report.md`, `report.json`, `report_links.json`, `run_summary.json`
 - infer: `predictions.*`, `input_preview.*`, `drift_report.json`, `drift_report.md` (when drift enabled)
+
+`99_Leaderboard` の `PLOTS -> leaderboard/table` には、推論 task を UI で起動するための列も表示する。
+
+- `ref_kind`
+- `infer_key`
+- `infer_value`
+
+意味:
+
+- `ref_kind=model_id` の行は `infer.model_id=<infer_value>`
+- `ref_kind=train_task_id` の行は `infer.train_task_id=<infer_value>`
+
+推論 task を UI で clone したら、上記の `infer_key` と `infer_value` を `Hyperparameters` にそのまま入力すればよい。
 - skip 時: `skip_reason.json`
 
 ## Lint ルール（doctor/CI）

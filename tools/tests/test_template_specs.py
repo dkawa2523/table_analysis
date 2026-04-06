@@ -80,7 +80,6 @@ def _load_layout_tokens(repo: Path) -> dict[str, str]:
         return {
             "pipeline_seed_namespace": ".pipelines",
             "pipeline_root_group": "Pipelines",
-            "pipeline_templates_group": "Templates",
             "templates_root_group": "Templates",
             "step_templates_group": "Steps",
         }
@@ -88,7 +87,6 @@ def _load_layout_tokens(repo: Path) -> dict[str, str]:
     return {
         "pipeline_seed_namespace": str(payload.get("pipeline_seed_namespace") or ".pipelines"),
         "pipeline_root_group": str(payload.get("pipeline_root_group") or "Pipelines"),
-        "pipeline_templates_group": str(payload.get("pipeline_templates_group") or "Templates"),
         "templates_root_group": str(payload.get("templates_root_group") or "Templates"),
         "step_templates_group": str(payload.get("step_templates_group") or "Steps"),
     }

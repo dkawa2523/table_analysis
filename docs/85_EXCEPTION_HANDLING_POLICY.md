@@ -31,6 +31,33 @@
 - task が skip 可能なら reason を残して skip
 - ClearML best-effort 部分は warning に寄せるが、契約違反は隠さない
 
+## pipeline_controller で特に重要な fail-fast
+
+current pipeline 運用では、次を silent fallback にしません。
+
+- `data.raw_dataset_id` が empty
+- `data.raw_dataset_id` が seed placeholder `REPLACE_WITH_EXISTING_RAW_DATASET_ID` のまま
+- fixed profile に存在しない `pipeline.selection.*` / `ensemble.selection.*`
+- `run.usecase_id_policy=explicit` なのに `run.usecase_id` が空
+
+これらは operator mistake を hidden success にしないため、早い段階で失敗させます。
+
+## ClearML best-effort と契約違反の違い
+
+### best-effort 側
+
+- UI 上の過去 task に `%2E` を含む historical key が残る
+- fileserver artifact の補助取得が失敗する
+- optional plot / debug sample の欠落
+
+### fail-fast 側
+
+- seed placeholder のまま actual run を開始
+- seed clone の metadata が run shape に正規化できない
+- required queue / required seed / required contract tag が欠落
+
+この区別が、operator 向けの分かりやすさと developer 向けの保守性の両方で重要です。
+
 ## 検証
 
 ```bash
