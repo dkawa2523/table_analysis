@@ -1407,10 +1407,13 @@ def _current_pipeline_task_is_seed_materialization(task: Any, cfg: Any) -> bool:
     raw_dataset_id = _normalize_str(_cfg_value(cfg, 'data.raw_dataset_id'))
     if not is_pipeline_placeholder_raw_dataset_id(raw_dataset_id):
         return False
+    pipeline_profile = _current_pipeline_task_profile(task, cfg)
+    task_name = _normalize_str(getattr(task, 'name', None))
+    if pipeline_profile and task_name == pipeline_profile:
+        return True
     current_task_id = _normalize_str(clearml_task_id(task))
     if not current_task_id:
         return False
-    pipeline_profile = _current_pipeline_task_profile(task, cfg)
     try:
         seed_task_id = _normalize_str(
             resolve_pipeline_seed_task_id(cfg, pipeline_profile=pipeline_profile)

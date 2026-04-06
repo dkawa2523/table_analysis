@@ -1149,6 +1149,23 @@ def _assert_build_pipeline_visible_hyperparameter_sections_uses_named_sections_o
         raise AssertionError(f"unexpected model section: {sections}")
 
 
+def _assert_seed_materialization_detection_uses_seed_identity_fallback() -> None:
+    class _FakeTask:
+        name = "train_model_full"
+        tags = ["pipeline", "task_kind:seed", "pipeline_profile:train_model_full"]
+        project = "LOCAL/TabularAnalysis/.pipelines/train_model_full"
+
+    cfg = OmegaConf.create(
+        {
+            "data": {"raw_dataset_id": PIPELINE_RAW_DATASET_ID_SENTINEL},
+            "pipeline": {},
+            "run": {"clearml": {"project_root": "MFG"}},
+        }
+    )
+    if not pipeline_module._current_pipeline_task_is_seed_materialization(_FakeTask(), cfg):
+        raise AssertionError("seed materialization detection should fall back to the current seed task identity when cfg project_root differs")
+
+
 def _assert_entrypoint_prefers_named_sections_over_stale_args() -> None:
     class _FakeTask:
         def get_parameters_as_dict(self) -> dict[str, object]:
@@ -2925,6 +2942,7 @@ def main() -> int:
     _assert_connect_hyperparameters_canonicalizes_payload()
     _assert_split_values_by_sections_minimizes_pipeline_args()
     _assert_build_pipeline_visible_hyperparameter_sections_uses_named_sections_only()
+    _assert_seed_materialization_detection_uses_seed_identity_fallback()
     _assert_entrypoint_prefers_named_sections_over_stale_args()
     _assert_entrypoint_ignores_internal_named_section_metadata()
     _assert_regression_model_set_contract()
