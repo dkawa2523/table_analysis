@@ -1369,6 +1369,11 @@ def _current_pipeline_task_is_seed(task: Any) -> bool:
 
 
 def _task_user_properties(task: Any) -> dict[str, Any]:
+    def _property_value(value: Any) -> Any:
+        if isinstance(value, Mapping) and 'value' in value:
+            return value.get('value')
+        return value
+
     getter = getattr(task, 'get_user_properties', None)
     if callable(getter):
         try:
@@ -1376,7 +1381,10 @@ def _task_user_properties(task: Any) -> dict[str, Any]:
         except Exception:
             values = None
         if isinstance(values, Mapping):
-            return dict(values)
+            return {
+                str(key): _property_value(value)
+                for (key, value) in dict(values).items()
+            }
     return {}
 
 

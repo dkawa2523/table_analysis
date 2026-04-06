@@ -1173,12 +1173,12 @@ def _assert_current_pipeline_task_defaults_restore_project_root_from_properties(
         project = "LOCAL/TabularAnalysis/.pipelines/train_model_full"
 
         @staticmethod
-        def get_user_properties() -> dict[str, str]:
+        def get_user_properties() -> dict[str, dict[str, str]]:
             return {
-                "project_root": "LOCAL",
-                "template_set_id": "default",
-                "schema_version": "v1",
-                "code_version": "abc123",
+                "project_root": {"section": "properties", "name": "project_root", "value": "LOCAL"},
+                "template_set_id": {"section": "properties", "name": "template_set_id", "value": "default"},
+                "schema_version": {"section": "properties", "name": "schema_version", "value": "v1"},
+                "code_version": {"section": "properties", "name": "code_version", "value": "abc123"},
             }
 
     cfg = OmegaConf.create(
