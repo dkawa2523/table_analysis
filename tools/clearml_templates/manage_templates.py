@@ -68,11 +68,13 @@ from tabular_analysis.platform_adapter_task_query import (
     get_clearml_task_configuration,
 )
 from tabular_analysis.platform_adapter_task_ops import (
+    clone_clearml_task,
     create_clearml_task,
     enqueue_clearml_task,
     ensure_clearml_task_requirements,
     ensure_clearml_task_properties,
     ensure_clearml_task_script,
+    get_task_artifact_local_copy,
     ensure_clearml_task_tags,
     replace_clearml_task_hyperparameters,
     replace_clearml_task_tags,
@@ -80,6 +82,7 @@ from tabular_analysis.platform_adapter_task_ops import (
     set_clearml_task_project,
     set_clearml_task_configuration,
     set_clearml_task_runtime_properties,
+    upload_clearml_task_artifact,
 )
 from tabular_analysis.processes.pipeline import _build_pipeline_plan, build_pipeline_seed_controller
 
@@ -1172,12 +1175,102 @@ def _validate_materialized_seed(
         )
 
 
+def _copy_task_configuration_if_present(
+    source_task_id: str,
+    target_task_id: str,
+    *,
+    name: str,
+    description: str | None = None,
+) -> None:
+    payload = get_clearml_task_configuration(source_task_id, name=name)
+    if payload is None:
+        return
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(f"Configuration/{name} on task {source_task_id} is not a mapping.")
+    set_clearml_task_configuration(
+        target_task_id,
+        dict(payload),
+        name=name,
+        description=description,
+    )
+
+
+def _copy_materialized_seed_artifacts(
+    source_task_id: str,
+    target_task_id: str,
+    *,
+    cfg: Any,
+) -> None:
+    source_task = _load_clearml_task(source_task_id)
+    for artifact_name in sorted(_task_artifact_names(source_task)):
+        local_path = get_task_artifact_local_copy(cfg, source_task_id, artifact_name)
+        upload_clearml_task_artifact(target_task_id, artifact_name, local_path)
+
+
+def _publish_seed_clone(task_id: str) -> None:
+    task = _load_clearml_task(task_id)
+    for method_name in ("mark_started", "started", "completed", "publish"):
+        method = getattr(task, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            method()
+        except Exception:
+            continue
+
+
+def _promote_materialized_pipeline_seed(
+    source_task_id: str,
+    *,
+    resolved: ResolvedTemplateSpec,
+    seed_definition: Mapping[str, Any],
+) -> str:
+    promoted_task_id = clone_clearml_task(
+        source_task_id=source_task_id,
+        task_name=resolved.spec.task_name_template,
+    )
+    _restore_pipeline_seed_task(
+        promoted_task_id,
+        resolved=resolved,
+        seed_definition=seed_definition,
+    )
+    _copy_task_configuration_if_present(
+        source_task_id,
+        promoted_task_id,
+        name="Pipeline",
+        description="Serialized visible pipeline seed graph.",
+    )
+    set_clearml_task_configuration(
+        promoted_task_id,
+        dict(seed_definition.get("operator_inputs") or {}),
+        name="OperatorInputs",
+        description="Editable operator-facing pipeline inputs.",
+    )
+    _copy_materialized_seed_artifacts(
+        source_task_id,
+        promoted_task_id,
+        cfg=resolved.cfg,
+    )
+    source_task = _load_clearml_task(source_task_id)
+    pipeline_hash = _canonical_seed_pipeline_hash(source_task)
+    if pipeline_hash:
+        set_clearml_task_runtime_properties(promoted_task_id, {"_pipeline_hash": pipeline_hash})
+    _sync_pipeline_seed_identity(promoted_task_id, resolved=resolved)
+    _publish_seed_clone(promoted_task_id)
+    _validate_materialized_seed(promoted_task_id, resolved=resolved)
+    _deprecate_pipeline_task(
+        source_task_id,
+        actual_project=str(clearml_task_project_name(source_task) or ""),
+    )
+    return promoted_task_id
+
+
 def _materialize_pipeline_seed(
     task_id: str,
     *,
     resolved: ResolvedTemplateSpec,
     seed_definition: Mapping[str, Any],
-) -> None:
+) -> str:
     reset_clearml_task(task_id, force=True)
     _restore_pipeline_seed_task(task_id, resolved=resolved, seed_definition=seed_definition)
     set_clearml_task_configuration(
@@ -1203,7 +1296,11 @@ def _materialize_pipeline_seed(
     if pipeline_hash:
         set_clearml_task_runtime_properties(task_id, {"_pipeline_hash": pipeline_hash})
     _sync_pipeline_seed_identity(task_id, resolved=resolved)
-    _validate_materialized_seed(task_id, resolved=resolved)
+    return _promote_materialized_pipeline_seed(
+        task_id,
+        resolved=resolved,
+        seed_definition=seed_definition,
+    )
 
 
 def _upsert_standard_template(
@@ -1355,7 +1452,7 @@ def _upsert_pipeline_seed(
         print(f"Sync pipeline seed {spec.name}: {task_id}")
     if seed_definition is None:
         seed_definition = build_pipeline_seed_controller(cfg=cfg, controller=controller, pipeline_profile=spec.name)
-    _materialize_pipeline_seed(task_id, resolved=resolved, seed_definition=seed_definition)
+    task_id = _materialize_pipeline_seed(task_id, resolved=resolved, seed_definition=seed_definition)
     lock_templates[spec.name] = _build_lock_template_entry(
         existing=existing if isinstance(existing, dict) else None,
         task_id=task_id,

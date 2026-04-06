@@ -858,6 +858,41 @@ def _assert_replace_clearml_task_hyperparameters_drops_empty_args_section() -> N
         raise AssertionError(f"section-only payload should remain canonical: {updated}")
 
 
+def _assert_replace_clearml_task_object_hyperparameters_drops_empty_args_section() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.payload = {
+                "Args": {
+                    "run.usecase_id": "old_usecase",
+                    "data.raw_dataset_id": "old_dataset",
+                },
+                "dataset": {"data": {"raw_dataset_id": "old_dataset"}},
+            }
+            self.updated: dict[str, object] | None = None
+
+        def get_parameters_as_dict(self, cast: bool = False) -> dict[str, object]:
+            return dict(self.payload)
+
+        def set_parameters_as_dict(self, payload: dict[str, object]) -> None:
+            self.updated = dict(payload)
+            self.payload = dict(payload)
+
+    fake = _FakeTask()
+    changed = task_ops_module.replace_clearml_task_object_hyperparameters(
+        fake,
+        args=[],
+        sections={
+            "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+            "inputs": {"run": {"usecase_id": "demo"}},
+        },
+    )
+    if not changed:
+        raise AssertionError("replace_clearml_task_object_hyperparameters should replace stale Args with section-only payloads")
+    updated = fake.updated or {}
+    if "Args" in updated:
+        raise AssertionError(f"empty Args should be removed entirely from the live task payload: {updated}")
+
+
 def _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads() -> None:
     class _FakeTask:
         def __init__(self) -> None:
@@ -2976,6 +3011,7 @@ def main() -> int:
     _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads()
     _assert_replace_clearml_task_hyperparameters_drops_unexpected_sections()
     _assert_replace_clearml_task_hyperparameters_drops_empty_args_section()
+    _assert_replace_clearml_task_object_hyperparameters_drops_empty_args_section()
     _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads()
     _assert_hparam_sections_are_nested_for_clearml_ui()
     _assert_extract_sections_prefers_first_matching_section_from_cfg()
