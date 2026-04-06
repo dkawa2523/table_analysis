@@ -213,6 +213,65 @@ def _normalize_parameter_input_value(value: Any) -> Any:
     return value
 
 
+def _flatten_parameter_payload(section: str, payload: Any, out: dict[str, Any], *, prefix: str = '') -> None:
+    if isinstance(payload, Mapping):
+        for (key, value) in payload.items():
+            text = str(key)
+            next_prefix = f'{prefix}/{text}' if prefix else text
+            _flatten_parameter_payload(section, value, out, prefix=next_prefix)
+        return
+    if not prefix:
+        return
+    out[f'{section}/{prefix}'] = payload
+
+
+def _flatten_hyperparameter_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    flattened: dict[str, Any] = {}
+    for (section, value) in payload.items():
+        section_name = str(section)
+        if section_name == 'Args' and isinstance(value, Mapping):
+            for (key, item) in value.items():
+                flattened[f'Args/{key}'] = item
+            continue
+        _flatten_parameter_payload(section_name, value, flattened)
+    return flattened
+
+
+def _delete_task_parameters(task: Any, keys: Iterable[str]) -> None:
+    deleter = getattr(task, 'delete_parameter', None)
+    if not callable(deleter):
+        return
+    for key in keys:
+        try:
+            deleter(str(key))
+        except _RECOVERABLE_ERRORS:
+            continue
+
+
+def _replace_task_hyperparameter_payload(task: Any, desired_payload: Mapping[str, Any]) -> bool:
+    current_sections = _task_parameter_sections(task)
+    if current_sections == dict(desired_payload):
+        return False
+    current_flat = _task_parameters(task)
+    desired_flat = _flatten_hyperparameter_payload(desired_payload)
+    tracked_sections = {str(key) for key in current_sections.keys()} | {str(key) for key in desired_payload.keys()}
+    stale_keys = [
+        key
+        for key in current_flat.keys()
+        if isinstance(key, str)
+        and '/' in key
+        and key.split('/', 1)[0] in tracked_sections
+        and key not in desired_flat
+    ]
+    if stale_keys:
+        _delete_task_parameters(task, stale_keys)
+    setter = getattr(task, 'set_parameters_as_dict', None)
+    if callable(setter):
+        setter(dict(desired_payload))
+        return True
+    raise PlatformAdapterError('ClearML Task.set_parameters_as_dict is not available.')
+
+
 def set_clearml_task_parameters(task_id: str, parameters: Mapping[str, Any], *, section: str='Args') -> bool:
     if not parameters:
         return False
@@ -268,11 +327,7 @@ def replace_clearml_task_parameter_sections(task_id: str, sections: Mapping[str,
         payload[section_name] = normalized_section
     if not changed:
         return False
-    setter = getattr(task, 'set_parameters_as_dict', None)
-    if callable(setter):
-        setter(payload)
-        return True
-    raise PlatformAdapterError('ClearML Task.set_parameters_as_dict is not available.')
+    return _replace_task_hyperparameter_payload(task, payload)
 
 
 def _desired_hyperparameter_payload(
@@ -297,14 +352,7 @@ def replace_clearml_task_object_hyperparameters(task: Any, *, args: Iterable[str
     desired_payload = _desired_hyperparameter_payload(args=args, sections=sections)
     if not desired_payload:
         return False
-    current_payload = _task_parameter_sections(task)
-    if current_payload == desired_payload:
-        return False
-    setter = getattr(task, 'set_parameters_as_dict', None)
-    if callable(setter):
-        setter(desired_payload)
-        return True
-    raise PlatformAdapterError('ClearML Task.set_parameters_as_dict is not available.')
+    return _replace_task_hyperparameter_payload(task, desired_payload)
 
 
 def replace_clearml_task_hyperparameters(task_id: str, *, args: Iterable[str] | None=None, sections: Mapping[str, Mapping[str, Any]] | None=None) -> bool:
@@ -546,8 +594,7 @@ def reset_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
             payload['Args'] = dict(normalized)
         else:
             payload.pop('Args', None)
-        setter(payload)
-        return True
+        return _replace_task_hyperparameter_payload(task, payload)
     params = _task_parameters(task)
     updated = {k: v for (k, v) in params.items() if not (isinstance(k, str) and k.startswith('Args/'))}
     for (key, value) in normalized.items():

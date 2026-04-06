@@ -600,6 +600,25 @@ def _arg_pairs(args: Iterable[str]) -> list[tuple[str, str]]:
     return pairs
 
 
+def _pipeline_seed_bootstrap_overrides(args: Iterable[str]) -> list[str]:
+    allowed_exact = {
+        "task",
+        "run.clearml.enabled",
+        "run.clearml.execution",
+        "run.clearml.project_root",
+        "run.schema_version",
+    }
+    allowed_prefixes = (
+        "run.clearml.env.",
+    )
+    bootstrap: list[str] = []
+    for item in _normalized_args(args):
+        key, _ = item.split("=", 1)
+        if key in allowed_exact or any(key.startswith(prefix) for prefix in allowed_prefixes):
+            bootstrap.append(item)
+    return bootstrap
+
+
 def _pipeline_seed_script_mismatches(spec: Any, script: Mapping[str, Any]) -> list[str]:
     raw = clearml_script_mismatches(spec, script)
     if isinstance(raw, bool):
@@ -1106,6 +1125,7 @@ def _restore_pipeline_seed_task(
     *,
     resolved: ResolvedTemplateSpec,
     seed_definition: Mapping[str, Any],
+    args: Iterable[str] | None = None,
 ) -> None:
     seed_defaults = _seed_runtime_defaults(seed_definition)
     sections = build_pipeline_visible_hyperparameter_sections(
@@ -1115,7 +1135,7 @@ def _restore_pipeline_seed_task(
     )
     replace_clearml_task_hyperparameters(
         task_id,
-        args=[],
+        args=list(args or []),
         sections=sections,
     )
     replace_clearml_task_tags(task_id, resolved.expected_tags)
@@ -1233,6 +1253,7 @@ def _promote_materialized_pipeline_seed(
         promoted_task_id,
         resolved=resolved,
         seed_definition=seed_definition,
+        args=[],
     )
     _copy_task_configuration_if_present(
         source_task_id,
@@ -1272,7 +1293,15 @@ def _materialize_pipeline_seed(
     seed_definition: Mapping[str, Any],
 ) -> str:
     reset_clearml_task(task_id, force=True)
-    _restore_pipeline_seed_task(task_id, resolved=resolved, seed_definition=seed_definition)
+    _restore_pipeline_seed_task(
+        task_id,
+        resolved=resolved,
+        seed_definition=seed_definition,
+        args=[
+            *resolved.entry_args,
+            *_pipeline_seed_bootstrap_overrides(resolved.overrides),
+        ],
+    )
     set_clearml_task_configuration(
         task_id,
         dict(seed_definition.get("operator_inputs") or {}),
@@ -1397,7 +1426,12 @@ def _upsert_pipeline_seed(
     cfg = resolved.cfg
     if cfg is None:
         raise RuntimeError(f"Resolved config is missing for pipeline seed {spec.name}.")
-    arg_pairs = _arg_pairs(resolved.overrides)
+    arg_pairs = _arg_pairs(
+        [
+            *resolved.entry_args,
+            *_pipeline_seed_bootstrap_overrides(resolved.overrides),
+        ]
+    )
     existing = lock_templates.get(spec.name) if isinstance(lock_templates, dict) else None
     existing_id = existing.get("task_id") if isinstance(existing, dict) else None
     task_id: str | None = None

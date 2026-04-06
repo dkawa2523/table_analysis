@@ -2298,6 +2298,34 @@ def _assert_manage_templates_pipeline_properties_follow_resolved_context() -> No
         )
 
 
+def _assert_pipeline_seed_bootstrap_overrides_keep_only_internal_args() -> None:
+    actual = manage_templates_module._pipeline_seed_bootstrap_overrides(
+        [
+            "task=pipeline",
+            "run.clearml.enabled=true",
+            "run.clearml.execution=pipeline_controller",
+            "run.clearml.env.bootstrap=true",
+            "run.clearml.env.uv.frozen=true",
+            "run.clearml.project_root=LOCAL",
+            "run.schema_version=v1",
+            "run.usecase_id=TabularAnalysis",
+            "data.raw_dataset_id=REPLACE_WITH_EXISTING_RAW_DATASET_ID",
+            "pipeline.selection.enabled_model_variants=[ridge,lgbm]",
+        ]
+    )
+    expected = [
+        "task=pipeline",
+        "run.clearml.enabled=true",
+        "run.clearml.execution=pipeline_controller",
+        "run.clearml.env.bootstrap=true",
+        "run.clearml.env.uv.frozen=true",
+        "run.clearml.project_root=LOCAL",
+        "run.schema_version=v1",
+    ]
+    if actual != expected:
+        raise AssertionError(f"pipeline seed bootstrap args must drop operator-facing overrides: {actual}")
+
+
 def _assert_lock_context_payload_keeps_usecase_id() -> None:
     ctx = manage_templates_module.PlanContext(
         project_root="LOCAL",
@@ -3040,6 +3068,7 @@ def main() -> int:
     _assert_pipeline_run_task_identity_moves_seed_clone_to_run_project()
     _assert_pipeline_run_summary_tracks_actual_job_statuses()
     _assert_manage_templates_pipeline_properties_follow_resolved_context()
+    _assert_pipeline_seed_bootstrap_overrides_keep_only_internal_args()
     _assert_lock_context_payload_keeps_usecase_id()
     _assert_live_plan_context_prefers_lock_project_root()
     _assert_live_plan_context_fails_on_layout_drift()
