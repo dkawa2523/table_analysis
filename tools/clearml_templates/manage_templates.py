@@ -35,14 +35,13 @@ from tabular_analysis.clearml.live_cleanup import (
     cleanup_stale_pipeline_tasks as _cleanup_stale_pipeline_tasks_live,
     deprecate_pipeline_task as _deprecate_pipeline_task,
 )
-from tabular_analysis.clearml.hparams import split_values_by_sections
-from tabular_analysis.common.hydra_overrides import overrides_to_args
 from tabular_analysis.common.hydra_config import compose_config
 from tabular_analysis.processes.pipeline_support import (
     PIPELINE_RAW_DATASET_ID_SENTINEL,
     apply_pipeline_profile_defaults,
     build_pipeline_step_specs,
     build_pipeline_ui_parameter_whitelist,
+    build_pipeline_visible_hyperparameter_sections,
     normalize_pipeline_profile,
     resolve_pipeline_controller_queue_name,
 )
@@ -1106,10 +1105,14 @@ def _restore_pipeline_seed_task(
     seed_definition: Mapping[str, Any],
 ) -> None:
     seed_defaults = _seed_runtime_defaults(seed_definition)
-    (sections, _, runtime_args) = split_values_by_sections(seed_defaults, cfg=resolved.cfg)
+    sections = build_pipeline_visible_hyperparameter_sections(
+        seed_defaults,
+        pipeline_profile=resolved.spec.name,
+        cfg=resolved.cfg,
+    )
     replace_clearml_task_hyperparameters(
         task_id,
-        args=overrides_to_args(runtime_args),
+        args=[],
         sections=sections,
     )
     replace_clearml_task_tags(task_id, resolved.expected_tags)

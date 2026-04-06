@@ -225,6 +225,29 @@ def build_pipeline_operator_inputs(
     return payload
 
 
+def build_pipeline_visible_hyperparameter_sections(
+    defaults: Mapping[str, Any],
+    *,
+    pipeline_profile: str,
+    cfg: Any | None = None,
+) -> dict[str, dict[str, Any]]:
+    from ..clearml.hparams import split_values_by_sections
+
+    editable = extract_pipeline_editable_defaults(defaults, pipeline_profile=pipeline_profile)
+    (sections, _, remaining) = split_values_by_sections(editable, cfg=cfg)
+    leftover = {
+        str(key): value
+        for (key, value) in dict(remaining).items()
+        if value is not None
+    }
+    if leftover:
+        raise ValueError(
+            "Visible pipeline hyperparameters must be fully represented by named sections; "
+            f"leftover args were found: {sorted(leftover)}"
+        )
+    return sections
+
+
 def is_pipeline_placeholder_raw_dataset_id(value: Any) -> bool:
     return _normalize_str(value) == PIPELINE_RAW_DATASET_ID_SENTINEL
 
@@ -920,6 +943,7 @@ __all__ = [
     'PipelineProfileSpec',
     'PipelineStepSpec',
     'build_pipeline_plan',
+    'build_pipeline_visible_hyperparameter_sections',
     'build_pipeline_run_summary_payload',
     'build_pipeline_operator_inputs',
     'build_pipeline_step_parameter_override_payload',

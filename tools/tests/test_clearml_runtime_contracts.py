@@ -30,6 +30,7 @@ from tabular_analysis.processes.infer_support import resolve_batch_execution_mod
 from tabular_analysis.processes.pipeline_support import (
     PIPELINE_RAW_DATASET_ID_SENTINEL,
     apply_pipeline_profile_defaults,
+    build_pipeline_visible_hyperparameter_sections,
     build_pipeline_template_defaults,
     resolve_pipeline_profile,
     resolve_pipeline_run_flags,
@@ -811,6 +812,52 @@ def _assert_replace_clearml_task_hyperparameters_drops_unexpected_sections() -> 
         raise AssertionError(f"Args must be canonical after full replacement: {updated}")
 
 
+def _assert_replace_clearml_task_hyperparameters_drops_empty_args_section() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.payload = {
+                "Args": {
+                    "run.usecase_id": "old_usecase",
+                    "data.raw_dataset_id": "old_dataset",
+                },
+                "dataset": {"data": {"raw_dataset_id": "old_dataset"}},
+                "inputs": {"run": {"usecase_id": "old_usecase"}},
+            }
+            self.updated: dict[str, object] | None = None
+
+        def get_parameters_as_dict(self, cast: bool = False) -> dict[str, object]:
+            return dict(self.payload)
+
+        def set_parameters_as_dict(self, payload: dict[str, object]) -> None:
+            self.updated = dict(payload)
+            self.payload = dict(payload)
+
+    fake = _FakeTask()
+    original = task_ops_module._get_clearml_task
+    try:
+        task_ops_module._get_clearml_task = lambda _task_id: fake
+        changed = task_ops_module.replace_clearml_task_hyperparameters(
+            "task-123",
+            args=[],
+            sections={
+                "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+                "inputs": {"run": {"usecase_id": "demo"}},
+            },
+        )
+    finally:
+        task_ops_module._get_clearml_task = original
+    if not changed:
+        raise AssertionError("replace_clearml_task_hyperparameters should replace stale Args with section-only payloads")
+    updated = fake.updated or {}
+    if "Args" in updated:
+        raise AssertionError(f"empty Args should be removed entirely from the payload: {updated}")
+    if updated != {
+        "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+        "inputs": {"run": {"usecase_id": "demo"}},
+    }:
+        raise AssertionError(f"section-only payload should remain canonical: {updated}")
+
+
 def _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads() -> None:
     class _FakeTask:
         def __init__(self) -> None:
@@ -1032,6 +1079,74 @@ def _assert_split_values_by_sections_minimizes_pipeline_args() -> None:
         }
     }:
         raise AssertionError(f"unexpected clearml section: {sections}")
+
+
+def _assert_build_pipeline_visible_hyperparameter_sections_uses_named_sections_only() -> None:
+    cfg = OmegaConf.create(
+        {
+            "run": {
+                "usecase_id": "demo_usecase",
+                "clearml": {
+                    "enabled": True,
+                    "execution": "pipeline_controller",
+                    "project_root": "LOCAL",
+                },
+            },
+            "data": {
+                "raw_dataset_id": "dataset-123",
+            },
+            "pipeline": {
+                "selection": {
+                    "enabled_preprocess_variants": ["stdscaler_ohe"],
+                    "enabled_model_variants": ["ridge", "elasticnet"],
+                },
+            },
+            "ensemble": {
+                "selection": {"enabled_methods": ["mean_topk", "weighted"]},
+                "top_k": 3,
+            },
+            "clearml": {
+                "hyperparams": OmegaConf.load(_REPO / "conf" / "clearml" / "hyperparams_sections.yaml")
+            },
+        }
+    )
+    defaults = {
+        "run.usecase_id": "demo_usecase",
+        "data.raw_dataset_id": "dataset-123",
+        "pipeline.selection.enabled_preprocess_variants": ["stdscaler_ohe"],
+        "pipeline.selection.enabled_model_variants": ["ridge", "elasticnet"],
+        "ensemble.selection.enabled_methods": ["mean_topk", "weighted"],
+        "ensemble.top_k": 3,
+        "default_queue": "default",
+        "run.clearml.execution": "pipeline_controller",
+    }
+    sections = build_pipeline_visible_hyperparameter_sections(
+        defaults,
+        pipeline_profile="train_ensemble_full",
+        cfg=cfg,
+    )
+    if set(sections) != {"inputs", "dataset", "selection", "model"}:
+        raise AssertionError(f"visible pipeline sections should be limited to operator-facing named sections: {sections}")
+    if sections["inputs"] != {"run": {"usecase_id": "demo_usecase"}}:
+        raise AssertionError(f"unexpected inputs section: {sections}")
+    if sections["dataset"] != {"data": {"raw_dataset_id": "dataset-123"}}:
+        raise AssertionError(f"unexpected dataset section: {sections}")
+    if sections["selection"] != {
+        "pipeline": {
+            "selection": {
+                "enabled_preprocess_variants": ["stdscaler_ohe"],
+                "enabled_model_variants": ["ridge", "elasticnet"],
+            }
+        },
+        "ensemble": {
+            "selection": {
+                "enabled_methods": ["mean_topk", "weighted"],
+            }
+        },
+    }:
+        raise AssertionError(f"unexpected selection section: {sections}")
+    if sections["model"] != {"ensemble": {"top_k": 3}}:
+        raise AssertionError(f"unexpected model section: {sections}")
 
 
 def _assert_entrypoint_prefers_named_sections_over_stale_args() -> None:
@@ -2803,11 +2918,13 @@ def main() -> int:
     _assert_set_clearml_task_parameters_normalizes_encoded_section_keys()
     _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads()
     _assert_replace_clearml_task_hyperparameters_drops_unexpected_sections()
+    _assert_replace_clearml_task_hyperparameters_drops_empty_args_section()
     _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads()
     _assert_hparam_sections_are_nested_for_clearml_ui()
     _assert_extract_sections_prefers_first_matching_section_from_cfg()
     _assert_connect_hyperparameters_canonicalizes_payload()
     _assert_split_values_by_sections_minimizes_pipeline_args()
+    _assert_build_pipeline_visible_hyperparameter_sections_uses_named_sections_only()
     _assert_entrypoint_prefers_named_sections_over_stale_args()
     _assert_entrypoint_ignores_internal_named_section_metadata()
     _assert_regression_model_set_contract()

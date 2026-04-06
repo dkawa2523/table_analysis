@@ -276,7 +276,9 @@ def replace_clearml_task_parameter_sections(task_id: str, sections: Mapping[str,
 def replace_clearml_task_hyperparameters(task_id: str, *, args: Iterable[str] | None=None, sections: Mapping[str, Mapping[str, Any]] | None=None) -> bool:
     desired_payload: dict[str, Any] = {}
     if args is not None:
-        desired_payload['Args'] = canonicalize_clearml_args_payload(_parse_task_args(args))
+        normalized_args = canonicalize_clearml_args_payload(_parse_task_args(args))
+        if normalized_args:
+            desired_payload['Args'] = normalized_args
     for (section, values) in dict(sections or {}).items():
         section_name = str(section)
         if not section_name or section_name == 'Args':
@@ -525,7 +527,10 @@ def reset_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
     setter = getattr(task, 'set_parameters_as_dict', None)
     if callable(setter):
         payload = dict(sections)
-        payload['Args'] = dict(normalized)
+        if normalized:
+            payload['Args'] = dict(normalized)
+        else:
+            payload.pop('Args', None)
         setter(payload)
         return True
     params = _task_parameters(task)
