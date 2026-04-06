@@ -1424,9 +1424,22 @@ def _current_pipeline_task_is_seed_materialization(task: Any, cfg: Any) -> bool:
 
 
 def _apply_current_pipeline_task_runtime_defaults(*, task: Any, cfg: Any, grid_run_id: str) -> str:
+    properties = _task_user_properties(task)
     pipeline_profile = _current_pipeline_task_profile(task, cfg)
     if pipeline_profile and not _normalize_str(_cfg_value(cfg, 'pipeline.profile')):
         _set_cfg_value(cfg, 'pipeline.profile', pipeline_profile)
+    project_root = _normalize_str(properties.get('project_root'))
+    if project_root:
+        _set_cfg_value(cfg, 'run.clearml.project_root', project_root)
+    template_set_id = _normalize_str(properties.get('template_set_id'))
+    if template_set_id:
+        _set_cfg_value(cfg, 'run.clearml.template_set_id', template_set_id)
+    schema_version = _normalize_str(properties.get('schema_version'))
+    if schema_version:
+        _set_cfg_value(cfg, 'run.schema_version', schema_version)
+    code_version = _normalize_str(properties.get('code_version'))
+    if code_version:
+        _set_cfg_value(cfg, 'run.code_version', code_version)
     if _current_pipeline_task_is_seed_materialization(task, cfg):
         seed_grid_run_id = f'seed__{normalize_pipeline_profile(pipeline_profile)}'
         _set_cfg_value(cfg, 'pipeline.plan_only', True)

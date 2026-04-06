@@ -1166,6 +1166,46 @@ def _assert_seed_materialization_detection_uses_seed_identity_fallback() -> None
         raise AssertionError("seed materialization detection should fall back to the current seed task identity when cfg project_root differs")
 
 
+def _assert_current_pipeline_task_defaults_restore_project_root_from_properties() -> None:
+    class _FakeTask:
+        name = "train_model_full"
+        tags = ["pipeline", "task_kind:seed", "pipeline_profile:train_model_full"]
+        project = "LOCAL/TabularAnalysis/.pipelines/train_model_full"
+
+        @staticmethod
+        def get_user_properties() -> dict[str, str]:
+            return {
+                "project_root": "LOCAL",
+                "template_set_id": "default",
+                "schema_version": "v1",
+                "code_version": "abc123",
+            }
+
+    cfg = OmegaConf.create(
+        {
+            "data": {"raw_dataset_id": PIPELINE_RAW_DATASET_ID_SENTINEL},
+            "pipeline": {},
+            "run": {
+                "grid_run_id": "",
+                "clearml": {"project_root": "MFG"},
+            },
+        }
+    )
+    grid_run_id = pipeline_module._apply_current_pipeline_task_runtime_defaults(
+        task=_FakeTask(),
+        cfg=cfg,
+        grid_run_id="random-grid",
+    )
+    if cfg.run.clearml.project_root != "LOCAL":
+        raise AssertionError(f"current seed task should restore project_root from task properties: {cfg}")
+    if cfg.run.clearml.template_set_id != "default":
+        raise AssertionError(f"current seed task should restore template_set_id from task properties: {cfg}")
+    if cfg.run.schema_version != "v1" or cfg.run.code_version != "abc123":
+        raise AssertionError(f"current seed task should restore schema/code version from task properties: {cfg}")
+    if grid_run_id != "seed__train_model_full":
+        raise AssertionError(f"seed materialization should normalize grid_run_id from the seed profile: {grid_run_id}")
+
+
 def _assert_entrypoint_prefers_named_sections_over_stale_args() -> None:
     class _FakeTask:
         def get_parameters_as_dict(self) -> dict[str, object]:
@@ -2943,6 +2983,7 @@ def main() -> int:
     _assert_split_values_by_sections_minimizes_pipeline_args()
     _assert_build_pipeline_visible_hyperparameter_sections_uses_named_sections_only()
     _assert_seed_materialization_detection_uses_seed_identity_fallback()
+    _assert_current_pipeline_task_defaults_restore_project_root_from_properties()
     _assert_entrypoint_prefers_named_sections_over_stale_args()
     _assert_entrypoint_ignores_internal_named_section_metadata()
     _assert_regression_model_set_contract()
