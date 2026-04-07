@@ -807,10 +807,11 @@ def _resolve_template_spec(
     expected_properties = dict(spec.properties_minimal)
     if _is_pipeline_template(spec):
         expected_properties.update(build_pipeline_template_properties(spec.name, cfg=resolved_cfg))
-        expected_properties["code_version"] = resolve_version_props(
-            resolved_cfg,
-            clearml_enabled=True,
-        ).get("code_version", "unknown")
+        if getattr(script_spec, "version_policy", None) == "pin_commit":
+            expected_properties["code_version"] = resolve_version_props(
+                resolved_cfg,
+                clearml_enabled=True,
+            ).get("code_version", "unknown")
     overrides = (
         _normalize_internal_compose_overrides([*entry_args, *spec.default_overrides])
         if _is_pipeline_template(spec)

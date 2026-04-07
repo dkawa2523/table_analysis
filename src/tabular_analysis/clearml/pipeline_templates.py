@@ -46,6 +46,11 @@ def _pipeline_seed_script_mismatches(spec: Any, script: dict[str, Any]) -> list[
     ]
 
 
+def _seed_requires_exact_code_version(spec: Any) -> bool:
+    version_policy = getattr(spec, "version_policy", None)
+    return str(version_policy or "").strip().lower() == "pin_commit"
+
+
 def _task_runtime(task: Any) -> dict[str, Any]:
     data = getattr(task, "data", None)
     runtime = getattr(data, "runtime", None) if data is not None else None
@@ -244,9 +249,11 @@ def resolve_pipeline_seed_task_id(
         task_name_override='pipeline',
         canonicalize_pipeline=False,
     )
-    expected_code_version = _normalize_str(
-        resolve_version_props(cfg, clearml_enabled=True).get("code_version")
-    ) or ""
+    expected_code_version = ""
+    if _seed_requires_exact_code_version(expected_spec):
+        expected_code_version = _normalize_str(
+            resolve_version_props(cfg, clearml_enabled=True).get("code_version")
+        ) or ""
     tasks = list_clearml_tasks_by_tags(required_tags, project_name=project_name)
     for task in tasks:
         task_tags = clearml_task_tags(task)

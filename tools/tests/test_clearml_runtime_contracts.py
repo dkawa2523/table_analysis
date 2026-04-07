@@ -327,6 +327,9 @@ def _assert_visible_pipeline_seed_lookup_rejects_stale_version() -> None:
         def get_parameters(self) -> dict[str, str]:
             return {"properties/code_version": "stale-version"}
 
+    class _FakeSpec:
+        version_policy = "pin_commit"
+
     task = _FakeTask()
 
     try:
@@ -354,7 +357,7 @@ def _assert_visible_pipeline_seed_lookup_rejects_stale_version() -> None:
         }
         pipeline_template_module.clearml_script_mismatches = lambda expected, actual: False
         pipeline_template_module.resolve_clearml_script_spec = (
-            lambda *args, **kwargs: {"entry_point": "tools/clearml_entrypoint.py"}
+            lambda *args, **kwargs: _FakeSpec()
         )
         pipeline_template_module.resolve_version_props = (
             lambda cfg, clearml_enabled=True: {"code_version": "current-version"}
@@ -2745,6 +2748,14 @@ def _assert_manage_templates_published_seed_sections_drop_redundant_named_sectio
         raise AssertionError(f"published seed payload should not keep redundant named Hyperparameters sections: {sections}")
 
 
+def _assert_manage_templates_branch_mode_seed_properties_skip_code_version() -> None:
+    _, _, resolved = _resolve_pipeline_seed_spec("train_ensemble_full")
+    if "code_version" in resolved.expected_properties:
+        raise AssertionError(
+            f"branch-mode seed properties should not require exact code_version: {resolved.expected_properties}"
+        )
+
+
 def _assert_manage_templates_published_seed_args_keep_bootstrap_and_visible_runtime_defaults() -> None:
     _, _, resolved = _resolve_pipeline_seed_spec("train_ensemble_full")
     defaults = manage_templates_module._expected_pipeline_seed_defaults(resolved)
@@ -3689,6 +3700,7 @@ def main() -> int:
     _assert_manage_templates_pipeline_properties_follow_resolved_context()
     _assert_pipeline_seed_bootstrap_overrides_keep_only_internal_args()
     _assert_manage_templates_published_seed_sections_drop_redundant_named_sections()
+    _assert_manage_templates_branch_mode_seed_properties_skip_code_version()
     _assert_manage_templates_published_seed_args_keep_bootstrap_and_visible_runtime_defaults()
     _assert_manage_templates_expected_published_seed_param_keys_cover_bootstrap_and_internal_sections()
     _assert_stale_cleanup_active_seed_scope_uses_pipeline_specs_only()
