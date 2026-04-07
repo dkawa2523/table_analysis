@@ -92,19 +92,38 @@ operator が主に見る階層:
 seed pipeline について:
 
 - `.pipelines/<profile>` にある seed pipeline は profile 固定の DAG です
-- operator が UI から編集してよいのは `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants`、必要時のみ `ensemble.selection.enabled_methods`, `ensemble.top_k` などの限定された項目だけです
-- `pipeline.model_set` や `pipeline.grid.model_variants` は fixed profile を支える内部の graph-shaping 値として扱い、通常の clone / run 導線では触りません
+- `Hyperparameters` の正本は plain dotted key の `Args` です
+- `Configuration > OperatorInputs` は grouped mirror で、実編集の正本ではありません
+- operator が通常触る主要項目は `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants`、必要時のみ `ensemble.selection.enabled_methods`, `ensemble.top_k` です
+- `pipeline.profile`, `pipeline.run_*`, `pipeline.model_set`, `pipeline.grid.*`, `data.split.*`, `eval.*` などは current seed の見える値として `Hyperparameters` に出します
+- ただし `pipeline.profile` と `pipeline.run_*` は graph-shaping 値なので、通常運用では profile に合わせた既定値のまま使います
 - seed pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、dataset 登録は rehearsal / 準備系導線に分けます
 - seed card の `Configuration > OperatorInputs` は read-only mirror で、`data.raw_dataset_id=REPLACE_WITH_EXISTING_RAW_DATASET_ID` が見えても正常です
 - 実際に編集する場所は `Hyperparameters` です
 - `run.usecase_id` を seed 既定値 `TabularAnalysis` のまま起動した場合でも、actual run では runtime が一意な `<usecase_id>` を採番し、run controller は `Pipelines/Runs/<usecase_id>`、child task は `Runs/<usecase_id>/<process_group>` に着地します
 
+### 概念名と実 UI key 名
+
+- `Configuration > OperatorInputs` は concept を nested HOCON で mirror した表示です
+- `Hyperparameters` は current seed / current `NEW RUN` では plain dotted key を表示します
+- `Args/*` が source of truth で、`run.clearml.*` などの bootstrap key も同じ section に出ます
+- `%2E` を含む key や `Args/data.raw_dataset_id` と `Args/data/raw_dataset_id` の同居が見えた場合は、historical task か deprecated task を開いている可能性が高いです
+
+| 概念名 | `Hyperparameters` の実 UI key | `OperatorInputs` の見え方 |
+| --- | --- | --- |
+| `run.usecase_id` | `run.usecase_id` | `run { usecase_id = ... }` |
+| `data.raw_dataset_id` | `data.raw_dataset_id` | `data { raw_dataset_id = ... }` |
+| `pipeline.selection.enabled_preprocess_variants` | `pipeline.selection.enabled_preprocess_variants` | `pipeline { selection { enabled_preprocess_variants = [...] } }` |
+| `pipeline.selection.enabled_model_variants` | `pipeline.selection.enabled_model_variants` | `pipeline { selection { enabled_model_variants = [...] } }` |
+| `ensemble.selection.enabled_methods` | `ensemble.selection.enabled_methods` | `ensemble { selection { enabled_methods = [...] } }` |
+| `ensemble.top_k` | `ensemble.top_k` | `ensemble { top_k = ... }` |
+
 ### operator が UI で触る面
 
 | 画面 | 用途 | 書き換えてよいか | 代表項目 |
 | --- | --- | --- | --- |
-| `Configuration > OperatorInputs` | 確認用 mirror | いいえ | `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.*`, `ensemble.selection.*` |
-| `Hyperparameters` | 実編集の正本 | はい | `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.*`, `ensemble.selection.*`, `ensemble.top_k` |
+| `Configuration > OperatorInputs` | 確認用 mirror | いいえ | `run { usecase_id }`, `data { raw_dataset_id }`, `pipeline { profile, run_*, selection, grid, model_set }`, `ensemble { selection, top_k }`, `eval { ... }` |
+| `Hyperparameters` | 実編集の正本 | はい | `run.usecase_id`, `data.raw_dataset_id`, `data.split.*`, `pipeline.selection.*`, `ensemble.selection.enabled_methods`, `ensemble.top_k`, `pipeline.profile`, `pipeline.run_*`, `pipeline.model_set`, `pipeline.grid.*`, `eval.*` |
 
 ### seed card と actual run の差
 
@@ -121,8 +140,14 @@ seed pipeline について:
 - project path / group map
   - `conf/clearml/project_layout.yaml`
   - `src/tabular_analysis/ops/clearml_identity.py`
-- seed profile / whitelist / placeholder / UI clone 正規化
+- operator UI contract / 実 UI key 対応
+  - `src/tabular_analysis/clearml/pipeline_ui_contract.py`
+- seed profile / placeholder / UI clone 正規化
   - `src/tabular_analysis/processes/pipeline_support.py`
+- seed publish / drift validate / stale cleanup
+  - `tools/clearml_templates/seed_publish.py`
+  - `tools/clearml_templates/drift_validate.py`
+  - `tools/clearml_templates/stale_cleanup.py`
 - controller orchestration
   - `src/tabular_analysis/processes/pipeline.py`
 - seed apply / validate / stale cleanup

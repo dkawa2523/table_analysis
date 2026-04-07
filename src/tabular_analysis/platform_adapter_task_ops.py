@@ -142,33 +142,56 @@ def _set_task_script_payload(task: Any, payload: Mapping[str, Any]) -> None:
         setter(**trimmed)
 
 
-def _apply_task_args(task: Any, args: Mapping[str, Any]) -> bool:
-    if not args:
+def _normalize_task_args_values(args: Mapping[str, Any]) -> dict[str, str]:
+    normalized = canonicalize_clearml_args_payload(args)
+    return {
+        str(key): '' if value is None else str(value)
+        for (key, value) in normalized.items()
+    }
+
+
+def _update_task_args(task: Any, args: Mapping[str, Any], *, replace: bool) -> bool:
+    normalized_args = _normalize_task_args_values(args)
+    if not replace and not normalized_args:
         return False
     sections = _task_parameter_sections(task)
     existing_args = dict(sections.get('Args', {})) if isinstance(sections.get('Args'), Mapping) else {}
-    updates: dict[str, str] = {}
-    for (key, value) in args.items():
-        expected = '' if value is None else str(value)
-        if existing_args.get(str(key)) != expected:
-            updates[str(key)] = expected
-    if not updates:
-        return False
+    next_args = dict(normalized_args) if replace else {**existing_args, **normalized_args}
     setter = getattr(task, 'set_parameters_as_dict', None)
     if callable(setter):
         payload = dict(sections)
-        payload['Args'] = {**existing_args, **updates}
-        setter(payload)
-        return True
+        if next_args:
+            payload['Args'] = next_args
+        else:
+            payload.pop('Args', None)
+        return _replace_task_hyperparameter_payload(task, payload)
+    updates = {
+        key: value
+        for (key, value) in normalized_args.items()
+        if replace or existing_args.get(key) != value
+    }
+    if not replace and not updates:
+        return False
     params = _task_parameters(task)
-    updated_params = dict(params)
-    for (key, value) in updates.items():
-        updated_params[f'Args/{key}'] = value
+    if replace:
+        updated_params = {k: v for (k, v) in params.items() if not (isinstance(k, str) and k.startswith('Args/'))}
+        for (key, value) in normalized_args.items():
+            updated_params[f'Args/{key}'] = value
+        if updated_params == params:
+            return False
+    else:
+        updated_params = dict(params)
+        for (key, value) in updates.items():
+            updated_params[f'Args/{key}'] = value
     setter = getattr(task, 'set_parameters', None)
     if callable(setter):
         setter(updated_params)
         return True
     raise PlatformAdapterError('ClearML Task.set_parameters is not available.')
+
+
+def _apply_task_args(task: Any, args: Mapping[str, Any]) -> bool:
+    return _update_task_args(task, args, replace=False)
 def get_clearml_task_args(task_id: str) -> dict[str, str]:
     task = _get_clearml_task(task_id)
     args_section = _task_parameter_sections(task).get('Args', {})
@@ -243,15 +266,18 @@ def _delete_task_parameters(task: Any, keys: Iterable[str]) -> None:
         return
     for key in keys:
         try:
-            deleter(str(key))
+            deleter(str(key), force=True)
+        except TypeError:
+            try:
+                deleter(str(key))
+            except _RECOVERABLE_ERRORS:
+                continue
         except _RECOVERABLE_ERRORS:
             continue
 
 
 def _replace_task_hyperparameter_payload(task: Any, desired_payload: Mapping[str, Any]) -> bool:
     current_sections = _task_parameter_sections(task)
-    if current_sections == dict(desired_payload):
-        return False
     current_flat = _task_parameters(task)
     desired_flat = _flatten_hyperparameter_payload(desired_payload)
     tracked_sections = {str(key) for key in current_sections.keys()} | {str(key) for key in desired_payload.keys()}
@@ -263,6 +289,8 @@ def _replace_task_hyperparameter_payload(task: Any, desired_payload: Mapping[str
         and key.split('/', 1)[0] in tracked_sections
         and key not in desired_flat
     ]
+    if current_sections == dict(desired_payload) and not stale_keys:
+        return False
     if stale_keys:
         _delete_task_parameters(task, stale_keys)
     setter = getattr(task, 'set_parameters_as_dict', None)
@@ -303,8 +331,7 @@ def set_clearml_task_parameters(task_id: str, parameters: Mapping[str, Any], *, 
     updated_section = payload[section]
     setter = getattr(task, 'set_parameters_as_dict', None)
     if callable(setter):
-        setter(payload)
-        return True
+        return _replace_task_hyperparameter_payload(task, payload)
     setter = getattr(task, 'set_parameter', None)
     if callable(setter):
         for (key, value) in updated_section.items():
@@ -318,15 +345,10 @@ def replace_clearml_task_parameter_sections(task_id: str, sections: Mapping[str,
         return False
     task = _get_clearml_task(task_id)
     payload = _task_parameter_sections(task)
-    changed = False
     for (section, values) in sections.items():
         section_name = str(section)
         normalized_section = canonicalize_clearml_section_payload(_normalize_parameter_input_value(values))
-        if payload.get(section_name) != normalized_section:
-            changed = True
         payload[section_name] = normalized_section
-    if not changed:
-        return False
     return _replace_task_hyperparameter_payload(task, payload)
 
 
@@ -555,55 +577,11 @@ def ensure_clearml_task_properties(task_id: str, properties: Mapping[str, Any]) 
     setter(*updates.items())
     return True
 def ensure_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
-    desired = canonicalize_clearml_args_payload(_parse_task_args(args))
-    if not desired:
-        return False
     task = _get_clearml_task(task_id)
-    sections = _task_parameter_sections(task)
-    existing_args = dict(sections.get('Args', {})) if isinstance(sections.get('Args'), Mapping) else {}
-    updates: dict[str, str] = {}
-    for (key, value) in desired.items():
-        if existing_args.get(key) != value:
-            updates[key] = value
-    if not updates:
-        return False
-    setter = getattr(task, 'set_parameters_as_dict', None)
-    if callable(setter):
-        payload = dict(sections)
-        payload['Args'] = {**existing_args, **updates}
-        setter(payload)
-        return True
-    params = _task_parameters(task)
-    updated_params = dict(params)
-    for (key, value) in updates.items():
-        updated_params[f'Args/{key}'] = value
-    setter = getattr(task, 'set_parameters', None)
-    if callable(setter):
-        setter(updated_params)
-        return True
-    raise PlatformAdapterError('ClearML Task.set_parameters is not available.')
+    return _update_task_args(task, _parse_task_args(args), replace=False)
 def reset_clearml_task_args(task_id: str, args: Iterable[str]) -> bool:
-    desired = canonicalize_clearml_args_payload(_parse_task_args(args))
     task = _get_clearml_task(task_id)
-    normalized = {str(key): '' if value is None else str(value) for (key, value) in desired.items()}
-    sections = _task_parameter_sections(task)
-    setter = getattr(task, 'set_parameters_as_dict', None)
-    if callable(setter):
-        payload = dict(sections)
-        if normalized:
-            payload['Args'] = dict(normalized)
-        else:
-            payload.pop('Args', None)
-        return _replace_task_hyperparameter_payload(task, payload)
-    params = _task_parameters(task)
-    updated = {k: v for (k, v) in params.items() if not (isinstance(k, str) and k.startswith('Args/'))}
-    for (key, value) in normalized.items():
-        updated[f'Args/{key}'] = value
-    setter = getattr(task, 'set_parameters', None)
-    if callable(setter):
-        setter(updated)
-        return True
-    raise PlatformAdapterError('ClearML Task.set_parameters is not available.')
+    return _update_task_args(task, _parse_task_args(args), replace=True)
 def apply_clearml_task_overrides(target: Any, overrides: Iterable[str]) -> bool:
     desired = _parse_task_args(overrides)
     if not desired:

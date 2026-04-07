@@ -44,7 +44,7 @@ from ..platform_adapter_task_ops import (
 )
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
 from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_run_project_name, build_runtime_properties, build_runtime_tags, build_step_run_project_name, build_project_name, resolve_clearml_metadata
-from .pipeline_support import apply_exec_policy_selection as _apply_exec_policy_selection, apply_pipeline_profile_defaults, build_disabled_selection_entries as _build_disabled_selection_entries, build_pipeline_operator_inputs, build_pipeline_run_summary_payload as _build_local_pipeline_run_summary, build_pipeline_step_parameter_override_payload as _build_pipeline_step_parameter_override_payload, build_pipeline_step_specs, build_pipeline_template_defaults as _build_pipeline_template_runtime_defaults, build_pipeline_template_params as _template_pipeline_params, build_pipeline_ui_parameter_whitelist, build_pipeline_visible_hyperparameter_sections, extract_pipeline_editable_defaults, finalize_pipeline_run_summary_payload as _finalize_pipeline_run_summary_payload, is_pipeline_placeholder_raw_dataset_id, normalize_pipeline_profile, normalize_ui_cloned_pipeline_cfg as _normalize_ui_cloned_pipeline_cfg_impl, resolve_ensemble_methods as _resolve_ensemble_methods, resolve_exec_policy_limits as _resolve_exec_policy_limits, resolve_exec_policy_queues as _resolve_exec_policy_queues, resolve_exec_policy_selection as _resolve_exec_policy_selection, resolve_pipeline_controller_queue_name as _resolve_pipeline_queue_name, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection, select_pipeline_queue as _select_queue, validate_pipeline_operator_inputs
+from .pipeline_support import apply_exec_policy_selection as _apply_exec_policy_selection, apply_pipeline_profile_defaults, build_disabled_selection_entries as _build_disabled_selection_entries, build_pipeline_operator_inputs, build_pipeline_run_summary_payload as _build_local_pipeline_run_summary, build_pipeline_step_parameter_override_payload as _build_pipeline_step_parameter_override_payload, build_pipeline_step_specs, build_pipeline_template_defaults as _build_pipeline_template_runtime_defaults, build_pipeline_template_params as _template_pipeline_params, build_pipeline_ui_parameter_whitelist, build_pipeline_visible_hyperparameter_args, extract_pipeline_editable_defaults, finalize_pipeline_run_summary_payload as _finalize_pipeline_run_summary_payload, is_pipeline_placeholder_raw_dataset_id, normalize_pipeline_profile, normalize_ui_cloned_pipeline_cfg as _normalize_ui_cloned_pipeline_cfg_impl, resolve_ensemble_methods as _resolve_ensemble_methods, resolve_exec_policy_limits as _resolve_exec_policy_limits, resolve_exec_policy_queues as _resolve_exec_policy_queues, resolve_exec_policy_selection as _resolve_exec_policy_selection, resolve_pipeline_controller_queue_name as _resolve_pipeline_queue_name, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection, select_pipeline_queue as _select_queue, validate_pipeline_operator_inputs
 from ..reporting.pipeline_report import build_pipeline_report_bundle
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 _STAGE_BY_TASK = {'dataset_register': '01_dataset_register', 'preprocess': '02_preprocess', 'train_model': '03_train_model', 'train_ensemble': '04_train_ensemble', 'infer': '04_infer', 'leaderboard': '05_leaderboard'}
@@ -1477,6 +1477,97 @@ def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str, allow_
     )
 
 
+def _build_visible_pipeline_ui_projection(*, cfg: Any, task: Any | None = None) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    def _collect_bootstrap_defaults() -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+
+        def _walk(prefix: str, value: Any) -> None:
+            if isinstance(value, Mapping):
+                for (key, item) in value.items():
+                    text = _normalize_str(key)
+                    if not text:
+                        continue
+                    next_prefix = f'{prefix}.{text}' if prefix else text
+                    _walk(next_prefix, item)
+                return
+            if prefix:
+                payload[prefix] = value
+
+        task_name = _normalize_str(_cfg_value(cfg, 'task.name')) or _normalize_str(_cfg_value(cfg, 'task'))
+        if task_name:
+            payload['task'] = task_name
+        for key in (
+            'run.clearml.enabled',
+            'run.clearml.execution',
+            'run.clearml.project_root',
+            'run.schema_version',
+        ):
+            value = _cfg_value(cfg, key)
+            if value is not None:
+                payload[key] = value
+        _walk('run.clearml.env', _cfg_value(cfg, 'run.clearml.env'))
+        return payload
+
+    pipeline_profile = _normalize_str(_cfg_value(cfg, 'pipeline.profile'))
+    if not pipeline_profile and task is not None:
+        pipeline_profile = _current_pipeline_task_profile(task, cfg)
+    normalized_profile = normalize_pipeline_profile(pipeline_profile)
+    editable_defaults = extract_pipeline_editable_defaults(
+        {
+            key: _cfg_value(cfg, key)
+            for key in build_pipeline_ui_parameter_whitelist(normalized_profile)
+        },
+        pipeline_profile=normalized_profile,
+    )
+    editable_defaults = {
+        **_collect_bootstrap_defaults(),
+        **editable_defaults,
+    }
+    metadata = dict(
+        resolve_clearml_metadata(
+            cfg,
+            stage=getattr(getattr(cfg, 'task', None), 'stage', '99_pipeline'),
+            task_name='pipeline',
+            clearml_enabled=True,
+        )
+    )
+    metadata['project_name'] = build_pipeline_run_project_name(
+        _normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG',
+        _normalize_str(_cfg_value(cfg, 'run.usecase_id')) or 'unknown',
+        layout=_cfg_value(cfg, 'run.clearml.project_layout'),
+        cfg=cfg,
+    )
+    return (normalized_profile, editable_defaults, metadata)
+
+
+def _synchronize_visible_pipeline_task_ui(*, target: Any, task_id: str, cfg: Any) -> None:
+    pipeline_profile, editable_defaults, metadata = _build_visible_pipeline_ui_projection(
+        cfg=cfg,
+        task=target,
+    )
+    replace_clearml_task_object_hyperparameters(
+        target,
+        args=build_pipeline_visible_hyperparameter_args(
+            editable_defaults,
+            pipeline_profile=pipeline_profile,
+            include_bootstrap=True,
+        ),
+        sections={},
+    )
+    set_clearml_task_configuration(
+        task_id,
+        build_pipeline_operator_inputs(editable_defaults, pipeline_profile=pipeline_profile),
+        name='OperatorInputs',
+        description='Editable operator-facing pipeline inputs.',
+    )
+    _apply_pipeline_run_task_identity(
+        task_id=task_id,
+        cfg=cfg,
+        pipeline_profile=pipeline_profile,
+        metadata=metadata,
+    )
+
+
 def _assert_visible_pipeline_graph_contract(*, cfg: Any, plan: Mapping[str, Any], pipeline_profile: str) -> None:
     expected_cfg = apply_pipeline_profile_defaults(
         _clone_cfg_for_runtime_overrides(cfg),
@@ -1547,23 +1638,23 @@ def _apply_visible_pipeline_run_defaults(*, target: Any, task_id: str, cfg: Any,
         pipeline_profile=contract.pipeline_profile,
         pipeline_task_id=task_id,
     )
-    sections = build_pipeline_visible_hyperparameter_sections(
+    args = build_pipeline_visible_hyperparameter_args(
         runtime_defaults,
         pipeline_profile=contract.pipeline_profile,
-        cfg=cfg,
+        include_bootstrap=True,
     )
     target_task_id = clearml_task_id(target) if target is not None else None
     if target is not None and target_task_id and str(target_task_id) == str(task_id):
         replace_clearml_task_object_hyperparameters(
             target,
-            args=[],
-            sections=sections,
+            args=args,
+            sections={},
         )
     else:
         replace_clearml_task_hyperparameters(
             task_id,
-            args=[],
-            sections=sections,
+            args=args,
+            sections={},
         )
     set_clearml_task_configuration(
         task_id,
@@ -1606,80 +1697,100 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
     if ctx.task is None:
         raise RuntimeError('Current pipeline controller task is missing.')
     is_seed_materialization = _current_pipeline_task_is_seed_materialization(ctx.task, cfg)
-    contract = _resolve_visible_pipeline_run_contract(
-        cfg=cfg,
-        grid_run_id=grid_run_id,
-        allow_placeholder_raw_dataset=is_seed_materialization,
-    )
     pipeline_task_id = clearml_task_id(ctx.task)
-    runtime_defaults = _build_pipeline_template_runtime_defaults(
-        cfg=cfg,
-        plan=contract.plan,
-        grid_run_id=grid_run_id,
-        pipeline_profile=contract.pipeline_profile,
-        pipeline_task_id=pipeline_task_id,
-    )
     if pipeline_task_id and not is_seed_materialization:
-        runtime_defaults = _apply_visible_pipeline_run_defaults(target=ctx.task, task_id=pipeline_task_id, cfg=cfg, contract=contract, grid_run_id=grid_run_id)
-    controller = load_pipeline_controller_from_task(source_task=ctx.task)
-    default_execution_queue = (
-        _normalize_str(contract.plan.get('queues', {}).get('default'))
-        or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
-        or 'default'
-    )
-    _reseed_loaded_pipeline_controller_runtime(
-        controller,
-        runtime_defaults=runtime_defaults,
-        default_execution_queue=default_execution_queue,
-        preserve_nodes=False,
-    )
-    _add_clearml_pipeline_steps(
-        cfg=cfg,
-        plan=contract.plan,
-        steps=contract.plan['steps'],
-        controller=controller,
-        use_templates=True,
-        run_overrides=contract.plan['run_overrides'],
-        data_overrides=contract.plan['data_overrides'],
-        downstream_data_overrides=contract.plan['downstream_data_overrides'],
-        eval_overrides=contract.plan['eval_overrides'],
-    )
-    if not getattr(controller, '_nodes', None):
-        raise RuntimeError(
-            'Current ClearML task does not contain a serialized pipeline graph. '
-            'Clone a visible pipeline seed from the Pipelines tab or run manage_templates.py --apply.'
+        try:
+            _synchronize_visible_pipeline_task_ui(
+                target=ctx.task,
+                task_id=pipeline_task_id,
+                cfg=cfg,
+            )
+        except Exception as exc:
+            print(f'[warn] failed to normalize visible pipeline task UI before validation: {exc}')
+    try:
+        contract = _resolve_visible_pipeline_run_contract(
+            cfg=cfg,
+            grid_run_id=grid_run_id,
+            allow_placeholder_raw_dataset=is_seed_materialization,
         )
-    if contract.plan['plan_only']:
-        _serialize_pipeline_controller_graph(controller, allow_create_draft=False)
-        summary = _build_local_pipeline_run_summary(
+        runtime_defaults = _build_pipeline_template_runtime_defaults(
             cfg=cfg,
             plan=contract.plan,
             grid_run_id=grid_run_id,
-            dataset_register_ref=None,
-            preprocess_refs=[],
-            train_refs=[],
-            train_ensemble_refs=[],
-            leaderboard_ref=None,
-            infer_ref=None,
-            executed_jobs=0,
+            pipeline_profile=contract.pipeline_profile,
+            pipeline_task_id=pipeline_task_id,
         )
+        if pipeline_task_id and not is_seed_materialization:
+            runtime_defaults = _apply_visible_pipeline_run_defaults(target=ctx.task, task_id=pipeline_task_id, cfg=cfg, contract=contract, grid_run_id=grid_run_id)
+        controller = load_pipeline_controller_from_task(source_task=ctx.task)
+        default_execution_queue = (
+            _normalize_str(contract.plan.get('queues', {}).get('default'))
+            or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
+            or 'default'
+        )
+        _reseed_loaded_pipeline_controller_runtime(
+            controller,
+            runtime_defaults=runtime_defaults,
+            default_execution_queue=default_execution_queue,
+            preserve_nodes=False,
+        )
+        _add_clearml_pipeline_steps(
+            cfg=cfg,
+            plan=contract.plan,
+            steps=contract.plan['steps'],
+            controller=controller,
+            use_templates=True,
+            run_overrides=contract.plan['run_overrides'],
+            data_overrides=contract.plan['data_overrides'],
+            downstream_data_overrides=contract.plan['downstream_data_overrides'],
+            eval_overrides=contract.plan['eval_overrides'],
+        )
+        if not getattr(controller, '_nodes', None):
+            raise RuntimeError(
+                'Current ClearML task does not contain a serialized pipeline graph. '
+                'Clone a visible pipeline seed from the Pipelines tab or run manage_templates.py --apply.'
+            )
+        if contract.plan['plan_only']:
+            _serialize_pipeline_controller_graph(controller, allow_create_draft=False)
+            summary = _build_local_pipeline_run_summary(
+                cfg=cfg,
+                plan=contract.plan,
+                grid_run_id=grid_run_id,
+                dataset_register_ref=None,
+                preprocess_refs=[],
+                train_refs=[],
+                train_ensemble_refs=[],
+                leaderboard_ref=None,
+                infer_ref=None,
+                executed_jobs=0,
+            )
+            summary['pipeline_task_id'] = pipeline_task_id
+            summary['pipeline_profile'] = contract.pipeline_profile
+            return _finalize_pipeline_run_summary(cfg, summary, status='planned')
+        starter = getattr(controller, 'start_locally', None)
+        if not callable(starter):
+            raise AttributeError('Pipeline controller does not support start_locally().')
+        starter(run_pipeline_steps_locally=False)
+        waiter = getattr(controller, 'wait', None)
+        if callable(waiter):
+            waiter()
+        step_task_ids = _collect_step_task_ids(controller)
+        executed_jobs = len(contract.plan['steps']['train']) + len(contract.plan['steps']['train_ensemble'])
+        (dataset_register_ref, preprocess_refs, train_refs, train_ensemble_refs, leaderboard_ref, infer_ref) = _build_clearml_pipeline_refs(plan_only=contract.plan['plan_only'], steps=contract.plan['steps'], step_task_ids=step_task_ids)
+        summary = _build_local_pipeline_run_summary(cfg=cfg, plan=contract.plan, grid_run_id=grid_run_id, dataset_register_ref=dataset_register_ref, preprocess_refs=preprocess_refs, train_refs=train_refs, train_ensemble_refs=train_ensemble_refs, leaderboard_ref=leaderboard_ref, infer_ref=infer_ref, executed_jobs=executed_jobs)
         summary['pipeline_task_id'] = pipeline_task_id
         summary['pipeline_profile'] = contract.pipeline_profile
-        return _finalize_pipeline_run_summary(cfg, summary, status='planned')
-    starter = getattr(controller, 'start_locally', None)
-    if not callable(starter):
-        raise AttributeError('Pipeline controller does not support start_locally().')
-    starter(run_pipeline_steps_locally=False)
-    waiter = getattr(controller, 'wait', None)
-    if callable(waiter):
-        waiter()
-    step_task_ids = _collect_step_task_ids(controller)
-    executed_jobs = len(contract.plan['steps']['train']) + len(contract.plan['steps']['train_ensemble'])
-    (dataset_register_ref, preprocess_refs, train_refs, train_ensemble_refs, leaderboard_ref, infer_ref) = _build_clearml_pipeline_refs(plan_only=contract.plan['plan_only'], steps=contract.plan['steps'], step_task_ids=step_task_ids)
-    summary = _build_local_pipeline_run_summary(cfg=cfg, plan=contract.plan, grid_run_id=grid_run_id, dataset_register_ref=dataset_register_ref, preprocess_refs=preprocess_refs, train_refs=train_refs, train_ensemble_refs=train_ensemble_refs, leaderboard_ref=leaderboard_ref, infer_ref=infer_ref, executed_jobs=executed_jobs)
-    summary['pipeline_task_id'] = pipeline_task_id
-    summary['pipeline_profile'] = contract.pipeline_profile
-    return _finalize_pipeline_run_summary(cfg, summary)
+        return _finalize_pipeline_run_summary(cfg, summary)
+    finally:
+        if pipeline_task_id and not is_seed_materialization:
+            try:
+                _synchronize_visible_pipeline_task_ui(
+                    target=ctx.task,
+                    task_id=pipeline_task_id,
+                    cfg=cfg,
+                )
+            except Exception as exc:
+                print(f'[warn] failed to normalize visible pipeline task UI after execution: {exc}')
 def _build_clearml_pipeline_refs(*, plan_only: bool, steps: Mapping[str, Any], step_task_ids: Mapping[str, str]) -> tuple[Any, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], Any, Any]:
     dataset_register_ref = None
     preprocess_refs: list[dict[str, Any]] = []

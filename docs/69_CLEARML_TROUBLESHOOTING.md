@@ -43,7 +43,7 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 ### Hyperparameters に `%2E` が見える
 
 - 古い historical run では ClearML が保存した cloned payload の都合で `%2E` を含む key が残ることがある
-- current seed と新規 `NEW RUN` は nested section を正本にし、encoded key を section sync で置き換える
+- current seed と新規 `NEW RUN` は plain dotted key を正本にし、encoded key を canonical `Args` へ置き換える
 - current task の source-of-truth は引き続き `Args/*` だが、operator が見るべき section UI では `%2E` を増やさない
 - 古い run の表示ノイズは current runtime failure とは限らない
 

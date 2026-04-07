@@ -18,19 +18,21 @@ for candidate in (_REPO, _SRC, _PLATFORM_SRC):
 
 from tabular_analysis.clearml import pipeline_templates as pipeline_template_module
 from tabular_analysis.clearml import hparams as clearml_hparams_module
+from tabular_analysis.clearml import pipeline_ui_contract as pipeline_ui_contract_module
 from tabular_analysis.clearml import templates as template_module
 from tabular_analysis.common.clearml_bootstrap import resolve_required_uv_extras
 from tabular_analysis.common.clearml_config import read_clearml_api_section
 from tabular_analysis.ops import clearml_identity as clearml_identity_module
 from tabular_analysis import platform_adapter_task_context as task_context_module
 from tabular_analysis import platform_adapter_task_ops as task_ops_module
+from tabular_analysis import platform_adapter_task_query as task_query_module
 from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.reporting import pipeline_report as pipeline_report_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
 from tabular_analysis.processes.pipeline_support import (
     PIPELINE_RAW_DATASET_ID_SENTINEL,
     apply_pipeline_profile_defaults,
-    build_pipeline_visible_hyperparameter_sections,
+    build_pipeline_visible_hyperparameter_args,
     build_pipeline_template_defaults,
     resolve_pipeline_profile,
     resolve_pipeline_run_flags,
@@ -38,6 +40,7 @@ from tabular_analysis.processes.pipeline_support import (
 )
 from tabular_analysis.registry.models import list_model_variants
 from tools.clearml_templates import manage_templates as manage_templates_module
+from tools.clearml_templates import stale_cleanup as stale_cleanup_module
 from tools.rehearsal import run_pipeline_v2 as rehearsal_module
 from tools.clearml_entrypoint import (
     _extract_cli_keys,
@@ -706,6 +709,33 @@ def _assert_set_clearml_task_parameters_normalizes_encoded_section_keys() -> Non
         raise AssertionError(f"target section update must still be canonical nested payload: {updated}")
 
 
+def _assert_task_query_flattens_recursive_parameter_sections() -> None:
+    class _FakeTask:
+        def get_parameters_as_dict(self) -> dict[str, object]:
+            return {
+                "dataset": {
+                    "data": {
+                        "raw_dataset_id": "dataset-123",
+                    },
+                },
+                "selection": {
+                    "pipeline": {
+                        "selection": {
+                            "enabled_model_variants": ["ridge", "lgbm"],
+                        },
+                    },
+                },
+            }
+
+    flat = task_query_module._task_parameters(_FakeTask())
+    expected = {
+        "dataset/data/raw_dataset_id": "dataset-123",
+        "selection/pipeline/selection/enabled_model_variants": ["ridge", "lgbm"],
+    }
+    if flat != expected:
+        raise AssertionError(f"_task_parameters must flatten nested parameter sections recursively: {flat}")
+
+
 def _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads() -> None:
     class _FakeTask:
         def __init__(self) -> None:
@@ -756,6 +786,61 @@ def _assert_replace_clearml_task_parameter_sections_replaces_stale_section_paylo
         raise AssertionError(f"dataset section must be fully replaced with the normalized payload: {updated}")
     if selection_section != {"pipeline": {"selection": {"enabled_model_variants": ["lgbm", "xgboost"]}}}:
         raise AssertionError(f"selection section must be fully replaced with the normalized payload: {updated}")
+
+
+def _assert_replace_clearml_task_parameter_sections_cleans_stale_raw_keys_without_semantic_changes() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.payload = {
+                "dataset": {
+                    "data": {"raw_dataset_id": "dataset-123"},
+                },
+            }
+            self.params = {
+                "dataset/data%2Eraw_dataset_id": "dataset-123",
+                "dataset/data/raw_dataset_id": "dataset-123",
+            }
+            self.deleted: list[tuple[str, bool]] = []
+            self.updated: dict[str, object] | None = None
+
+        def get_parameters(self) -> dict[str, object]:
+            return dict(self.params)
+
+        def get_parameters_as_dict(self, cast: bool = False) -> dict[str, object]:
+            return dict(self.payload)
+
+        def delete_parameter(self, name: str, force: bool = False) -> bool:
+            self.deleted.append((name, force))
+            self.params.pop(name, None)
+            return True
+
+        def set_parameters_as_dict(self, payload: dict[str, object]) -> None:
+            self.updated = dict(payload)
+            self.payload = dict(payload)
+            self.params = {
+                "dataset/data/raw_dataset_id": "dataset-123",
+            }
+
+    fake = _FakeTask()
+    originals = {
+        "_get_clearml_task": task_ops_module._get_clearml_task,
+    }
+    try:
+        task_ops_module._get_clearml_task = lambda _task_id: fake
+        changed = task_ops_module.replace_clearml_task_parameter_sections(
+            "task-123",
+            {
+                "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+            },
+        )
+    finally:
+        task_ops_module._get_clearml_task = originals["_get_clearml_task"]
+    if not changed:
+        raise AssertionError("replace_clearml_task_parameter_sections should clean stale raw keys even without semantic changes")
+    if fake.deleted != [("dataset/data%2Eraw_dataset_id", True)]:
+        raise AssertionError(f"stale encoded dataset key must be deleted forcefully: {fake.deleted}")
+    if fake.updated != {"dataset": {"data": {"raw_dataset_id": "dataset-123"}}}:
+        raise AssertionError(f"canonical dataset payload must be re-applied after cleanup: {fake.updated}")
 
 
 def _assert_replace_clearml_task_hyperparameters_drops_unexpected_sections() -> None:
@@ -856,6 +941,69 @@ def _assert_replace_clearml_task_hyperparameters_drops_empty_args_section() -> N
         "inputs": {"run": {"usecase_id": "demo"}},
     }:
         raise AssertionError(f"section-only payload should remain canonical: {updated}")
+
+
+def _assert_replace_clearml_task_hyperparameters_cleans_stale_raw_keys_without_semantic_changes() -> None:
+    class _FakeTask:
+        def __init__(self) -> None:
+            self.payload = {
+                "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+                "inputs": {"run": {"usecase_id": "demo"}},
+            }
+            self.params = {
+                "dataset/data%2Eraw_dataset_id": "dataset-123",
+                "dataset/data/raw_dataset_id": "dataset-123",
+                "inputs/run%2Eusecase_id": "demo",
+                "inputs/run/usecase_id": "demo",
+            }
+            self.deleted: list[tuple[str, bool]] = []
+            self.updated: dict[str, object] | None = None
+
+        def get_parameters(self) -> dict[str, object]:
+            return dict(self.params)
+
+        def get_parameters_as_dict(self, cast: bool = False) -> dict[str, object]:
+            return dict(self.payload)
+
+        def delete_parameter(self, name: str, force: bool = False) -> bool:
+            self.deleted.append((name, force))
+            self.params.pop(name, None)
+            return True
+
+        def set_parameters_as_dict(self, payload: dict[str, object]) -> None:
+            self.updated = dict(payload)
+            self.payload = dict(payload)
+            self.params = {
+                "dataset/data/raw_dataset_id": "dataset-123",
+                "inputs/run/usecase_id": "demo",
+            }
+
+    fake = _FakeTask()
+    original = task_ops_module._get_clearml_task
+    try:
+        task_ops_module._get_clearml_task = lambda _task_id: fake
+        changed = task_ops_module.replace_clearml_task_hyperparameters(
+            "task-123",
+            args=[],
+            sections={
+                "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+                "inputs": {"run": {"usecase_id": "demo"}},
+            },
+        )
+    finally:
+        task_ops_module._get_clearml_task = original
+    if not changed:
+        raise AssertionError("replace_clearml_task_hyperparameters should clean stale raw keys even without semantic changes")
+    if fake.deleted != [
+        ("dataset/data%2Eraw_dataset_id", True),
+        ("inputs/run%2Eusecase_id", True),
+    ]:
+        raise AssertionError(f"stale encoded keys must be deleted forcefully: {fake.deleted}")
+    if fake.updated != {
+        "dataset": {"data": {"raw_dataset_id": "dataset-123"}},
+        "inputs": {"run": {"usecase_id": "demo"}},
+    }:
+        raise AssertionError(f"canonical section payload must be re-applied after cleanup: {fake.updated}")
 
 
 def _assert_replace_clearml_task_object_hyperparameters_drops_empty_args_section() -> None:
@@ -1116,72 +1264,97 @@ def _assert_split_values_by_sections_minimizes_pipeline_args() -> None:
         raise AssertionError(f"unexpected clearml section: {sections}")
 
 
-def _assert_build_pipeline_visible_hyperparameter_sections_uses_named_sections_only() -> None:
-    cfg = OmegaConf.create(
-        {
-            "run": {
-                "usecase_id": "demo_usecase",
-                "clearml": {
-                    "enabled": True,
-                    "execution": "pipeline_controller",
-                    "project_root": "LOCAL",
-                },
-            },
-            "data": {
-                "raw_dataset_id": "dataset-123",
-            },
-            "pipeline": {
-                "selection": {
-                    "enabled_preprocess_variants": ["stdscaler_ohe"],
-                    "enabled_model_variants": ["ridge", "elasticnet"],
-                },
-            },
-            "ensemble": {
-                "selection": {"enabled_methods": ["mean_topk", "weighted"]},
-                "top_k": 3,
-            },
-            "clearml": {
-                "hyperparams": OmegaConf.load(_REPO / "conf" / "clearml" / "hyperparams_sections.yaml")
-            },
-        }
-    )
+def _assert_build_pipeline_visible_hyperparameter_args_keeps_bootstrap_and_visible_dotted_keys() -> None:
     defaults = {
+        "task": "pipeline",
+        "run.clearml.enabled": True,
         "run.usecase_id": "demo_usecase",
         "data.raw_dataset_id": "dataset-123",
+        "data.target_column": "target",
+        "pipeline.profile": "train_ensemble_full",
+        "pipeline.run_preprocess": True,
         "pipeline.selection.enabled_preprocess_variants": ["stdscaler_ohe"],
         "pipeline.selection.enabled_model_variants": ["ridge", "elasticnet"],
         "ensemble.selection.enabled_methods": ["mean_topk", "weighted"],
         "ensemble.top_k": 3,
         "default_queue": "default",
         "run.clearml.execution": "pipeline_controller",
+        "run.clearml.project_root": "LOCAL",
+        "run.schema_version": "v1",
     }
-    sections = build_pipeline_visible_hyperparameter_sections(
+    args = build_pipeline_visible_hyperparameter_args(
         defaults,
         pipeline_profile="train_ensemble_full",
-        cfg=cfg,
+        include_bootstrap=True,
     )
-    if set(sections) != {"inputs", "dataset", "selection", "model"}:
-        raise AssertionError(f"visible pipeline sections should be limited to operator-facing named sections: {sections}")
-    if sections["inputs"] != {"run": {"usecase_id": "demo_usecase"}}:
-        raise AssertionError(f"unexpected inputs section: {sections}")
-    if sections["dataset"] != {"data": {"raw_dataset_id": "dataset-123"}}:
-        raise AssertionError(f"unexpected dataset section: {sections}")
-    if sections["selection"] != {
-        "pipeline": {
-            "selection": {
-                "enabled_preprocess_variants": ["stdscaler_ohe"],
-                "enabled_model_variants": ["ridge", "elasticnet"],
-            }
-        },
-        "ensemble": {
-            "selection": {
-                "enabled_methods": ["mean_topk", "weighted"],
-            }
-        },
-    }:
-        raise AssertionError(f"unexpected selection section: {sections}")
-    if sections["model"] != {"ensemble": {"top_k": 3}}:
-        raise AssertionError(f"unexpected model section: {sections}")
+    expected = {
+        "task=pipeline",
+        "run.clearml.enabled=true",
+        "run.clearml.execution=pipeline_controller",
+        "run.clearml.project_root=LOCAL",
+        "run.schema_version=v1",
+        "run.usecase_id=demo_usecase",
+        "data.raw_dataset_id=dataset-123",
+        "data.target_column=target",
+        "pipeline.profile=train_ensemble_full",
+        "pipeline.run_preprocess=true",
+        "pipeline.selection.enabled_preprocess_variants=[\"stdscaler_ohe\"]",
+        "pipeline.selection.enabled_model_variants=[\"ridge\", \"elasticnet\"]",
+        "ensemble.selection.enabled_methods=[\"mean_topk\", \"weighted\"]",
+        "ensemble.top_k=3",
+    }
+    if set(args) != expected:
+        raise AssertionError(f"visible pipeline args must keep canonical dotted keys only: {args}")
+    if any(item.startswith("default_queue=") for item in args):
+        raise AssertionError(f"run-instance noise must not leak into visible pipeline args: {args}")
+
+
+def _assert_pipeline_ui_contract_registry_matches_current_ui_keys() -> None:
+    profiles = set(pipeline_ui_contract_module.pipeline_ui_profiles())
+    if profiles != {"pipeline", "train_model_full", "train_ensemble_full"}:
+        raise AssertionError(f"unexpected pipeline ui contract profiles: {profiles}")
+    if pipeline_ui_contract_module.pipeline_ui_parameter_whitelist("pipeline") != (
+        "run.usecase_id",
+        "data.raw_dataset_id",
+        "data.target_column",
+        "data.split.strategy",
+        "data.split.test_size",
+        "data.split.seed",
+        "eval.primary_metric",
+        "eval.direction",
+        "eval.task_type",
+        "eval.cv_folds",
+        "eval.seed",
+        "eval.ci.enabled",
+        "eval.calibration.enabled",
+        "eval.classification.mode",
+        "eval.classification.top_k",
+        "eval.metrics.classification_multiclass",
+        "pipeline.profile",
+        "pipeline.run_dataset_register",
+        "pipeline.run_preprocess",
+        "pipeline.run_train",
+        "pipeline.run_train_ensemble",
+        "pipeline.run_leaderboard",
+        "pipeline.run_infer",
+        "pipeline.plan_only",
+        "pipeline.model_set",
+        "pipeline.grid.preprocess_variants",
+        "pipeline.grid.model_variants",
+        "pipeline.selection.enabled_preprocess_variants",
+        "pipeline.selection.enabled_model_variants",
+    ):
+        raise AssertionError("pipeline ui contract must keep the dotted visible runtime whitelist")
+    if pipeline_ui_contract_module.pipeline_ui_hyperparameter_key_for(
+        "train_ensemble_full",
+        "run.usecase_id",
+    ) != "run.usecase_id":
+        raise AssertionError("usecase_id must map to the dotted Hyperparameters UI key")
+    if pipeline_ui_contract_module.pipeline_ui_hyperparameter_key_for(
+        "train_ensemble_full",
+        "ensemble.top_k",
+    ) != "ensemble.top_k":
+        raise AssertionError("ensemble.top_k must map to the dotted Hyperparameters UI key")
 
 
 def _assert_seed_materialization_detection_uses_seed_identity_fallback() -> None:
@@ -1888,6 +2061,7 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
     originals = {
         "resolve_contract": pipeline_module._resolve_visible_pipeline_run_contract,
         "clearml_task_id": pipeline_module.clearml_task_id,
+        "sync_ui": pipeline_module._synchronize_visible_pipeline_task_ui,
         "apply_defaults": pipeline_module._apply_visible_pipeline_run_defaults,
         "load_controller": pipeline_module.load_pipeline_controller_from_task,
         "add_steps": pipeline_module._add_clearml_pipeline_steps,
@@ -1919,6 +2093,7 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
             queue_name="controller",
         )
         pipeline_module.clearml_task_id = lambda task: "controller-123"
+        pipeline_module._synchronize_visible_pipeline_task_ui = lambda **kwargs: None
         pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"run.grid_run_id": "grid-001"}
         pipeline_module.load_pipeline_controller_from_task = lambda source_task: fake_controller
         pipeline_module._add_clearml_pipeline_steps = lambda **kwargs: setattr(
@@ -1953,6 +2128,7 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
     finally:
         pipeline_module._resolve_visible_pipeline_run_contract = originals["resolve_contract"]
         pipeline_module.clearml_task_id = originals["clearml_task_id"]
+        pipeline_module._synchronize_visible_pipeline_task_ui = originals["sync_ui"]
         pipeline_module._apply_visible_pipeline_run_defaults = originals["apply_defaults"]
         pipeline_module.load_pipeline_controller_from_task = originals["load_controller"]
         pipeline_module._add_clearml_pipeline_steps = originals["add_steps"]
@@ -1982,6 +2158,7 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
     originals = {
         "resolve_contract": pipeline_module._resolve_visible_pipeline_run_contract,
         "clearml_task_id": pipeline_module.clearml_task_id,
+        "sync_ui": pipeline_module._synchronize_visible_pipeline_task_ui,
         "apply_defaults": pipeline_module._apply_visible_pipeline_run_defaults,
         "load_controller": pipeline_module.load_pipeline_controller_from_task,
         "add_steps": pipeline_module._add_clearml_pipeline_steps,
@@ -2011,6 +2188,7 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
             queue_name="controller",
         )
         pipeline_module.clearml_task_id = lambda task: "controller-plan-only"
+        pipeline_module._synchronize_visible_pipeline_task_ui = lambda **kwargs: None
         pipeline_module._apply_visible_pipeline_run_defaults = lambda **kwargs: {"run.grid_run_id": "grid-plan-only"}
         pipeline_module.load_pipeline_controller_from_task = lambda source_task: fake_controller
         pipeline_module._add_clearml_pipeline_steps = lambda **kwargs: setattr(fake_controller, "_nodes", {"preprocess__stdscaler_ohe": object()})
@@ -2029,10 +2207,184 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
     finally:
         pipeline_module._resolve_visible_pipeline_run_contract = originals["resolve_contract"]
         pipeline_module.clearml_task_id = originals["clearml_task_id"]
+        pipeline_module._synchronize_visible_pipeline_task_ui = originals["sync_ui"]
         pipeline_module._apply_visible_pipeline_run_defaults = originals["apply_defaults"]
         pipeline_module.load_pipeline_controller_from_task = originals["load_controller"]
         pipeline_module._add_clearml_pipeline_steps = originals["add_steps"]
         pipeline_module._build_local_pipeline_run_summary = originals["build_summary"]
+
+
+def _assert_synchronize_visible_pipeline_task_ui_projects_dotted_args_and_operator_inputs() -> None:
+    captured: dict[str, object] = {}
+    originals = {
+        "replace": pipeline_module.replace_clearml_task_object_hyperparameters,
+        "config": pipeline_module.set_clearml_task_configuration,
+        "identity": pipeline_module._apply_pipeline_run_task_identity,
+    }
+    try:
+        pipeline_module.replace_clearml_task_object_hyperparameters = (
+            lambda target, args=None, sections=None: captured.setdefault(
+                "replace",
+                {
+                    "target": target,
+                    "args": list(args or []),
+                    "sections": dict(sections or {}),
+                },
+            )
+            or True
+        )
+        pipeline_module.set_clearml_task_configuration = (
+            lambda task_id, config, name="effective", description=None: captured.setdefault(
+                "config",
+                {
+                    "task_id": task_id,
+                    "config": dict(config or {}),
+                    "name": name,
+                    "description": description,
+                },
+            )
+            or True
+        )
+        pipeline_module._apply_pipeline_run_task_identity = (
+            lambda task_id, cfg, pipeline_profile, metadata: captured.setdefault(
+                "identity",
+                {
+                    "task_id": task_id,
+                    "pipeline_profile": pipeline_profile,
+                    "project_name": metadata.get("project_name"),
+                },
+            )
+        )
+        cfg = OmegaConf.create(
+            {
+                "task": {"stage": "99_pipeline", "name": "pipeline"},
+                "run": {
+                    "usecase_id": "TabularAnalysis",
+                    "schema_version": "v1",
+                    "clearml": {
+                        "enabled": True,
+                        "execution": "pipeline_controller",
+                        "project_root": "LOCAL",
+                    },
+                },
+                "pipeline": {
+                    "profile": "train_ensemble_full",
+                    "selection": {
+                        "enabled_preprocess_variants": ["stdscaler_ohe"],
+                        "enabled_model_variants": ["ridge", "lgbm"],
+                    },
+                },
+                "data": {
+                    "raw_dataset_id": "dataset-123",
+                },
+                "ensemble": {
+                    "selection": {
+                        "enabled_methods": ["mean_topk", "weighted"],
+                    },
+                    "top_k": 3,
+                },
+            }
+        )
+        fake_task = object()
+        pipeline_module._synchronize_visible_pipeline_task_ui(
+            target=fake_task,
+            task_id="controller-123",
+            cfg=cfg,
+        )
+    finally:
+        pipeline_module.replace_clearml_task_object_hyperparameters = originals["replace"]
+        pipeline_module.set_clearml_task_configuration = originals["config"]
+        pipeline_module._apply_pipeline_run_task_identity = originals["identity"]
+    replace_payload = captured.get("replace") or {}
+    expected_args = {
+        "task=pipeline",
+        "run.clearml.enabled=true",
+        "run.clearml.execution=pipeline_controller",
+        "run.clearml.project_root=LOCAL",
+        "run.schema_version=v1",
+        "run.usecase_id=TabularAnalysis",
+        "data.raw_dataset_id=dataset-123",
+        "pipeline.profile=train_ensemble_full",
+        "pipeline.selection.enabled_preprocess_variants=[\"stdscaler_ohe\"]",
+        "pipeline.selection.enabled_model_variants=[\"ridge\", \"lgbm\"]",
+        "ensemble.selection.enabled_methods=[\"mean_topk\", \"weighted\"]",
+        "ensemble.top_k=3",
+    }
+    if set(replace_payload.get("args") or []) != expected_args:
+        raise AssertionError(f"visible task sync must project canonical dotted args: {replace_payload}")
+    if replace_payload.get("sections") != {}:
+        raise AssertionError(f"visible task sync must drop redundant named sections: {replace_payload}")
+    config_payload = captured.get("config") or {}
+    config = config_payload.get("config") or {}
+    if ((config.get("run") or {}).get("usecase_id")) != "TabularAnalysis":
+        raise AssertionError(f"visible task sync must refresh run.usecase_id in OperatorInputs: {config_payload}")
+    if ((config.get("data") or {}).get("raw_dataset_id")) != "dataset-123":
+        raise AssertionError(f"visible task sync must refresh data.raw_dataset_id in OperatorInputs: {config_payload}")
+    if ((config.get("pipeline") or {}).get("profile")) != "train_ensemble_full":
+        raise AssertionError(f"visible task sync must mirror pipeline.profile in OperatorInputs: {config_payload}")
+    if (((config.get("pipeline") or {}).get("selection") or {}).get("enabled_model_variants")) != ["ridge", "lgbm"]:
+        raise AssertionError(f"visible task sync must refresh pipeline selection in OperatorInputs: {config_payload}")
+    if (((config.get("ensemble") or {}).get("selection") or {}).get("enabled_methods")) != ["mean_topk", "weighted"]:
+        raise AssertionError(f"visible task sync must refresh ensemble selection in OperatorInputs: {config_payload}")
+    if ((config.get("ensemble") or {}).get("top_k")) != 3:
+        raise AssertionError(f"visible task sync must refresh ensemble.top_k in OperatorInputs: {config_payload}")
+    identity_payload = captured.get("identity") or {}
+    if identity_payload.get("pipeline_profile") != "train_ensemble_full":
+        raise AssertionError(f"visible task sync must preserve the current pipeline profile: {identity_payload}")
+
+
+def _assert_execute_current_pipeline_controller_sanitizes_ui_when_validation_fails() -> None:
+    class _FakeTask:
+        pass
+
+    fake_task = _FakeTask()
+    sanitize_calls: list[tuple[str, str]] = []
+    originals = {
+        "is_seed": pipeline_module._current_pipeline_task_is_seed_materialization,
+        "clearml_task_id": pipeline_module.clearml_task_id,
+        "sync_ui": pipeline_module._synchronize_visible_pipeline_task_ui,
+        "resolve_contract": pipeline_module._resolve_visible_pipeline_run_contract,
+    }
+    try:
+        pipeline_module._current_pipeline_task_is_seed_materialization = lambda task, cfg: False
+        pipeline_module.clearml_task_id = lambda task: "controller-123"
+        pipeline_module._synchronize_visible_pipeline_task_ui = (
+            lambda target, task_id, cfg: sanitize_calls.append((str(task_id), str(getattr(getattr(cfg, "pipeline", None), "profile", ""))))
+        )
+        pipeline_module._resolve_visible_pipeline_run_contract = (
+            lambda **kwargs: (_ for _ in ()).throw(ValueError("placeholder validation failed"))
+        )
+        cfg = OmegaConf.create(
+            {
+                "pipeline": {"profile": "train_ensemble_full"},
+            }
+        )
+        ctx = pipeline_module.TaskContext(
+            task=fake_task,
+            project_name="LOCAL/TabularAnalysis/.pipelines/train_ensemble_full",
+            task_name="train_ensemble_full #2",
+            output_dir=Path.cwd(),
+        )
+        try:
+            pipeline_module._execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id="grid-fail")
+        except ValueError as exc:
+            if "placeholder validation failed" not in str(exc):
+                raise
+        else:
+            raise AssertionError("validation failure must propagate to the caller")
+    finally:
+        pipeline_module._current_pipeline_task_is_seed_materialization = originals["is_seed"]
+        pipeline_module.clearml_task_id = originals["clearml_task_id"]
+        pipeline_module._synchronize_visible_pipeline_task_ui = originals["sync_ui"]
+        pipeline_module._resolve_visible_pipeline_run_contract = originals["resolve_contract"]
+    if sanitize_calls != [
+        ("controller-123", "train_ensemble_full"),
+        ("controller-123", "train_ensemble_full"),
+    ]:
+        raise AssertionError(
+            "current pipeline controller tasks must be sanitized both before validation and during failure cleanup: "
+            f"{sanitize_calls}"
+        )
 
 
 def _assert_pipeline_template_defaults_keep_plan_only() -> None:
@@ -2324,6 +2676,210 @@ def _assert_pipeline_seed_bootstrap_overrides_keep_only_internal_args() -> None:
     ]
     if actual != expected:
         raise AssertionError(f"pipeline seed bootstrap args must drop operator-facing overrides: {actual}")
+
+
+def _resolve_pipeline_seed_spec(name: str) -> tuple[Path, object, object]:
+    repo = Path(__file__).resolve().parents[2]
+    defaults = manage_templates_module._load_run_defaults(repo)
+    ctx = manage_templates_module.PlanContext(
+        project_root="LOCAL",
+        usecase_id="TabularAnalysis",
+        schema_version="v1",
+        template_set_id="default",
+        solution_root=defaults.solution_root,
+        pipeline_seed_namespace=defaults.pipeline_seed_namespace,
+        pipeline_root_group=defaults.pipeline_root_group,
+        pipeline_runs_group=defaults.pipeline_runs_group,
+        templates_root_group=defaults.templates_root_group,
+        step_templates_group=defaults.step_templates_group,
+        runs_root_group=defaults.runs_root_group,
+        group_map=dict(defaults.group_map),
+    )
+    specs = manage_templates_module._load_templates(repo / "conf" / "clearml" / "templates.yaml", ctx)
+    spec = next(item for item in specs if item.name == name)
+    resolved = manage_templates_module._resolve_template_spec(
+        spec,
+        ctx=ctx,
+        repo_root=repo,
+        repo=None,
+        branch=None,
+        version_mode="branch",
+    )
+    return (repo, ctx, resolved)
+
+
+def _assert_manage_templates_published_seed_sections_drop_redundant_named_sections() -> None:
+    _, _, resolved = _resolve_pipeline_seed_spec("train_ensemble_full")
+    defaults = manage_templates_module._expected_pipeline_seed_defaults(resolved)
+    sections = manage_templates_module._pipeline_seed_sections_from_defaults(defaults, resolved=resolved)
+    if sections != {}:
+        raise AssertionError(f"published seed payload should not keep redundant named Hyperparameters sections: {sections}")
+
+
+def _assert_manage_templates_published_seed_args_keep_bootstrap_and_visible_runtime_defaults() -> None:
+    _, _, resolved = _resolve_pipeline_seed_spec("train_ensemble_full")
+    defaults = manage_templates_module._expected_pipeline_seed_defaults(resolved)
+    args = manage_templates_module._published_pipeline_seed_args(resolved, defaults=defaults)
+    required = {
+        "task=pipeline",
+        "run.clearml.enabled=true",
+        "run.clearml.execution=pipeline_controller",
+        "run.clearml.project_root=LOCAL",
+        "run.schema_version=v1",
+        f"data.raw_dataset_id={PIPELINE_RAW_DATASET_ID_SENTINEL}",
+        "data.target_column=target",
+        "pipeline.profile=train_ensemble_full",
+        "pipeline.plan_only=true",
+        "pipeline.run_train_ensemble=true",
+        "pipeline.grid.model_variants=[\"catboost\", \"elasticnet\", \"extra_trees\", \"gaussian_process\", \"gradient_boosting\", \"knn\", \"lasso\", \"lgbm\", \"linear_regression\", \"mlp\", \"random_forest\", \"ridge\", \"xgboost\"]",
+        "pipeline.selection.enabled_model_variants=[\"catboost\", \"elasticnet\", \"extra_trees\", \"gaussian_process\", \"gradient_boosting\", \"knn\", \"lasso\", \"lgbm\", \"linear_regression\", \"mlp\", \"random_forest\", \"ridge\", \"xgboost\"]",
+        "ensemble.selection.enabled_methods=[\"mean_topk\", \"weighted\", \"stacking\"]",
+        "ensemble.top_k=0",
+    }
+    if not required.issubset(set(args)):
+        raise AssertionError(f"published seed args must keep canonical bootstrap and visible defaults: {args}")
+    for blocked_prefix in ("default_queue=", "run.grid_run_id=", "run.clearml.pipeline_task_id="):
+        if any(item.startswith(blocked_prefix) for item in args):
+            raise AssertionError(f"published seed args must drop run-instance noise {blocked_prefix}: {args}")
+
+
+def _assert_manage_templates_expected_published_seed_param_keys_cover_bootstrap_and_internal_sections() -> None:
+    _, _, resolved = _resolve_pipeline_seed_spec("train_ensemble_full")
+    keys = manage_templates_module._expected_published_pipeline_seed_param_keys(resolved)
+    for required in (
+        "task",
+        "run/schema_version",
+        "run/clearml/enabled",
+        "run/clearml/execution",
+        "run/clearml/project_root",
+        "run/clearml/env/bootstrap",
+        "run/clearml/env/apt_update",
+        "run/clearml/env/apt_allow_local",
+        "run/clearml/env/uv/venv_dir",
+        "run/clearml/env/uv/extras",
+        "run/clearml/env/uv/all_extras",
+        "run/clearml/env/uv/frozen",
+        "run/usecase_id",
+        "data/raw_dataset_id",
+        "data/target_column",
+        "data/split/strategy",
+        "data/split/test_size",
+        "data/split/seed",
+        "eval/primary_metric",
+        "eval/direction",
+        "eval/cv_folds",
+        "eval/task_type",
+        "pipeline/profile",
+        "pipeline/plan_only",
+        "pipeline/run_preprocess",
+        "pipeline/run_train",
+        "pipeline/run_train_ensemble",
+        "pipeline/run_leaderboard",
+        "pipeline/run_infer",
+        "pipeline/model_set",
+        "pipeline/grid/preprocess_variants",
+        "pipeline/grid/model_variants",
+        "ensemble/selection/enabled_methods",
+        "ensemble/top_k",
+    ):
+        if required not in keys:
+            raise AssertionError(f"published seed validation keys must include {required}: {sorted(keys)}")
+    for blocked in ("run/grid_run_id", "run/clearml/project_name", "default_queue"):
+        if blocked in keys:
+            raise AssertionError(f"published seed validation keys must exclude run-instance noise {blocked}: {sorted(keys)}")
+
+
+def _assert_stale_cleanup_active_seed_scope_uses_pipeline_specs_only() -> None:
+    class _Spec:
+        def __init__(self, name: str, project_name: str) -> None:
+            self.name = name
+            self.project_name = project_name
+
+    templates = [
+        _Spec("preprocess", "LOCAL/TabularAnalysis/Templates/Steps/02_Preprocess"),
+        _Spec("pipeline", "LOCAL/TabularAnalysis/.pipelines/pipeline"),
+        _Spec("train_ensemble_full", "LOCAL/TabularAnalysis/.pipelines/train_ensemble_full"),
+    ]
+    lock_templates = {
+        "preprocess": {"task_id": "template-001"},
+        "pipeline": {"task_id": "seed-001"},
+        "train_ensemble_full": {"task_id": "seed-002"},
+    }
+    (active_seed_ids, active_seed_projects) = stale_cleanup_module.build_active_pipeline_seed_scope(
+        templates=templates,
+        lock_templates=lock_templates,
+        is_pipeline_template=lambda spec: spec.name in {"pipeline", "train_ensemble_full"},
+    )
+    if active_seed_ids != {"seed-001", "seed-002"}:
+        raise AssertionError(f"cleanup scope must keep active seed ids only: {active_seed_ids}")
+    if active_seed_projects != {
+        "LOCAL/TabularAnalysis/.pipelines/pipeline",
+        "LOCAL/TabularAnalysis/.pipelines/train_ensemble_full",
+    }:
+        raise AssertionError(f"cleanup scope must keep active seed projects only: {active_seed_projects}")
+
+
+def _assert_stale_cleanup_archives_only_noncanonical_historical_runs() -> None:
+    class _FakeTask:
+        def __init__(self, task_id: str, params: dict[str, Any], *, archived: bool = False) -> None:
+            self.id = task_id
+            self._params = params
+            self.archived = archived
+
+        def get_parameters_as_dict(self, cast: bool = False) -> dict[str, Any]:
+            return dict(self._params)
+
+        def get_system_tags(self) -> list[str]:
+            return ["archived"] if self.archived else []
+
+        def set_archived(self, archived: bool = True) -> None:
+            self.archived = bool(archived)
+
+    dirty = _FakeTask(
+        "run-dirty",
+        {
+            "Args/data%2Eraw_dataset_id": "dataset-123",
+            "Args/data.raw_dataset_id": "dataset-123",
+            "Args/data/raw_dataset_id": "dataset-123",
+        },
+    )
+    clean = _FakeTask(
+        "run-clean",
+        {
+            "Args/data.raw_dataset_id": "dataset-123",
+            "Args/run.usecase_id": "demo_usecase",
+            "Args/pipeline.selection.enabled_model_variants": ["ridge"],
+        },
+    )
+    already_archived = _FakeTask(
+        "run-archived",
+        {
+            "Args/data%2Eraw_dataset_id": "dataset-456",
+        },
+        archived=True,
+    )
+    originals = {
+        "list_projects": stale_cleanup_module._list_clearml_project_names,
+        "list_tasks": stale_cleanup_module._list_clearml_tasks,
+    }
+    try:
+        stale_cleanup_module._list_clearml_project_names = (
+            lambda prefix: ["LOCAL/TabularAnalysis/Pipelines/Runs/demo_usecase"]
+        )
+        stale_cleanup_module._list_clearml_tasks = lambda project_name: [dirty, clean, already_archived]
+        archived = stale_cleanup_module.archive_noncanonical_pipeline_runs(
+            active_seed_projects={"LOCAL/TabularAnalysis/.pipelines/train_ensemble_full"},
+        )
+    finally:
+        stale_cleanup_module._list_clearml_project_names = originals["list_projects"]
+        stale_cleanup_module._list_clearml_tasks = originals["list_tasks"]
+    if archived != ["run-dirty"]:
+        raise AssertionError(f"cleanup must archive only noncanonical historical runs: {archived}")
+    if not dirty.archived or clean.archived or not already_archived.archived:
+        raise AssertionError(
+            "cleanup archive policy must touch only the newly detected noncanonical run: "
+            f"dirty={dirty.archived}, clean={clean.archived}, already_archived={already_archived.archived}"
+        )
 
 
 def _assert_lock_context_payload_keeps_usecase_id() -> None:
@@ -2684,8 +3240,11 @@ def _assert_pipeline_operator_inputs_reject_placeholder_for_actual_runs() -> Non
     try:
         validate_pipeline_operator_inputs(placeholder_cfg, allow_placeholder_raw_dataset=False)
     except ValueError as exc:
-        if "data.raw_dataset_id is still the seed placeholder" not in str(exc):
+        text = str(exc)
+        if "data.raw_dataset_id is still the seed placeholder" not in text:
             raise AssertionError(f"unexpected placeholder validation error: {exc}")
+        if "data.raw_dataset_id" not in text:
+            raise AssertionError(f"placeholder validation must point to the current UI key: {exc}")
     else:
         raise AssertionError("actual pipeline runs must reject the seed raw_dataset placeholder")
     validate_pipeline_operator_inputs(placeholder_cfg, allow_placeholder_raw_dataset=True)
@@ -2709,10 +3268,40 @@ def _assert_pipeline_operator_inputs_reject_placeholder_for_actual_runs() -> Non
     try:
         validate_pipeline_operator_inputs(empty_cfg, allow_placeholder_raw_dataset=False)
     except ValueError as exc:
-        if "data.raw_dataset_id is empty" not in str(exc):
+        text = str(exc)
+        if "data.raw_dataset_id is empty" not in text:
             raise AssertionError(f"unexpected empty raw_dataset_id validation error: {exc}")
+        if "data.raw_dataset_id" not in text:
+            raise AssertionError(f"empty raw_dataset_id validation must point to the current UI key: {exc}")
     else:
         raise AssertionError("actual pipeline runs must reject an empty raw_dataset_id when dataset_register is disabled")
+
+    empty_usecase_cfg = OmegaConf.create(
+        {
+            "task": {"name": "pipeline"},
+            "run": {"usecase_id": ""},
+            "data": {"raw_dataset_id": "dataset-123"},
+            "pipeline": {
+                "profile": "train_ensemble_full",
+                "run_dataset_register": False,
+                "run_preprocess": True,
+                "run_train": True,
+                "run_train_ensemble": True,
+                "run_leaderboard": True,
+                "run_infer": False,
+            },
+        }
+    )
+    try:
+        validate_pipeline_operator_inputs(empty_usecase_cfg, allow_placeholder_raw_dataset=False)
+    except ValueError as exc:
+        text = str(exc)
+        if "run.usecase_id is empty" not in text:
+            raise AssertionError(f"unexpected empty usecase_id validation error: {exc}")
+        if "run.usecase_id" not in text:
+            raise AssertionError(f"empty usecase_id validation must point to the current UI key: {exc}")
+    else:
+        raise AssertionError("actual pipeline runs must reject an empty usecase_id")
 
 
 def _assert_rehearsal_sync_pipeline_artifacts_missing_only_reuses_existing_outputs() -> None:
@@ -3036,16 +3625,20 @@ def main() -> int:
     _assert_pipeline_run_overrides_drop_policy_groups()
     _assert_reset_clearml_task_args_replaces_stale_args()
     _assert_set_clearml_task_parameters_normalizes_encoded_section_keys()
+    _assert_task_query_flattens_recursive_parameter_sections()
     _assert_replace_clearml_task_parameter_sections_replaces_stale_section_payloads()
+    _assert_replace_clearml_task_parameter_sections_cleans_stale_raw_keys_without_semantic_changes()
     _assert_replace_clearml_task_hyperparameters_drops_unexpected_sections()
     _assert_replace_clearml_task_hyperparameters_drops_empty_args_section()
+    _assert_replace_clearml_task_hyperparameters_cleans_stale_raw_keys_without_semantic_changes()
     _assert_replace_clearml_task_object_hyperparameters_drops_empty_args_section()
     _assert_reset_clearml_task_args_replaces_stale_encoded_args_payloads()
     _assert_hparam_sections_are_nested_for_clearml_ui()
     _assert_extract_sections_prefers_first_matching_section_from_cfg()
     _assert_connect_hyperparameters_canonicalizes_payload()
     _assert_split_values_by_sections_minimizes_pipeline_args()
-    _assert_build_pipeline_visible_hyperparameter_sections_uses_named_sections_only()
+    _assert_build_pipeline_visible_hyperparameter_args_keeps_bootstrap_and_visible_dotted_keys()
+    _assert_pipeline_ui_contract_registry_matches_current_ui_keys()
     _assert_seed_materialization_detection_uses_seed_identity_fallback()
     _assert_current_pipeline_task_defaults_restore_project_root_from_properties()
     _assert_entrypoint_prefers_named_sections_over_stale_args()
@@ -3063,12 +3656,19 @@ def main() -> int:
     _assert_leaderboard_bootstrap_extras_follow_pipeline_model_variants()
     _assert_loaded_pipeline_controller_reseeds_runtime_defaults()
     _assert_plan_only_controller_does_not_launch_steps()
+    _assert_synchronize_visible_pipeline_task_ui_projects_dotted_args_and_operator_inputs()
+    _assert_execute_current_pipeline_controller_sanitizes_ui_when_validation_fails()
     _assert_pipeline_template_defaults_keep_plan_only()
     _assert_ui_clone_cfg_normalization_clears_seed_only_defaults()
     _assert_pipeline_run_task_identity_moves_seed_clone_to_run_project()
     _assert_pipeline_run_summary_tracks_actual_job_statuses()
     _assert_manage_templates_pipeline_properties_follow_resolved_context()
     _assert_pipeline_seed_bootstrap_overrides_keep_only_internal_args()
+    _assert_manage_templates_published_seed_sections_drop_redundant_named_sections()
+    _assert_manage_templates_published_seed_args_keep_bootstrap_and_visible_runtime_defaults()
+    _assert_manage_templates_expected_published_seed_param_keys_cover_bootstrap_and_internal_sections()
+    _assert_stale_cleanup_active_seed_scope_uses_pipeline_specs_only()
+    _assert_stale_cleanup_archives_only_noncanonical_historical_runs()
     _assert_lock_context_payload_keeps_usecase_id()
     _assert_live_plan_context_prefers_lock_project_root()
     _assert_live_plan_context_fails_on_layout_drift()

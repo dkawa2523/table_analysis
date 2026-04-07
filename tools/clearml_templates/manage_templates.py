@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -21,7 +22,7 @@ from omegaconf import OmegaConf
 _REPO = Path(__file__).resolve().parents[2]
 _SRC = _REPO / "src"
 _PLATFORM_SRC = _REPO.parent / "ml_platform_v1-master" / "src"
-for _path in (_SRC, _PLATFORM_SRC):
+for _path in (_REPO, _SRC, _PLATFORM_SRC):
     if _path.exists() and str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
@@ -32,16 +33,16 @@ from tabular_analysis.clearml.pipeline_templates import (
     is_pipeline_template_name,
 )
 from tabular_analysis.clearml.live_cleanup import (
-    cleanup_stale_pipeline_tasks as _cleanup_stale_pipeline_tasks_live,
     deprecate_pipeline_task as _deprecate_pipeline_task,
 )
 from tabular_analysis.common.hydra_config import compose_config
+from tabular_analysis.common.config_utils import set_cfg_value as _set_cfg_value
 from tabular_analysis.processes.pipeline_support import (
     PIPELINE_RAW_DATASET_ID_SENTINEL,
     apply_pipeline_profile_defaults,
     build_pipeline_step_specs,
     build_pipeline_ui_parameter_whitelist,
-    build_pipeline_visible_hyperparameter_sections,
+    build_pipeline_visible_hyperparameter_args,
     normalize_pipeline_profile,
     resolve_pipeline_controller_queue_name,
 )
@@ -83,6 +84,37 @@ from tabular_analysis.platform_adapter_task_ops import (
     set_clearml_task_configuration,
     set_clearml_task_runtime_properties,
     upload_clearml_task_artifact,
+)
+from tools.clearml_templates.drift_validate import (
+    configuration_paths as _configuration_paths,
+    iter_parameter_paths as _iter_parameter_paths,
+    normalize_task_status as _normalize_task_status,
+    pipeline_duplicate_visible_param_keys as _pipeline_duplicate_visible_param_keys,
+    pipeline_disallowed_arg_keys as _pipeline_disallowed_arg_keys,
+    pipeline_noncanonical_parameter_paths as _pipeline_noncanonical_parameter_paths,
+    pipeline_parameter_keys as _pipeline_parameter_keys,
+    task_artifact_names as _task_artifact_names,
+    task_name as _task_name,
+    task_parameters as _task_parameters,
+    task_runtime as _task_runtime,
+    task_user_properties as _task_user_properties,
+)
+from tools.clearml_templates.seed_publish import (
+    canonical_seed_pipeline_hash as _canonical_seed_pipeline_hash,
+    expected_pipeline_seed_defaults as _expected_pipeline_seed_defaults,
+    pipeline_seed_sections_from_defaults as _pipeline_seed_sections_from_defaults,
+    published_pipeline_seed_sections as _published_pipeline_seed_sections,
+    seed_controller_queue_name as _seed_publish_seed_controller_queue_name,
+    seed_runtime_defaults as _seed_runtime_defaults,
+)
+from tools.clearml_templates.seed_publish import (
+    expected_published_pipeline_seed_param_keys as _seed_publish_expected_published_pipeline_seed_param_keys,
+    published_pipeline_seed_args as _seed_publish_published_pipeline_seed_args,
+)
+from tools.clearml_templates.stale_cleanup import (
+    HistoricalPipelineArchivePolicy as _HistoricalPipelineArchivePolicy,
+    build_active_pipeline_seed_scope as _build_active_pipeline_seed_scope,
+    cleanup_pipeline_history as _cleanup_pipeline_history,
 )
 from tabular_analysis.processes.pipeline import _build_pipeline_plan, build_pipeline_seed_controller
 
@@ -630,27 +662,30 @@ def _pipeline_seed_script_mismatches(spec: Any, script: Mapping[str, Any]) -> li
     ]
 
 
-def _seed_runtime_defaults(seed_definition: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        str(key): value
-        for (key, value) in dict(seed_definition.get("shared_defaults") or {}).items()
-        if value is not None
-    }
+def _published_pipeline_seed_args(
+    resolved: ResolvedTemplateSpec,
+    *,
+    defaults: Mapping[str, Any] | None = None,
+) -> list[str]:
+    return _seed_publish_published_pipeline_seed_args(
+        resolved,
+        defaults=defaults,
+        bootstrap_overrides=_pipeline_seed_bootstrap_overrides,
+    )
 
 
-def _normalize_task_status(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    if text in {"completed", "closed", "finished", "published", "success"}:
-        return "completed"
-    if text in {"failed", "error"}:
-        return "failed"
-    if text in {"stopped", "aborted"}:
-        return "stopped"
-    if text in {"created", "queued", "pending"}:
-        return "queued"
-    if text in {"in_progress", "running"}:
-        return "running"
-    return text
+def _expected_published_pipeline_seed_param_keys(resolved: ResolvedTemplateSpec) -> set[str]:
+    return _seed_publish_expected_published_pipeline_seed_param_keys(
+        resolved,
+        bootstrap_overrides=_pipeline_seed_bootstrap_overrides,
+    )
+
+
+def _seed_controller_queue_name(seed_definition: Mapping[str, Any]) -> str:
+    return _seed_publish_seed_controller_queue_name(
+        seed_definition,
+        resolve_pipeline_controller_queue_name=resolve_pipeline_controller_queue_name,
+    )
 
 
 def _task_status_text(task_id: str) -> str:
@@ -737,200 +772,6 @@ def _list_clearml_tasks(project_name: str) -> list[Any]:
     except Exception as exc:
         raise RuntimeError(f"Failed to list ClearML tasks for project {project_name!r}: {exc}") from exc
     return list(tasks or [])
-
-
-def _task_name(task: Any) -> str | None:
-    value = getattr(task, "name", None) or getattr(task, "task_name", None)
-    return str(value) if value else None
-
-
-def _task_user_properties(task: Any) -> dict[str, Any]:
-    getter = getattr(task, "get_user_properties", None)
-    if callable(getter):
-        try:
-            payload = getter()
-        except Exception:
-            payload = None
-        if isinstance(payload, Mapping):
-            normalized: dict[str, Any] = {}
-            for key, value in payload.items():
-                if isinstance(value, Mapping) and "value" in value:
-                    normalized[str(key)] = value.get("value")
-                else:
-                    normalized[str(key)] = value
-            return normalized
-    data = getattr(task, "data", None)
-    execution = getattr(data, "execution", None) if data is not None else None
-    user_properties = getattr(execution, "user_properties", None) if execution is not None else None
-    if isinstance(user_properties, Mapping):
-        return {str(key): value.get("value") if isinstance(value, Mapping) and "value" in value else value for key, value in user_properties.items()}
-    return {}
-
-
-def _task_runtime(task: Any) -> dict[str, Any]:
-    data = getattr(task, "data", None)
-    runtime = getattr(data, "runtime", None) if data is not None else None
-    if isinstance(runtime, Mapping):
-        return {str(key): value for key, value in runtime.items()}
-    return {}
-
-
-def _task_artifact_names(task: Any) -> set[str]:
-    artifacts = getattr(task, "artifacts", None)
-    if isinstance(artifacts, Mapping):
-        return {str(key) for key in artifacts.keys()}
-    names: set[str] = set()
-    if artifacts is not None and not isinstance(artifacts, (str, bytes)):
-        try:
-            for item in artifacts:
-                key = None
-                if isinstance(item, Mapping):
-                    key = item.get("key") or item.get("name")
-                else:
-                    key = getattr(item, "key", None) or getattr(item, "name", None)
-                if key:
-                    names.add(str(key))
-        except Exception:
-            return names
-    return names
-
-
-def _task_parameters(task: Any) -> dict[str, Any]:
-    getter = getattr(task, "get_parameters_as_dict", None)
-    if callable(getter):
-        try:
-            payload = getter(cast=False)
-        except TypeError:
-            payload = getter()
-        except Exception:
-            payload = None
-        if isinstance(payload, Mapping):
-            return {str(key): value for key, value in payload.items()}
-    getter = getattr(task, "get_parameters", None)
-    if callable(getter):
-        try:
-            payload = getter()
-        except Exception:
-            payload = None
-        if isinstance(payload, Mapping):
-            return {str(key): value for key, value in payload.items()}
-    return {}
-
-
-def _iter_parameter_paths(payload: Any, *, prefix: str = "") -> Iterable[str]:
-    if isinstance(payload, Mapping):
-        for key, value in payload.items():
-            next_prefix = f"{prefix}/{key}" if prefix else str(key)
-            yield from _iter_parameter_paths(value, prefix=next_prefix)
-        return
-    if prefix:
-        yield prefix
-
-
-def _configuration_paths(payload: Any, *, prefix: str = "") -> Iterable[str]:
-    if isinstance(payload, Mapping):
-        for key, value in payload.items():
-            next_prefix = f"{prefix}.{key}" if prefix else str(key)
-            yield from _configuration_paths(value, prefix=next_prefix)
-        return
-    if prefix:
-        yield prefix
-
-
-def _pipeline_parameter_keys(task: Any) -> set[str]:
-    keys: set[str] = set()
-    visible_sections = {
-        "Args",
-        "inputs",
-        "dataset",
-        "selection",
-        "preprocess",
-        "model",
-        "eval",
-        "optimize",
-        "pipeline",
-        "clearml",
-    }
-    for text in _iter_parameter_paths(_task_parameters(task)):
-        text = str(text)
-        if text.startswith("Args/"):
-            keys.add(text.split("/", 1)[1].replace(".", "/"))
-            continue
-        if "/" in text:
-            section, remainder = text.split("/", 1)
-            if section in visible_sections and remainder:
-                keys.add(remainder.replace(".", "/"))
-            continue
-        if "." in text:
-            section, remainder = text.split(".", 1)
-            if section in visible_sections and remainder:
-                keys.add(remainder.replace(".", "/"))
-    return keys
-
-
-def _pipeline_disallowed_arg_keys(task: Any) -> set[str]:
-    disallowed = {
-        "ops/clearml_policy",
-        "ops/usecase_id_policy",
-        "ops.clearml_policy",
-        "ops.usecase_id_policy",
-    }
-    hits: set[str] = set()
-    for text in _iter_parameter_paths(_task_parameters(task)):
-        value = str(text)
-        if not value.startswith("Args/"):
-            continue
-        arg_key = value.split("/", 1)[1]
-        if arg_key in disallowed:
-            hits.add(arg_key)
-    return hits
-
-
-def _pipeline_noncanonical_parameter_paths(task: Any) -> set[str]:
-    visible_sections = {
-        "Args",
-        "inputs",
-        "dataset",
-        "selection",
-        "preprocess",
-        "model",
-        "eval",
-        "optimize",
-        "pipeline",
-        "clearml",
-    }
-    issues: set[str] = set()
-    for text in _iter_parameter_paths(_task_parameters(task)):
-        value = str(text)
-        if value.startswith("Args/"):
-            arg_key = value.split("/", 1)[1]
-            if "%" in arg_key or "/" in arg_key:
-                issues.add(value)
-            continue
-        if "/" not in value:
-            continue
-        section, remainder = value.split("/", 1)
-        if section not in visible_sections or not remainder:
-            continue
-        if "%" in remainder:
-            issues.add(value)
-            continue
-        if any("." in segment for segment in remainder.split("/") if segment):
-            issues.add(value)
-    return issues
-
-
-def _pipeline_visible_arg_keys(task: Any, *, expected_param_keys: set[str]) -> set[str]:
-    hits: set[str] = set()
-    for text in _iter_parameter_paths(_task_parameters(task)):
-        value = str(text)
-        if not value.startswith("Args/"):
-            continue
-        arg_key = value.split("/", 1)[1]
-        canonical = arg_key.replace(".", "/")
-        if canonical in expected_param_keys:
-            hits.add(arg_key)
-    return hits
 
 
 def _resolve_template_spec(
@@ -1075,15 +916,28 @@ def _pipeline_seed_drift_reasons(
     noncanonical_param_paths = sorted(_pipeline_noncanonical_parameter_paths(task))
     if noncanonical_param_paths:
         reasons.append(f"non-canonical hyperparameters {noncanonical_param_paths}")
-    visible_arg_keys = sorted(_pipeline_visible_arg_keys(task, expected_param_keys=expected_param_keys))
-    if visible_arg_keys:
-        reasons.append(f"duplicate visible args {visible_arg_keys}")
+    duplicate_visible_params = sorted(_pipeline_duplicate_visible_param_keys(task, expected_param_keys=expected_param_keys))
+    if duplicate_visible_params:
+        reasons.append(f"duplicate visible params {duplicate_visible_params}")
+    expected_runtime_param_keys = _expected_published_pipeline_seed_param_keys(resolved)
+    missing_runtime_param_keys = sorted(expected_runtime_param_keys - actual_param_keys)
+    if missing_runtime_param_keys:
+        reasons.append(f"missing seed runtime params {missing_runtime_param_keys}")
     runtime = _task_runtime(task)
     pipeline_hash = str(runtime.get("_pipeline_hash") or "").strip()
     if not pipeline_hash:
         reasons.append("missing runtime _pipeline_hash")
     elif pipeline_hash.startswith("None:"):
         reasons.append(f"non-canonical runtime _pipeline_hash {pipeline_hash!r}")
+    data = getattr(task, "data", None)
+    configuration = getattr(data, "configuration", None) if data is not None else None
+    pipeline_item = configuration.get("Pipeline") if isinstance(configuration, dict) else None
+    if pipeline_item is None:
+        reasons.append("missing Configuration/Pipeline")
+    else:
+        pipeline_description = str(getattr(pipeline_item, "description", "") or "").strip()
+        if not pipeline_description.lower().startswith("pipeline state:"):
+            reasons.append(f"Pipeline description {pipeline_description!r}")
     artifact_names = _task_artifact_names(task)
     required_artifacts = {
         "pipeline_run.json",
@@ -1115,7 +969,7 @@ def _pipeline_seed_requires_recreate(reasons: Iterable[str]) -> bool:
     recreate_markers = (
         "stale policy args",
         "non-canonical hyperparameters",
-        "duplicate visible args",
+        "duplicate visible params",
     )
     return any(any(marker in str(reason) for marker in recreate_markers) for reason in reasons)
 
@@ -1126,13 +980,17 @@ def _restore_pipeline_seed_task(
     resolved: ResolvedTemplateSpec,
     seed_definition: Mapping[str, Any],
     args: Iterable[str] | None = None,
+    sections: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> None:
-    seed_defaults = _seed_runtime_defaults(seed_definition)
-    sections = build_pipeline_visible_hyperparameter_sections(
-        seed_defaults,
-        pipeline_profile=resolved.spec.name,
-        cfg=resolved.cfg,
-    )
+    if args is None:
+        seed_defaults = _seed_runtime_defaults(seed_definition)
+        args = build_pipeline_visible_hyperparameter_args(
+            seed_defaults,
+            pipeline_profile=resolved.spec.name,
+            include_bootstrap=True,
+        )
+    if sections is None:
+        sections = {}
     replace_clearml_task_hyperparameters(
         task_id,
         args=list(args or []),
@@ -1154,30 +1012,6 @@ def _restore_pipeline_seed_task(
     _sync_pipeline_seed_identity(task_id, resolved=resolved)
 
 
-def _canonical_seed_pipeline_hash(task: Any) -> str | None:
-    data = getattr(task, "data", None)
-    configuration = getattr(data, "configuration", None) if data is not None else None
-    pipeline_item = configuration.get("Pipeline") if isinstance(configuration, dict) else None
-    description = str(getattr(pipeline_item, "description", "") or "").strip()
-    if description.lower().startswith("pipeline state:"):
-        value = description.split(":", 1)[1].strip()
-        if value:
-            return f"{value}:1.0.0"
-    config_value = str(getattr(pipeline_item, "value", "") or "").strip()
-    if config_value:
-        return f"{hashlib.md5(config_value.encode('utf-8')).hexdigest()}:1.0.0"
-    return None
-
-
-def _seed_controller_queue_name(seed_definition: Mapping[str, Any]) -> str:
-    plan = seed_definition.get("plan")
-    if isinstance(plan, Mapping):
-        queue_name = resolve_pipeline_controller_queue_name(dict(plan.get("queues") or {}))
-        if str(queue_name or "").strip():
-            return str(queue_name).strip()
-    return "controller"
-
-
 def _validate_materialized_seed(
     task_id: str,
     *,
@@ -1193,26 +1027,6 @@ def _validate_materialized_seed(
         raise RuntimeError(
             f"Pipeline seed {resolved.spec.name} ({task_id}) drifted after materialization: {reasons}"
         )
-
-
-def _copy_task_configuration_if_present(
-    source_task_id: str,
-    target_task_id: str,
-    *,
-    name: str,
-    description: str | None = None,
-) -> None:
-    payload = get_clearml_task_configuration(source_task_id, name=name)
-    if payload is None:
-        return
-    if not isinstance(payload, Mapping):
-        raise RuntimeError(f"Configuration/{name} on task {source_task_id} is not a mapping.")
-    set_clearml_task_configuration(
-        target_task_id,
-        dict(payload),
-        name=name,
-        description=description,
-    )
 
 
 def _copy_materialized_seed_artifacts(
@@ -1253,13 +1067,14 @@ def _promote_materialized_pipeline_seed(
         promoted_task_id,
         resolved=resolved,
         seed_definition=seed_definition,
-        args=[],
-    )
-    _copy_task_configuration_if_present(
-        source_task_id,
-        promoted_task_id,
-        name="Pipeline",
-        description="Serialized visible pipeline seed graph.",
+        args=_published_pipeline_seed_args(
+            resolved,
+            defaults=_seed_runtime_defaults(seed_definition),
+        ),
+        sections=_published_pipeline_seed_sections(
+            resolved=resolved,
+            seed_definition=seed_definition,
+        ),
     )
     set_clearml_task_configuration(
         promoted_task_id,
@@ -1503,22 +1318,29 @@ def _cleanup_stale_pipeline_tasks(
     templates: list[TemplateSpec],
     lock_templates: Mapping[str, Any],
 ) -> None:
-    pipeline_specs = [spec for spec in templates if _is_pipeline_template(spec)]
-    if not pipeline_specs:
-        return
-    active_seed_ids = {
-        str(payload.get("task_id"))
-        for spec in pipeline_specs
-        for payload in [lock_templates.get(spec.name)]
-        if isinstance(payload, Mapping) and payload.get("task_id")
-    }
-    active_seed_projects = {str(spec.project_name) for spec in pipeline_specs if spec.project_name}
+    (active_seed_ids, active_seed_projects) = _build_active_pipeline_seed_scope(
+        templates=templates,
+        lock_templates=lock_templates,
+        is_pipeline_template=_is_pipeline_template,
+    )
     if not active_seed_projects:
         return
-    _cleanup_stale_pipeline_tasks_live(
+    cleanup_summary = _cleanup_pipeline_history(
         active_seed_ids=active_seed_ids,
         active_seed_projects=active_seed_projects,
+        archive_policy=_HistoricalPipelineArchivePolicy(
+            archive_deprecated_pipeline_tasks=True,
+            archive_noncanonical_pipeline_runs=True,
+        ),
     )
+    archived_deprecated = int(cleanup_summary.get("archived_deprecated_tasks") or 0)
+    archived_runs = int(cleanup_summary.get("archived_noncanonical_runs") or 0)
+    if archived_deprecated or archived_runs:
+        print(
+            "Pipeline history cleanup: "
+            f"archived_deprecated_tasks={archived_deprecated} "
+            f"archived_noncanonical_runs={archived_runs}"
+        )
 
 
 def _apply_templates(

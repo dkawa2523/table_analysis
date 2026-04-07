@@ -233,6 +233,16 @@ def _task_script(task: Any) -> dict[str, Any]:
     return script
 
 
+def _flatten_task_parameter_mapping(payload: Mapping[str, Any], out: dict[str, Any], *, prefix: str = "") -> None:
+    for (key, value) in payload.items():
+        text = str(key)
+        next_prefix = f"{prefix}/{text}" if prefix else text
+        if isinstance(value, Mapping):
+            _flatten_task_parameter_mapping(value, out, prefix=next_prefix)
+            continue
+        out[next_prefix] = value
+
+
 def _task_parameters(task: Any) -> dict[str, Any]:
     getter = getattr(task, "get_parameters", None)
     if callable(getter):
@@ -250,11 +260,7 @@ def _task_parameters(task: Any) -> dict[str, Any]:
             params = None
         if isinstance(params, Mapping):
             flat: dict[str, Any] = {}
-            for section, values in params.items():
-                if not isinstance(values, Mapping):
-                    continue
-                for key, value in values.items():
-                    flat[f"{section}/{key}"] = value
+            _flatten_task_parameter_mapping(params, flat)
             return flat
     return {}
 

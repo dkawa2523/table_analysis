@@ -4,6 +4,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from ..clearml.pipeline_ui_contract import (
+    build_pipeline_operator_inputs_payload as _build_pipeline_operator_inputs_payload,
+    build_pipeline_visible_hyperparameter_args as _build_pipeline_visible_hyperparameter_args,
+    pipeline_ui_hyperparameter_key_for as _pipeline_ui_hyperparameter_key_for,
+    pipeline_ui_bootstrap_key_allowed as _pipeline_ui_bootstrap_key_allowed,
+    pipeline_ui_parameter_whitelist as _pipeline_ui_parameter_whitelist,
+    pipeline_ui_profiles as _pipeline_ui_profiles,
+)
 from ..common.collection_utils import to_list as _to_list, to_mapping as _to_mapping
 from ..common.config_utils import cfg_value as _cfg_value, normalize_str as _normalize_str, set_cfg_value as _set_cfg_value, to_int as _to_int
 from ..common.json_utils import load_json as _load_json
@@ -92,26 +100,8 @@ PIPELINE_PROFILE_SPECS: dict[str, PipelineProfileSpec] = {
 }
 
 PIPELINE_TEMPLATE_UI_WHITELIST: dict[str, tuple[str, ...]] = {
-    'pipeline': (
-        'run.usecase_id',
-        'data.raw_dataset_id',
-        'pipeline.selection.enabled_preprocess_variants',
-        'pipeline.selection.enabled_model_variants',
-    ),
-    'train_model_full': (
-        'run.usecase_id',
-        'data.raw_dataset_id',
-        'pipeline.selection.enabled_preprocess_variants',
-        'pipeline.selection.enabled_model_variants',
-    ),
-    'train_ensemble_full': (
-        'run.usecase_id',
-        'data.raw_dataset_id',
-        'pipeline.selection.enabled_preprocess_variants',
-        'pipeline.selection.enabled_model_variants',
-        'ensemble.selection.enabled_methods',
-        'ensemble.top_k',
-    ),
+    profile: _pipeline_ui_parameter_whitelist(profile)
+    for profile in _pipeline_ui_profiles()
 }
 
 PIPELINE_TEMPLATE_LOCAL_ONLY_KEYS = frozenset({'run.output_dir', 'train.inputs.preprocess_run_dir'})
@@ -204,9 +194,7 @@ def resolve_pipeline_profile(cfg: Any | None, plan: Mapping[str, Any] | None = N
 
 def build_pipeline_ui_parameter_whitelist(pipeline_profile: str) -> tuple[str, ...]:
     profile = normalize_pipeline_profile(pipeline_profile)
-    if profile not in PIPELINE_TEMPLATE_UI_WHITELIST:
-        raise ValueError(f'Unsupported pipeline profile for UI whitelist: {profile}')
-    return PIPELINE_TEMPLATE_UI_WHITELIST[profile]
+    return _pipeline_ui_parameter_whitelist(profile)
 
 
 def build_pipeline_operator_inputs(
@@ -215,37 +203,29 @@ def build_pipeline_operator_inputs(
     pipeline_profile: str,
 ) -> dict[str, Any]:
     editable = extract_pipeline_editable_defaults(defaults, pipeline_profile=pipeline_profile)
-    payload: dict[str, Any] = {}
-    for (path, value) in editable.items():
-        cursor = payload
-        parts = str(path).split('.')
-        for key in parts[:-1]:
-            cursor = cursor.setdefault(key, {})  # type: ignore[assignment]
-        cursor[parts[-1]] = value
-    return payload
+    return _build_pipeline_operator_inputs_payload(editable, pipeline_profile=pipeline_profile)
 
 
-def build_pipeline_visible_hyperparameter_sections(
+def build_pipeline_visible_hyperparameter_args(
     defaults: Mapping[str, Any],
     *,
     pipeline_profile: str,
-    cfg: Any | None = None,
-) -> dict[str, dict[str, Any]]:
-    from ..clearml.hparams import split_values_by_sections
-
-    editable = extract_pipeline_editable_defaults(defaults, pipeline_profile=pipeline_profile)
-    (sections, _, remaining) = split_values_by_sections(editable, cfg=cfg)
-    leftover = {
+    include_bootstrap: bool = False,
+) -> list[str]:
+    visible_defaults = {
         str(key): value
-        for (key, value) in dict(remaining).items()
-        if value is not None
-    }
-    if leftover:
-        raise ValueError(
-            "Visible pipeline hyperparameters must be fully represented by named sections; "
-            f"leftover args were found: {sorted(leftover)}"
+        for (key, value) in dict(defaults).items()
+        if value is not None and (
+            str(key) == 'task'
+            or _pipeline_ui_bootstrap_key_allowed(str(key))
+            or str(key) in set(build_pipeline_ui_parameter_whitelist(pipeline_profile))
         )
-    return sections
+    }
+    return _build_pipeline_visible_hyperparameter_args(
+        visible_defaults,
+        pipeline_profile=pipeline_profile,
+        include_bootstrap=include_bootstrap,
+    )
 
 
 def is_pipeline_placeholder_raw_dataset_id(value: Any) -> bool:
@@ -285,21 +265,24 @@ def validate_pipeline_operator_inputs(
     dataset_path = _normalize_str(_cfg_value(cfg, 'data.dataset_path')) if cfg is not None else ''
 
     errors: list[str] = []
+    pipeline_profile = normalize_pipeline_profile(_cfg_value(cfg, 'pipeline.profile')) if cfg is not None else DEFAULT_PIPELINE_PROFILE
+    usecase_ui_key = _pipeline_ui_hyperparameter_key_for(pipeline_profile, 'run.usecase_id') or 'run.usecase_id'
+    raw_dataset_ui_key = _pipeline_ui_hyperparameter_key_for(pipeline_profile, 'data.raw_dataset_id') or 'data.raw_dataset_id'
     if not usecase_id:
         errors.append(
             'run.usecase_id is empty. Confirm Configuration > OperatorInputs, then set '
-            'Hyperparameters -> run.usecase_id before starting the pipeline run.'
+            f'Hyperparameters -> {usecase_ui_key} before starting the pipeline run.'
         )
     if run_flags.get('run_preprocess') and not run_flags.get('run_dataset_register'):
         if not raw_dataset_id and not dataset_path:
             errors.append(
                 'data.raw_dataset_id is empty. Confirm Configuration > OperatorInputs, then set '
-                'Hyperparameters -> data.raw_dataset_id to an existing raw dataset id before starting the pipeline run.'
+                f'Hyperparameters -> {raw_dataset_ui_key} to an existing raw dataset id before starting the pipeline run.'
             )
         elif raw_dataset_id and is_pipeline_placeholder_raw_dataset_id(raw_dataset_id) and not allow_placeholder_raw_dataset:
             errors.append(
                 'data.raw_dataset_id is still the seed placeholder. Confirm Configuration > OperatorInputs, then set '
-                'Hyperparameters -> data.raw_dataset_id to an existing raw dataset id before starting the pipeline run.'
+                f'Hyperparameters -> {raw_dataset_ui_key} to an existing raw dataset id before starting the pipeline run.'
             )
         elif raw_dataset_id.startswith('local:') and not dataset_path:
             errors.append(
@@ -943,7 +926,7 @@ __all__ = [
     'PipelineProfileSpec',
     'PipelineStepSpec',
     'build_pipeline_plan',
-    'build_pipeline_visible_hyperparameter_sections',
+    'build_pipeline_visible_hyperparameter_args',
     'build_pipeline_run_summary_payload',
     'build_pipeline_operator_inputs',
     'build_pipeline_step_parameter_override_payload',
