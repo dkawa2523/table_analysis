@@ -16,7 +16,7 @@ services:
     volumes:
       - clearml-controller-home:/root/.clearml
       - clearml-uv-cache:/root/.clearml/uv-cache
-    command: ["clearml-agent", "daemon", "--queue", "controller"]
+    command: ["clearml-agent", "daemon", "--queue", "${CLEARML_CONTROLLER_QUEUE:-controller}"]
 
   clearml-default:
     image: ${CLEARML_AGENT_IMAGE:-table-analysis-clearml-agent:latest}
@@ -34,7 +34,7 @@ services:
     volumes:
       - clearml-default-home:/root/.clearml
       - clearml-uv-cache:/root/.clearml/uv-cache
-    command: ["clearml-agent", "daemon", "--queue", "default"]
+    command: ["clearml-agent", "daemon", "--queue", "${CLEARML_DEFAULT_QUEUE:-default}"]
 
   clearml-heavy-model:
     image: ${CLEARML_AGENT_IMAGE:-table-analysis-clearml-agent:latest}
@@ -52,7 +52,7 @@ services:
     volumes:
       - clearml-heavy-model-home:/root/.clearml
       - clearml-uv-cache:/root/.clearml/uv-cache
-    command: ["clearml-agent", "daemon", "--queue", "heavy-model"]
+    command: ["clearml-agent", "daemon", "--queue", "${CLEARML_HEAVY_QUEUE:-heavy-model}"]
 
 networks:
   default:

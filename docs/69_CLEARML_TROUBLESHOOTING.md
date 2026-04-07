@@ -23,6 +23,17 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 - queue 名が違う
 - `controller/default/heavy-model` の役割がずれている
 
+### `NEW RUN` した pipeline controller が child を流さず止まる
+
+- controller 自体を `controller` ではなく `default` / `heavy-model` に enqueue している
+- その結果、controller が child 用 worker を占有し、`preprocess` や `train_model` が queue 待ちになる
+
+対処:
+
+- queue role と worker 割当を見直し、controller と child が同じ worker を奪い合わないようにする
+- すでに wrong queue で走り始めた controller は stop して rerun する
+- どうしても rerun できない場合だけ、該当 child queue の worker を一時的に増やす
+
 ### pipeline が Pipelines タブに出ない
 
 - `LOCAL/TabularAnalysis/.pipelines/<profile>` に seed pipeline card がない
@@ -50,10 +61,10 @@ python tools/clearml_templates/manage_templates.py --validate --project-root LOC
 確認ポイント:
 
 - seed / run task の `Hyperparameters` で
-  - `inputs -> run -> usecase_id`
-  - `dataset -> data -> raw_dataset_id`
-  - `selection -> pipeline -> selection -> enabled_model_variants`
-  のように nested 表示されているか
+  - `run.usecase_id`
+  - `data.raw_dataset_id`
+  - `pipeline.selection.enabled_model_variants`
+  のような plain dotted key が見えているか
 - `Configuration > OperatorInputs` が current values を mirror しているか
 - `%2E` が見えるのが old historical run だけか、それとも current seed / current `NEW RUN` にも出ているか
 

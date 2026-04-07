@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from omegaconf import OmegaConf
 
@@ -69,6 +69,8 @@ def published_pipeline_seed_sections(
         seed_runtime_defaults(seed_definition),
         resolved=resolved,
     )
+
+
 def published_pipeline_seed_args(
     resolved: Any,
     *,

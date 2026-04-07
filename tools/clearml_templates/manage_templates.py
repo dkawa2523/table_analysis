@@ -27,6 +27,9 @@ for _path in (_REPO, _SRC, _PLATFORM_SRC):
         sys.path.insert(0, str(_path))
 
 from tabular_analysis.ops.clearml_identity import resolve_template_context
+from tabular_analysis.clearml.pipeline_ui_contract import (
+    pipeline_ui_bootstrap_key_allowed,
+)
 from tabular_analysis.clearml.pipeline_templates import (
     build_pipeline_template_properties,
     build_pipeline_template_tags,
@@ -633,22 +636,13 @@ def _arg_pairs(args: Iterable[str]) -> list[tuple[str, str]]:
 
 
 def _pipeline_seed_bootstrap_overrides(args: Iterable[str]) -> list[str]:
-    allowed_exact = {
-        "task",
-        "run.clearml.enabled",
-        "run.clearml.execution",
-        "run.clearml.project_root",
-        "run.schema_version",
-    }
-    allowed_prefixes = (
-        "run.clearml.env.",
-    )
-    bootstrap: list[str] = []
+    bootstrap_args: list[str] = []
     for item in _normalized_args(args):
         key, _ = item.split("=", 1)
-        if key in allowed_exact or any(key.startswith(prefix) for prefix in allowed_prefixes):
-            bootstrap.append(item)
-    return bootstrap
+        if not pipeline_ui_bootstrap_key_allowed(str(key)):
+            continue
+        bootstrap_args.append(item)
+    return bootstrap_args
 
 
 def _pipeline_seed_script_mismatches(spec: Any, script: Mapping[str, Any]) -> list[str]:
@@ -676,6 +670,18 @@ def _published_pipeline_seed_args(
 def _expected_published_pipeline_seed_param_keys(resolved: ResolvedTemplateSpec) -> set[str]:
     return _seed_publish_expected_published_pipeline_seed_param_keys(
         resolved,
+    )
+
+
+def _materialized_pipeline_seed_args(
+    *,
+    resolved: ResolvedTemplateSpec,
+    seed_definition: Mapping[str, Any],
+) -> list[str]:
+    return build_pipeline_visible_hyperparameter_args(
+        _seed_runtime_defaults(seed_definition),
+        pipeline_profile=resolved.spec.name,
+        include_bootstrap=True,
     )
 
 
@@ -1110,10 +1116,10 @@ def _materialize_pipeline_seed(
         task_id,
         resolved=resolved,
         seed_definition=seed_definition,
-        args=[
-            *resolved.entry_args,
-            *_pipeline_seed_bootstrap_overrides(resolved.overrides),
-        ],
+        args=_materialized_pipeline_seed_args(
+            resolved=resolved,
+            seed_definition=seed_definition,
+        ),
     )
     set_clearml_task_configuration(
         task_id,

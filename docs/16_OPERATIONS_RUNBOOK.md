@@ -7,7 +7,7 @@
 
 - `CLEARML_CONFIG_FILE` が有効
 - ClearML UI に接続できる
-- `controller`、`default`、`heavy-model` queue が存在する
+- controller / child / heavy-child の役割に対応する queue が存在する
 - agent は `tools/clearml_agent/compose.yaml` を正本として起動している
 - agent の `/root/.clearml` は Docker named volume を使う
 - Windows bind mount は task repository / venv / uv cache が `p9_client_rpc` 待ちになりやすいので避ける
@@ -176,8 +176,8 @@ python -m tabular_analysis.cli task=infer \
 
 1. `manage_templates --validate`
 2. queue に worker がいるか
-3. controller が `controller` queue に載っているか
-4. `catboost/xgboost` が `heavy-model` に振り分けられているか
+3. controller が controller role の queue に載っているか
+4. `catboost/xgboost` が heavy-child role の queue に振り分けられているか
 5. child task の tags が runtime 用に更新されているか
 
 ## 8.5 rehearsal helper の既定動作
