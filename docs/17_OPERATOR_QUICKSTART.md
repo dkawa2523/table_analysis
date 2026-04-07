@@ -52,7 +52,6 @@
 ## 5. 見えていても通常は既定値のまま使う項目
 
 - `pipeline.profile`
-- `pipeline.run_*`
 - `pipeline.model_set`
 - `pipeline.grid.preprocess_variants`
 - `pipeline.grid.model_variants`
@@ -62,7 +61,8 @@
 補足:
 
 - これらも `Hyperparameters` に表示されます
-- ただし `pipeline.profile` と `pipeline.run_*` は graph-shaping 値なので、通常運用では profile 既定値のまま使います
+- ただし fixed DAG の内部値である `pipeline.run_*` と `pipeline.plan_only` は operator 用 `Hyperparameters` には出しません
+- `pipeline.profile` は seed 種別の確認用として見えますが、通常運用では seed 既定値のまま使います
 
 ## 6. 実行時の注意
 

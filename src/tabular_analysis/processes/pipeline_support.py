@@ -62,6 +62,9 @@ class PipelinePlan:
 DEFAULT_PIPELINE_PROFILE = 'pipeline'
 DEFAULT_PIPELINE_USECASE_ID = 'TabularAnalysis'
 PIPELINE_RAW_DATASET_ID_SENTINEL = 'REPLACE_WITH_EXISTING_RAW_DATASET_ID'
+DEFAULT_PIPELINE_CONTROLLER_QUEUE = 'controller'
+DEFAULT_PIPELINE_CHILD_QUEUE = 'default'
+DEFAULT_PIPELINE_HEAVY_QUEUE = 'heavy-model'
 
 PIPELINE_PROFILE_SPECS: dict[str, PipelineProfileSpec] = {
     'pipeline': PipelineProfileSpec(
@@ -451,15 +454,15 @@ def resolve_exec_policy_queues(cfg: Any) -> dict[str, Any]:
         for name in _to_list(queues_cfg.get('heavy_model_variants'))
         if _normalize_str(name)
     }
-    default_queue = _queue('default') or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
+    default_queue = _queue('default') or DEFAULT_PIPELINE_CHILD_QUEUE
     return {
         'default': default_queue,
-        'pipeline': _queue('pipeline'),
+        'pipeline': _queue('pipeline') or DEFAULT_PIPELINE_CONTROLLER_QUEUE,
         'dataset_register': _queue('dataset_register'),
         'preprocess': _queue('preprocess'),
         'train_model': _queue('train_model'),
         'train_ensemble': _queue('train_ensemble'),
-        'train_model_heavy': _queue('train_model_heavy'),
+        'train_model_heavy': _queue('train_model_heavy') or DEFAULT_PIPELINE_HEAVY_QUEUE,
         'leaderboard': _queue('leaderboard'),
         'infer': _queue('infer'),
         'model_variants': model_variants,
@@ -491,22 +494,8 @@ def select_pipeline_queue(
 
 
 def resolve_pipeline_controller_queue_name(queues: Mapping[str, Any]) -> str | None:
-    for value in (
-        select_pipeline_queue(queues, 'pipeline'),
-        select_pipeline_queue(queues, 'dataset_register'),
-        select_pipeline_queue(queues, 'preprocess'),
-        select_pipeline_queue(queues, 'train_model'),
-        select_pipeline_queue(queues, 'train_ensemble'),
-        _normalize_str(queues.get('train_model_heavy')),
-        select_pipeline_queue(queues, 'leaderboard'),
-        select_pipeline_queue(queues, 'infer'),
-    ):
-        if value:
-            return value
-    return next(
-        (_normalize_str(value) for value in (queues.get('model_variants') or {}).values() if _normalize_str(value)),
-        None,
-    )
+    queue_name = _normalize_str(queues.get('pipeline'))
+    return queue_name or None
 
 
 def resolve_ensemble_methods(cfg: Any) -> list[str]:
@@ -796,8 +785,7 @@ def build_pipeline_template_defaults(
     defaults['task'] = 'pipeline'
     defaults['default_queue'] = (
         _normalize_str((plan.get('queues') or {}).get('default'))
-        or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
-        or 'default'
+        or DEFAULT_PIPELINE_CHILD_QUEUE
     )
     defaults['run.grid_run_id'] = grid_run_id
     defaults['run.clearml.execution'] = 'pipeline_controller'
@@ -916,6 +904,9 @@ def build_pipeline_template_step_overrides(
 
 __all__ = [
     'DEFAULT_PIPELINE_PROFILE',
+    'DEFAULT_PIPELINE_CHILD_QUEUE',
+    'DEFAULT_PIPELINE_CONTROLLER_QUEUE',
+    'DEFAULT_PIPELINE_HEAVY_QUEUE',
     'PIPELINE_PROFILE_SPECS',
     'PIPELINE_TEMPLATE_LOCAL_ONLY_KEYS',
     'PIPELINE_TEMPLATE_UI_WHITELIST',

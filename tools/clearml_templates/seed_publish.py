@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Mapping
 
 from omegaconf import OmegaConf
 
@@ -12,6 +12,7 @@ from tabular_analysis.clearml.pipeline_ui_contract import (
 from tabular_analysis.common.config_utils import set_cfg_value as _set_cfg_value
 from tabular_analysis.processes.pipeline import _build_pipeline_plan
 from tabular_analysis.processes.pipeline_support import (
+    DEFAULT_PIPELINE_CONTROLLER_QUEUE,
     apply_pipeline_profile_defaults,
     build_pipeline_template_defaults,
     normalize_pipeline_profile,
@@ -72,9 +73,7 @@ def published_pipeline_seed_args(
     resolved: Any,
     *,
     defaults: Mapping[str, Any] | None = None,
-    bootstrap_overrides: Callable[[Iterable[str]], list[str]],
 ) -> list[str]:
-    del bootstrap_overrides
     seed_defaults = dict(defaults or expected_pipeline_seed_defaults(resolved))
     return build_pipeline_visible_hyperparameter_args(
         seed_defaults,
@@ -97,8 +96,6 @@ def flatten_nested_override_paths(payload: Mapping[str, Any], *, prefix: str = "
 
 def expected_published_pipeline_seed_param_keys(
     resolved: Any,
-    *,
-    bootstrap_overrides: Callable[[Iterable[str]], list[str]],
 ) -> set[str]:
     defaults = expected_pipeline_seed_defaults(resolved)
     sections = pipeline_seed_sections_from_defaults(defaults, resolved=resolved)
@@ -106,7 +103,6 @@ def expected_published_pipeline_seed_param_keys(
     for item in published_pipeline_seed_args(
         resolved,
         defaults=defaults,
-        bootstrap_overrides=bootstrap_overrides,
     ):
         key, _ = item.split("=", 1)
         keys.add(str(key).replace(".", "/"))
@@ -142,7 +138,7 @@ def seed_controller_queue_name(
         queue_name = resolve_pipeline_controller_queue_name(dict(plan.get("queues") or {}))
         if str(queue_name or "").strip():
             return str(queue_name).strip()
-    return "controller"
+    return DEFAULT_PIPELINE_CONTROLLER_QUEUE
 
 
 __all__ = [

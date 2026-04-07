@@ -44,7 +44,7 @@ from ..platform_adapter_task_ops import (
 )
 from ..platform_adapter_task_context import TaskContext, save_config_resolved
 from ..ops.clearml_identity import apply_clearml_identity, build_pipeline_run_project_name, build_runtime_properties, build_runtime_tags, build_step_run_project_name, build_project_name, resolve_clearml_metadata
-from .pipeline_support import apply_exec_policy_selection as _apply_exec_policy_selection, apply_pipeline_profile_defaults, build_disabled_selection_entries as _build_disabled_selection_entries, build_pipeline_operator_inputs, build_pipeline_run_summary_payload as _build_local_pipeline_run_summary, build_pipeline_step_parameter_override_payload as _build_pipeline_step_parameter_override_payload, build_pipeline_step_specs, build_pipeline_template_defaults as _build_pipeline_template_runtime_defaults, build_pipeline_template_params as _template_pipeline_params, build_pipeline_ui_parameter_whitelist, build_pipeline_visible_hyperparameter_args, extract_pipeline_editable_defaults, finalize_pipeline_run_summary_payload as _finalize_pipeline_run_summary_payload, is_pipeline_placeholder_raw_dataset_id, normalize_pipeline_profile, normalize_ui_cloned_pipeline_cfg as _normalize_ui_cloned_pipeline_cfg_impl, resolve_ensemble_methods as _resolve_ensemble_methods, resolve_exec_policy_limits as _resolve_exec_policy_limits, resolve_exec_policy_queues as _resolve_exec_policy_queues, resolve_exec_policy_selection as _resolve_exec_policy_selection, resolve_pipeline_controller_queue_name as _resolve_pipeline_queue_name, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection, select_pipeline_queue as _select_queue, validate_pipeline_operator_inputs
+from .pipeline_support import DEFAULT_PIPELINE_CHILD_QUEUE as _DEFAULT_PIPELINE_CHILD_QUEUE, DEFAULT_PIPELINE_CONTROLLER_QUEUE as _DEFAULT_PIPELINE_CONTROLLER_QUEUE, apply_exec_policy_selection as _apply_exec_policy_selection, apply_pipeline_profile_defaults, build_disabled_selection_entries as _build_disabled_selection_entries, build_pipeline_operator_inputs, build_pipeline_run_summary_payload as _build_local_pipeline_run_summary, build_pipeline_step_parameter_override_payload as _build_pipeline_step_parameter_override_payload, build_pipeline_step_specs, build_pipeline_template_defaults as _build_pipeline_template_runtime_defaults, build_pipeline_template_params as _template_pipeline_params, build_pipeline_ui_parameter_whitelist, build_pipeline_visible_hyperparameter_args, extract_pipeline_editable_defaults, finalize_pipeline_run_summary_payload as _finalize_pipeline_run_summary_payload, is_pipeline_placeholder_raw_dataset_id, normalize_pipeline_profile, normalize_ui_cloned_pipeline_cfg as _normalize_ui_cloned_pipeline_cfg_impl, resolve_ensemble_methods as _resolve_ensemble_methods, resolve_exec_policy_limits as _resolve_exec_policy_limits, resolve_exec_policy_queues as _resolve_exec_policy_queues, resolve_exec_policy_selection as _resolve_exec_policy_selection, resolve_pipeline_controller_queue_name as _resolve_pipeline_queue_name, resolve_pipeline_plan_only, resolve_pipeline_profile, resolve_pipeline_run_flags, resolve_pipeline_selection, select_pipeline_queue as _select_queue, validate_pipeline_operator_inputs
 from ..reporting.pipeline_report import build_pipeline_report_bundle
 from .lifecycle import emit_outputs_and_manifest, start_runtime
 _STAGE_BY_TASK = {'dataset_register': '01_dataset_register', 'preprocess': '02_preprocess', 'train_model': '03_train_model', 'train_ensemble': '04_train_ensemble', 'infer': '04_infer', 'leaderboard': '05_leaderboard'}
@@ -1239,7 +1239,7 @@ def build_pipeline_seed_controller(*, cfg: Any, controller: Any, pipeline_profil
     setattr(
         controller,
         '_default_execution_queue',
-        _normalize_str(plan.get('queues', {}).get('default')) or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name')) or 'default',
+        _normalize_str(plan.get('queues', {}).get('default')) or _DEFAULT_PIPELINE_CHILD_QUEUE,
     )
     _add_clearml_pipeline_template_steps(cfg=cfg, plan=plan, steps=plan['steps'], controller=controller, use_templates=True)
     _serialize_pipeline_controller_graph(controller, allow_create_draft=False)
@@ -1300,7 +1300,7 @@ def _apply_pipeline_run_task_identity(*, task_id: str, cfg: Any, pipeline_profil
         project_root=_normalize_str(_cfg_value(cfg, 'run.clearml.project_root')) or 'MFG',
         template_set_id=_normalize_str(_cfg_value(cfg, 'run.clearml.template_set_id')) or 'default',
         pipeline_profile=pipeline_profile,
-        default_queue=_normalize_str(_cfg_value(cfg, 'exec_policy.queues.default')) or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name')),
+        default_queue=_normalize_str(_cfg_value(cfg, 'exec_policy.queues.default')) or _DEFAULT_PIPELINE_CHILD_QUEUE,
         heavy_queue=_normalize_str(_cfg_value(cfg, 'exec_policy.queues.train_model_heavy')),
         grid_run_id=_normalize_str(properties.get('grid_run_id')),
         extra=properties,
@@ -1468,7 +1468,7 @@ def _resolve_visible_pipeline_run_contract(*, cfg: Any, grid_run_id: str, allow_
         layout=_cfg_value(cfg, 'run.clearml.project_layout'),
         cfg=cfg,
     )
-    queue_name = _select_queue(plan['queues'], 'pipeline') or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name')) or 'controller'
+    queue_name = _resolve_pipeline_queue_name(plan['queues']) or _DEFAULT_PIPELINE_CONTROLLER_QUEUE
     return _VisiblePipelineRunContract(
         plan=plan,
         pipeline_profile=pipeline_profile,
@@ -1725,8 +1725,7 @@ def _execute_current_pipeline_controller(*, cfg: Any, ctx: TaskContext, grid_run
         controller = load_pipeline_controller_from_task(source_task=ctx.task)
         default_execution_queue = (
             _normalize_str(contract.plan.get('queues', {}).get('default'))
-            or _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
-            or 'default'
+            or _DEFAULT_PIPELINE_CHILD_QUEUE
         )
         _reseed_loaded_pipeline_controller_runtime(
             controller,

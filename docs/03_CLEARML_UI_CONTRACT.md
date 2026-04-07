@@ -95,8 +95,8 @@ seed pipeline について:
 - `Hyperparameters` の正本は plain dotted key の `Args` です
 - `Configuration > OperatorInputs` は grouped mirror で、実編集の正本ではありません
 - operator が通常触る主要項目は `run.usecase_id`, `data.raw_dataset_id`, `pipeline.selection.enabled_preprocess_variants`, `pipeline.selection.enabled_model_variants`、必要時のみ `ensemble.selection.enabled_methods`, `ensemble.top_k` です
-- `pipeline.profile`, `pipeline.run_*`, `pipeline.model_set`, `pipeline.grid.*`, `data.split.*`, `eval.*` などは current seed の見える値として `Hyperparameters` に出します
-- ただし `pipeline.profile` と `pipeline.run_*` は graph-shaping 値なので、通常運用では profile に合わせた既定値のまま使います
+- `pipeline.profile`, `pipeline.model_set`, `pipeline.grid.*`, `data.split.*`, `eval.*` などは current seed の見える値として `Hyperparameters` に出します
+- 固定 DAG の内部値である `pipeline.run_*` と `pipeline.plan_only` は operator 用 `Hyperparameters` には出しません。これらは seed profile と runtime 正規化で決まります
 - seed pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、dataset 登録は rehearsal / 準備系導線に分けます
 - seed card の `Configuration > OperatorInputs` は read-only mirror で、`data.raw_dataset_id=REPLACE_WITH_EXISTING_RAW_DATASET_ID` が見えても正常です
 - 実際に編集する場所は `Hyperparameters` です
@@ -122,8 +122,8 @@ seed pipeline について:
 
 | 画面 | 用途 | 書き換えてよいか | 代表項目 |
 | --- | --- | --- | --- |
-| `Configuration > OperatorInputs` | 確認用 mirror | いいえ | `run { usecase_id }`, `data { raw_dataset_id }`, `pipeline { profile, run_*, selection, grid, model_set }`, `ensemble { selection, top_k }`, `eval { ... }` |
-| `Hyperparameters` | 実編集の正本 | はい | `run.usecase_id`, `data.raw_dataset_id`, `data.split.*`, `pipeline.selection.*`, `ensemble.selection.enabled_methods`, `ensemble.top_k`, `pipeline.profile`, `pipeline.run_*`, `pipeline.model_set`, `pipeline.grid.*`, `eval.*` |
+| `Configuration > OperatorInputs` | 確認用 mirror | いいえ | `run { usecase_id }`, `data { raw_dataset_id }`, `pipeline { profile, selection, grid, model_set }`, `ensemble { selection, top_k }`, `eval { ... }` |
+| `Hyperparameters` | 実編集の正本 | はい | `run.usecase_id`, `data.raw_dataset_id`, `data.split.*`, `pipeline.selection.*`, `ensemble.selection.enabled_methods`, `ensemble.top_k`, `pipeline.profile`, `pipeline.model_set`, `pipeline.grid.*`, `eval.*` |
 
 ### seed card と actual run の差
 

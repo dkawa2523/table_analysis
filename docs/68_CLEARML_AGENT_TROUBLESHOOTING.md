@@ -12,6 +12,9 @@ Recommended values:
 - `CLEARML_FILES_HOST=http://<host>:8081`
 - `CLEARML_API_ACCESS_KEY=<access-key>`
 - `CLEARML_API_SECRET_KEY=<secret-key>`
+- `CLEARML_CONTROLLER_QUEUE=<controller-queue-name>`
+- `CLEARML_DEFAULT_QUEUE=<child-queue-name>`
+- `CLEARML_HEAVY_QUEUE=<heavy-child-queue-name>`
 - Docker named volume for `/root/.clearml`
 - `UV_CACHE_DIR=/root/.clearml/uv-cache`
 
@@ -25,7 +28,7 @@ Bring-up order:
 1. Create the Docker network if needed
 2. Copy `.env.example` to `.env`
 3. Fill in the ClearML server endpoints and credentials
-4. Start the `controller`, `default`, and `heavy-model` agents
+4. Start the controller / child / heavy-child agents with queue names that match your environment
 5. Run `manage_templates --apply` and `--validate`
 6. Verify that seed task scripts point to the new solution repository
 
@@ -63,7 +66,8 @@ template sync so task scripts point to the new repository.
 
 - `run.clearml.queue_name` is not the canonical child-routing knob for pipeline runs.
 - In pipeline mode, `exec_policy.queues.*` is the source of truth for child task queues.
-- Use `run.clearml.queue_name` only when you intentionally want to steer the controller task itself.
+- The pipeline controller queue comes from `exec_policy.queues.pipeline`.
+- `pipeline_controller` runs do not implicitly inherit `run.clearml.queue_name`.
 - The agent must appear online in the ClearML UI.
 - If tasks stay queued, verify that the queue has at least one healthy worker.
 - Canonical container assets live under `tools/clearml_agent/`.
@@ -71,10 +75,15 @@ template sync so task scripts point to the new repository.
 - Use a Docker named volume for `/root/.clearml` and set `UV_CACHE_DIR=/root/.clearml/uv-cache`.
 - Avoid Windows bind mounts for `/root/.clearml`. They can push agent processes into `p9_client_rpc` waits and stall controller runs.
 - The canonical agent image already starts through `tini`; do not reintroduce Windows host bind mounts just to share `/root/.clearml`.
-- Canonical queue split is:
-  - `controller`: pipeline controllers only
-  - `default`: preprocess, light train models, leaderboard, ensembles
-  - `heavy-model`: `catboost` and `xgboost`
+- Canonical queue **roles** are:
+  - controller: pipeline controllers only
+  - default child: preprocess, light train models, leaderboard, ensembles
+  - heavy child: `catboost` and `xgboost`
+- The queue **names** for those roles are environment-specific.
+- `tools/clearml_agent/compose.yaml` reads:
+  - `CLEARML_CONTROLLER_QUEUE`
+  - `CLEARML_DEFAULT_QUEUE`
+  - `CLEARML_HEAVY_QUEUE`
 
 If you rename queues for your environment, update the queue names consistently in:
 

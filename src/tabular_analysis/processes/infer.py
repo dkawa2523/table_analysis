@@ -42,6 +42,7 @@ from ..platform_adapter_task_ops import (
 from ..uncertainty.conformal import apply_split_conformal_interval
 from .infer_support import build_model_reference_payload, build_optimize_hparams as _build_optimize_hparams, ensure_drift_frame as _ensure_drift_frame, frame_from_payload as _frame_from_payload, handle_infer_dry_run as _handle_infer_dry_run, iter_tabular_chunks as _iter_tabular_chunks, load_batch_inputs as _load_batch_inputs, load_train_profile as _load_train_profile, parse_bool as _parse_bool, resolve_batch_children_settings as _resolve_batch_children_settings, resolve_batch_execution_mode, resolve_batch_settings as _resolve_batch_settings, resolve_calibration_info as _resolve_calibration_info, resolve_class_labels as _resolve_class_labels, resolve_optimize_settings as _resolve_optimize_settings, resolve_preprocess_columns as _resolve_preprocess_columns, resolve_threshold_used as _resolve_threshold_used, to_int_or_none as _to_int_or_none
 from .lifecycle import emit_outputs_and_manifest, start_runtime
+from .pipeline_support import DEFAULT_PIPELINE_CHILD_QUEUE as _DEFAULT_PIPELINE_CHILD_QUEUE
 from ..viz.infer_plots import build_input_output_table, build_label_distribution, build_prediction_histogram
 from ..viz.optuna_plots import build_contour, build_optimization_history, build_parallel_coordinate, build_param_importance
 from ..viz.plots import plot_interval_width_histogram
@@ -247,7 +248,9 @@ def _resolve_objective_value(payload: Mapping[str, Any], keys: Sequence[str]) ->
 def _resolve_child_queue(cfg: Any) -> str | None:
     queue = _normalize_str(_cfg_value(cfg, 'exec_policy.queues.infer'))
     if not queue:
-        queue = _normalize_str(_cfg_value(cfg, 'run.clearml.queue_name'))
+        queue = _normalize_str(_cfg_value(cfg, 'exec_policy.queues.default'))
+    if not queue:
+        queue = _DEFAULT_PIPELINE_CHILD_QUEUE
     return queue
 def _wait_for_child_tasks(task_ids: Sequence[str], *, timeout_sec: float, poll_interval_sec: float) -> dict[str, str]:
     statuses: dict[str, str] = {}
@@ -270,7 +273,9 @@ def _wait_for_child_tasks(task_ids: Sequence[str], *, timeout_sec: float, poll_i
 def _resolve_child_task_context(cfg: Any, ctx: Any, *, infer_cfg: Any, meta: Mapping[str, Any], context_name: str) -> dict[str, str | None]:
     queue_name = _resolve_child_queue(cfg)
     if not queue_name:
-        raise ValueError(f'run.clearml.queue_name is required to enqueue {context_name} child tasks.')
+        raise ValueError(
+            f'exec_policy.queues.infer or exec_policy.queues.default is required to enqueue {context_name} child tasks.'
+        )
     child_project_name = None
     project_root = _normalize_str(_cfg_value(cfg, 'run.clearml.project_root'))
     usecase_id = _normalize_str(_cfg_value(cfg, 'run.usecase_id'))

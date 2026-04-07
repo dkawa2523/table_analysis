@@ -88,7 +88,7 @@ python -m tabular_analysis.cli task=train_model \
 - seed card の `data.raw_dataset_id=REPLACE_WITH_EXISTING_RAW_DATASET_ID` は正常だが、actual run では placeholder のまま開始しない
 - `run.usecase_id` を seed 既定値 `TabularAnalysis` のまま起動した場合も、runtime が actual run 用の一意な usecase を自動採番する
 - operator 向けの正本
-- `controller/default/heavy-model` の queue 分割前提
+- controller / child / heavy-child の queue role 分割前提
 
 例:
 
@@ -103,13 +103,13 @@ python -m tabular_analysis.cli task=pipeline \
 ```
 
 - `run.clearml.queue_name` は pipeline child routing の正本ではありません。
-- pipeline mode では `exec_policy.queues.*` が child task の queue を決めます。
-- `run.clearml.queue_name` を渡す場合は controller queue の明示用途に限定します。
+- pipeline mode では `exec_policy.queues.pipeline` が controller queue、`exec_policy.queues.*` が child task の queue を決めます。
+- `pipeline_controller` 実行では `run.clearml.queue_name` で queue を暗黙変更しません。
 - seed pipeline の標準運用は `pipeline.run_dataset_register=false` 前提で、入力は既存 `data.raw_dataset_id` です。
 
 ## queue との関係
 
-標準の queue 分割:
+既定の queue 例:
 
 - `controller`
   - controller
@@ -117,6 +117,11 @@ python -m tabular_analysis.cli task=pipeline \
   - preprocess、light train、leaderboard、ensemble、infer
 - `heavy-model`
   - `catboost`、`xgboost`
+
+補足:
+
+- queue 名そのものは環境依存です
+- 他の ClearML server では別名でもよく、`exec_policy.queues.*` と agent 側設定を揃えれば動きます
 
 ## どのモードを正本にするか
 

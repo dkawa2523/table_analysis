@@ -34,6 +34,8 @@ from tabular_analysis.processes.pipeline_support import (
     apply_pipeline_profile_defaults,
     build_pipeline_visible_hyperparameter_args,
     build_pipeline_template_defaults,
+    resolve_exec_policy_queues,
+    resolve_pipeline_controller_queue_name,
     resolve_pipeline_profile,
     resolve_pipeline_run_flags,
     validate_pipeline_operator_inputs,
@@ -1273,6 +1275,7 @@ def _assert_build_pipeline_visible_hyperparameter_args_keeps_bootstrap_and_visib
         "data.target_column": "target",
         "pipeline.profile": "train_ensemble_full",
         "pipeline.run_preprocess": True,
+        "pipeline.plan_only": True,
         "pipeline.selection.enabled_preprocess_variants": ["stdscaler_ohe"],
         "pipeline.selection.enabled_model_variants": ["ridge", "elasticnet"],
         "ensemble.selection.enabled_methods": ["mean_topk", "weighted"],
@@ -1297,7 +1300,6 @@ def _assert_build_pipeline_visible_hyperparameter_args_keeps_bootstrap_and_visib
         "data.raw_dataset_id=dataset-123",
         "data.target_column=target",
         "pipeline.profile=train_ensemble_full",
-        "pipeline.run_preprocess=true",
         "pipeline.selection.enabled_preprocess_variants=[\"stdscaler_ohe\"]",
         "pipeline.selection.enabled_model_variants=[\"ridge\", \"elasticnet\"]",
         "ensemble.selection.enabled_methods=[\"mean_topk\", \"weighted\"]",
@@ -1307,6 +1309,8 @@ def _assert_build_pipeline_visible_hyperparameter_args_keeps_bootstrap_and_visib
         raise AssertionError(f"visible pipeline args must keep canonical dotted keys only: {args}")
     if any(item.startswith("default_queue=") for item in args):
         raise AssertionError(f"run-instance noise must not leak into visible pipeline args: {args}")
+    if any(item.startswith("pipeline.run_") or item.startswith("pipeline.plan_only=") for item in args):
+        raise AssertionError(f"fixed DAG internals must not leak into operator-visible args: {args}")
 
 
 def _assert_pipeline_ui_contract_registry_matches_current_ui_keys() -> None:
@@ -1331,13 +1335,6 @@ def _assert_pipeline_ui_contract_registry_matches_current_ui_keys() -> None:
         "eval.classification.top_k",
         "eval.metrics.classification_multiclass",
         "pipeline.profile",
-        "pipeline.run_dataset_register",
-        "pipeline.run_preprocess",
-        "pipeline.run_train",
-        "pipeline.run_train_ensemble",
-        "pipeline.run_leaderboard",
-        "pipeline.run_infer",
-        "pipeline.plan_only",
         "pipeline.model_set",
         "pipeline.grid.preprocess_variants",
         "pipeline.grid.model_variants",
@@ -1355,6 +1352,38 @@ def _assert_pipeline_ui_contract_registry_matches_current_ui_keys() -> None:
         "ensemble.top_k",
     ) != "ensemble.top_k":
         raise AssertionError("ensemble.top_k must map to the dotted Hyperparameters UI key")
+
+
+def _assert_pipeline_queue_resolution_prefers_exec_policy_roles() -> None:
+    cfg = OmegaConf.create(
+        {
+            "run": {"clearml": {"queue_name": "user-selected"}},
+            "exec_policy": {
+                "queues": {
+                    "default": "worker",
+                    "pipeline": "orchestrator",
+                    "train_model_heavy": "gpu-worker",
+                }
+            },
+        }
+    )
+    queues = resolve_exec_policy_queues(cfg)
+    if queues["default"] != "worker":
+        raise AssertionError(f"default child queue must come from exec_policy.queues.default: {queues}")
+    if queues["pipeline"] != "orchestrator":
+        raise AssertionError(f"controller queue must come from exec_policy.queues.pipeline: {queues}")
+    if queues["train_model_heavy"] != "gpu-worker":
+        raise AssertionError(f"heavy queue must come from exec_policy.queues.train_model_heavy: {queues}")
+    if resolve_pipeline_controller_queue_name(queues) != "orchestrator":
+        raise AssertionError(f"controller queue resolver must stay on the dedicated pipeline role: {queues}")
+
+    fallback_queues = resolve_exec_policy_queues(
+        OmegaConf.create({"run": {"clearml": {"queue_name": "legacy-controller"}}})
+    )
+    if fallback_queues["default"] != "default":
+        raise AssertionError(f"pipeline child queues must not inherit run.clearml.queue_name implicitly: {fallback_queues}")
+    if fallback_queues["pipeline"] != "controller":
+        raise AssertionError(f"pipeline controller queue must fall back to the dedicated role default: {fallback_queues}")
 
 
 def _assert_seed_materialization_detection_uses_seed_identity_fallback() -> None:
@@ -2108,7 +2137,7 @@ def _assert_loaded_pipeline_controller_reseeds_runtime_defaults() -> None:
         pipeline_module._collect_step_task_ids = lambda controller: {}
         pipeline_module._build_clearml_pipeline_refs = lambda **kwargs: (None, [], [], [], None, None)
         pipeline_module._build_local_pipeline_run_summary = lambda **kwargs: {"status": "stub"}
-        cfg = OmegaConf.create({"run": {"clearml": {"queue_name": "default"}}})
+        cfg = OmegaConf.create({"exec_policy": {"queues": {"default": "default"}}})
         ctx = pipeline_module.TaskContext(task=fake_task, project_name="LOCAL/TabularAnalysis/Pipelines", task_name="pipeline", output_dir=Path.cwd())
         summary = pipeline_module._execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id="grid-001")
         if fake_controller.started_with != "local":
@@ -2193,7 +2222,7 @@ def _assert_plan_only_controller_does_not_launch_steps() -> None:
         pipeline_module.load_pipeline_controller_from_task = lambda source_task: fake_controller
         pipeline_module._add_clearml_pipeline_steps = lambda **kwargs: setattr(fake_controller, "_nodes", {"preprocess__stdscaler_ohe": object()})
         pipeline_module._build_local_pipeline_run_summary = lambda **kwargs: {"status": "stub", "plan_only": kwargs["plan"]["plan_only"]}
-        cfg = OmegaConf.create({"run": {"clearml": {"queue_name": "default"}}})
+        cfg = OmegaConf.create({"exec_policy": {"queues": {"default": "default"}}})
         ctx = pipeline_module.TaskContext(task=fake_task, project_name="LOCAL/TabularAnalysis/Pipelines", task_name="pipeline", output_dir=Path.cwd())
         summary = pipeline_module._execute_current_pipeline_controller(cfg=cfg, ctx=ctx, grid_run_id="grid-plan-only")
         if fake_controller.started:
@@ -2391,7 +2420,7 @@ def _assert_pipeline_template_defaults_keep_plan_only() -> None:
     cfg = OmegaConf.create(
         {
             "pipeline": {"model_set": "regression_all"},
-            "run": {"clearml": {"queue_name": "default"}},
+            "exec_policy": {"queues": {"default": "default"}},
         }
     )
     defaults = build_pipeline_template_defaults(
@@ -2729,8 +2758,6 @@ def _assert_manage_templates_published_seed_args_keep_bootstrap_and_visible_runt
         f"data.raw_dataset_id={PIPELINE_RAW_DATASET_ID_SENTINEL}",
         "data.target_column=target",
         "pipeline.profile=train_ensemble_full",
-        "pipeline.plan_only=true",
-        "pipeline.run_train_ensemble=true",
         "pipeline.grid.model_variants=[\"catboost\", \"elasticnet\", \"extra_trees\", \"gaussian_process\", \"gradient_boosting\", \"knn\", \"lasso\", \"lgbm\", \"linear_regression\", \"mlp\", \"random_forest\", \"ridge\", \"xgboost\"]",
         "pipeline.selection.enabled_model_variants=[\"catboost\", \"elasticnet\", \"extra_trees\", \"gaussian_process\", \"gradient_boosting\", \"knn\", \"lasso\", \"lgbm\", \"linear_regression\", \"mlp\", \"random_forest\", \"ridge\", \"xgboost\"]",
         "ensemble.selection.enabled_methods=[\"mean_topk\", \"weighted\", \"stacking\"]",
@@ -2741,6 +2768,8 @@ def _assert_manage_templates_published_seed_args_keep_bootstrap_and_visible_runt
     for blocked_prefix in ("default_queue=", "run.grid_run_id=", "run.clearml.pipeline_task_id="):
         if any(item.startswith(blocked_prefix) for item in args):
             raise AssertionError(f"published seed args must drop run-instance noise {blocked_prefix}: {args}")
+    if any(item.startswith("pipeline.run_") or item.startswith("pipeline.plan_only=") for item in args):
+        raise AssertionError(f"published seed args must hide fixed DAG internals from operator-facing Hyperparameters: {args}")
 
 
 def _assert_manage_templates_expected_published_seed_param_keys_cover_bootstrap_and_internal_sections() -> None:
@@ -2770,12 +2799,6 @@ def _assert_manage_templates_expected_published_seed_param_keys_cover_bootstrap_
         "eval/cv_folds",
         "eval/task_type",
         "pipeline/profile",
-        "pipeline/plan_only",
-        "pipeline/run_preprocess",
-        "pipeline/run_train",
-        "pipeline/run_train_ensemble",
-        "pipeline/run_leaderboard",
-        "pipeline/run_infer",
         "pipeline/model_set",
         "pipeline/grid/preprocess_variants",
         "pipeline/grid/model_variants",
@@ -3639,6 +3662,7 @@ def main() -> int:
     _assert_split_values_by_sections_minimizes_pipeline_args()
     _assert_build_pipeline_visible_hyperparameter_args_keeps_bootstrap_and_visible_dotted_keys()
     _assert_pipeline_ui_contract_registry_matches_current_ui_keys()
+    _assert_pipeline_queue_resolution_prefers_exec_policy_roles()
     _assert_seed_materialization_detection_uses_seed_identity_fallback()
     _assert_current_pipeline_task_defaults_restore_project_root_from_properties()
     _assert_entrypoint_prefers_named_sections_over_stale_args()

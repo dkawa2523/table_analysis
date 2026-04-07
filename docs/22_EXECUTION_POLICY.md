@@ -57,7 +57,7 @@ flowchart LR
 - `exec_policy.queues.heavy_model_variants`
   - heavy queue に送る variant 一覧
 
-現在の標準:
+既定の例:
 
 - `controller`
   - pipeline controller
@@ -65,6 +65,12 @@ flowchart LR
   - preprocess、light train、leaderboard、ensemble、infer
 - `heavy-model`
   - `catboost`、`xgboost`
+
+重要:
+
+- queue の**役割**が契約で、queue の**文字列名**自体は環境依存です
+- 他の ClearML server で `controller/default/heavy-model` とは別名を使っても構いません
+- その場合は `exec_policy.queues.*` と agent 側の queue 設定を同じ名前に揃えます
 
 queue 解決の優先順位:
 
@@ -77,6 +83,38 @@ queue 解決の優先順位:
 
 - `run.clearml.queue_name` は pipeline child routing の正本ではありません
 - pipeline mode では `exec_policy.queues.*` が child task routing の正本です
+- controller queue の正本は `exec_policy.queues.pipeline` です
+
+## 代表的な運用パターン
+
+### 1. split queue
+
+- controller 用 queue を 1 本
+- light child 用 queue を 1 本
+- heavy model 用 queue を 1 本
+
+例:
+
+- `exec_policy.queues.pipeline=controller`
+- `exec_policy.queues.default=default`
+- `exec_policy.queues.train_model_heavy=heavy-model`
+
+### 2. single child queue
+
+- controller 用 queue を 1 本
+- child task はすべて同じ queue へ流す
+
+例:
+
+- `exec_policy.queues.pipeline=controller`
+- `exec_policy.queues.default=worker`
+- `exec_policy.queues.train_model=worker`
+- `exec_policy.queues.train_ensemble=worker`
+- `exec_policy.queues.train_model_heavy=worker`
+- `exec_policy.queues.heavy_model_variants=[]`
+
+この形なら、child 側は単一 queue で運用できます。  
+並列度は queue 名ではなく、その queue にぶら下がる worker 数で決まります。
 
 ## selection
 

@@ -42,13 +42,6 @@ current seed で見える代表値:
 - `eval.task_type`
 - `eval.cv_folds`
 - `pipeline.profile`
-- `pipeline.run_dataset_register`
-- `pipeline.run_preprocess`
-- `pipeline.run_train`
-- `pipeline.run_train_ensemble`
-- `pipeline.run_leaderboard`
-- `pipeline.run_infer`
-- `pipeline.plan_only`
 - `pipeline.model_set`
 - `pipeline.grid.preprocess_variants`
 - `pipeline.grid.model_variants`
@@ -75,7 +68,7 @@ bootstrap:
 
 - `run { usecase_id = ... }`
 - `data { raw_dataset_id = ... }`
-- `pipeline { profile, run_*, selection, grid, model_set }`
+- `pipeline { profile, selection, grid, model_set }`
 - `ensemble { selection, top_k }`
 - `eval { ... }`
 
@@ -93,11 +86,17 @@ bootstrap:
 通常は既定値のまま使う:
 
 - `pipeline.profile`
-- `pipeline.run_*`
 - `pipeline.model_set`
 - `pipeline.grid.*`
 - `data.split.*`
 - `eval.*`
+
+fixed DAG internal values:
+
+- `pipeline.run_*`
+- `pipeline.plan_only`
+
+これらは operator 用 `Hyperparameters` には出さず、seed profile と runtime 正規化で決まります。
 
 ## Source Of Truth
 

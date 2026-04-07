@@ -670,14 +670,12 @@ def _published_pipeline_seed_args(
     return _seed_publish_published_pipeline_seed_args(
         resolved,
         defaults=defaults,
-        bootstrap_overrides=_pipeline_seed_bootstrap_overrides,
     )
 
 
 def _expected_published_pipeline_seed_param_keys(resolved: ResolvedTemplateSpec) -> set[str]:
     return _seed_publish_expected_published_pipeline_seed_param_keys(
         resolved,
-        bootstrap_overrides=_pipeline_seed_bootstrap_overrides,
     )
 
 
