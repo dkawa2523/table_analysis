@@ -134,11 +134,29 @@ def main() -> int:
     recommended_id = summary.get("recommended_model_id")
     if not recommended_id:
         raise AssertionError("report.json missing recommended_model_id")
-    infer_model_id = summary.get("infer_model_id")
-    if not infer_model_id:
-        raise AssertionError("report.json missing infer_model_id")
+    infer_key = summary.get("recommended_infer_key")
+    infer_value = summary.get("recommended_infer_value")
+    if not infer_key or not infer_value:
+        raise AssertionError(f"report.json missing operator-facing infer selection: {summary}")
+    infer_assignment = summary.get("recommended_infer_assignment")
+    if infer_assignment != f"{infer_key}={infer_value}":
+        raise AssertionError(f"report.json must expose copy-paste friendly infer assignment: {summary}")
+    selector_values = {
+        "infer.model_id": summary.get("infer_model_id"),
+        "infer.train_task_id": summary.get("infer_train_task_id"),
+    }
+    if infer_key not in selector_values:
+        raise AssertionError(f"report.json exposed unexpected infer selector: {infer_key}")
+    if selector_values[infer_key] != infer_value:
+        raise AssertionError(
+            "report.json operator-facing infer selection must match the underlying summary payload"
+        )
     if str(recommended_id) not in report_text:
         raise AssertionError("report.md must mention recommended_model_id")
+    if str(infer_key) not in report_text or str(infer_value) not in report_text:
+        raise AssertionError("report.md must mention operator-facing infer selection")
+    if str(infer_assignment) not in report_text:
+        raise AssertionError("report.md must expose copy-paste friendly infer assignment")
     comparability = report_payload.get("comparability") or {}
     if "split_hash" not in comparability:
         raise AssertionError("report.json missing comparability.split_hash")

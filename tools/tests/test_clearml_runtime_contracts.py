@@ -26,6 +26,9 @@ from tabular_analysis.ops import clearml_identity as clearml_identity_module
 from tabular_analysis import platform_adapter_task_context as task_context_module
 from tabular_analysis import platform_adapter_task_ops as task_ops_module
 from tabular_analysis import platform_adapter_task_query as task_query_module
+from tabular_analysis.processes import infer as infer_module
+from tabular_analysis.processes import infer_clearml_children as infer_children_module
+from tabular_analysis.processes import infer_support as infer_support_module
 from tabular_analysis.processes import pipeline as pipeline_module
 from tabular_analysis.reporting import pipeline_report as pipeline_report_module
 from tabular_analysis.processes.infer_support import resolve_batch_execution_mode
@@ -83,6 +86,273 @@ def _assert_batch_execution_mode() -> None:
     except ValueError:
         return
     raise AssertionError("clearml_children should require ClearML")
+
+
+def _assert_connect_infer_tracks_train_task_id_separately() -> None:
+    original = clearml_hparams_module._connect_sections
+    captured: dict[str, object] = {}
+
+    try:
+        def _fake_connect_sections(ctx, sections, order):
+            captured["sections"] = sections
+            captured["order"] = list(order)
+
+        clearml_hparams_module._connect_sections = _fake_connect_sections
+        clearml_hparams_module.connect_infer(
+            object(),
+            {},
+            model_id=None,
+            train_task_id="train-123",
+            model_abbr="linear_regression",
+            infer_mode="single",
+            schema_policy="warn",
+            input_source="json",
+            input_json="inline",
+            provenance={"train_task_id": "train-123"},
+            include_dataset=False,
+            include_execution=False,
+        )
+        sections = captured.get("sections")
+        if not isinstance(sections, dict):
+            raise AssertionError(f"connect_infer did not emit sections: {captured}")
+        model_section = sections.get("model") or {}
+        infer_section = model_section.get("infer") or {}
+        if infer_section.get("train_task_id") != "train-123":
+            raise AssertionError(f"connect_infer should store infer.train_task_id separately: {model_section}")
+        if "model_id" in infer_section:
+            raise AssertionError(f"connect_infer should not backfill infer.model_id from train_task_id: {model_section}")
+    finally:
+        clearml_hparams_module._connect_sections = original
+
+
+def _assert_standard_infer_mode_uses_explicit_batch_payload() -> None:
+    class _DummyFrame:
+        def head(self, _count: int) -> "_DummyFrame":
+            return self
+
+        def copy(self) -> "_DummyFrame":
+            return self
+
+    class _Pipeline:
+        def transform(self, frame: _DummyFrame):
+            return [[1.0]]
+
+    originals = {
+        "prepare_inputs": infer_module._prepare_inputs,
+        "quality_gate": infer_module.run_data_quality_gate,
+        "quality_raise": infer_module.raise_on_quality_fail,
+        "validate": infer_module._validate_inputs_with_summary,
+        "preview": infer_module._write_input_preview,
+        "drift": infer_module._run_infer_drift_analysis,
+        "predict_regression": infer_module._predict_nonchunked_regression,
+        "log_artifacts": infer_module._log_infer_artifacts,
+        "emit_outputs": infer_module._emit_infer_outputs,
+    }
+    captured: dict[str, object] = {}
+
+    try:
+        def _fake_prepare_inputs(*, preprocess_bundle, mode, input_payload, input_path):
+            captured["mode"] = mode
+            captured["input_payload"] = input_payload
+            captured["input_path"] = input_path
+            return (_DummyFrame(), input_path)
+
+        infer_module._prepare_inputs = _fake_prepare_inputs
+        infer_module.run_data_quality_gate = lambda **kwargs: {"gate": {}, "payload": {}, "paths": {"json": None}}
+        infer_module.raise_on_quality_fail = lambda **kwargs: None
+        infer_module._validate_inputs_with_summary = (
+            lambda **kwargs: (
+                kwargs["inputs_df"],
+                {"ok": True, "warnings_count": 0, "errors_count": 0},
+                Path("summary.json"),
+                None,
+                None,
+            )
+        )
+        infer_module._write_input_preview = lambda *_args, **_kwargs: Path("input_preview.csv")
+        infer_module._run_infer_drift_analysis = lambda *_args, **_kwargs: (None, None)
+        infer_module._predict_nonchunked_regression = (
+            lambda **kwargs: (Path("predictions.csv"), None, kwargs.get("debug_output_sample"))
+        )
+        infer_module._log_infer_artifacts = lambda *_args, **_kwargs: None
+        infer_module._emit_infer_outputs = lambda *_args, **_kwargs: None
+
+        batch_payload = [{"feature_a": 1.5, "feature_b": "x"}]
+        infer_module._run_standard_infer_mode(
+            cfg={},
+            ctx=type("Ctx", (), {"output_dir": Path("."), "task": object()})(),
+            mode="batch",
+            clearml_enabled=False,
+            preprocess_bundle={"pipeline": _Pipeline(), "feature_names": []},
+            validation_mode="warn",
+            task_type="regression",
+            quality_target=None,
+            quality_id_columns=[],
+            uncertainty_info={"enabled": False},
+            model_bundle_path=Path("model_bundle.joblib"),
+            meta={},
+            bundle={},
+            model=object(),
+            predictor=object(),
+            n_classes=None,
+            table_settings={"max_rows": 5, "max_input_columns": 5, "max_output_columns": 5},
+            drift_settings={"enabled": False},
+            output_format="csv",
+            calibration_info=None,
+            calibrated_model=None,
+            processed_dataset_id=None,
+            split_hash="split-123",
+            recipe_hash="recipe-123",
+            debug_input_sample=None,
+            debug_output_sample=None,
+            input_payload=batch_payload,
+            input_path_value=None,
+        )
+        if captured.get("mode") != "batch":
+            raise AssertionError(f"standard infer should keep batch mode when preparing inputs: {captured}")
+        if captured.get("input_payload") != batch_payload:
+            raise AssertionError(f"standard infer should forward explicit batch payloads: {captured}")
+        if captured.get("input_path") is not None:
+            raise AssertionError(f"batch payload path should stay None for inline batch inputs: {captured}")
+    finally:
+        infer_module._prepare_inputs = originals["prepare_inputs"]
+        infer_module.run_data_quality_gate = originals["quality_gate"]
+        infer_module.raise_on_quality_fail = originals["quality_raise"]
+        infer_module._validate_inputs_with_summary = originals["validate"]
+        infer_module._write_input_preview = originals["preview"]
+        infer_module._run_infer_drift_analysis = originals["drift"]
+        infer_module._predict_nonchunked_regression = originals["predict_regression"]
+        infer_module._log_infer_artifacts = originals["log_artifacts"]
+        infer_module._emit_infer_outputs = originals["emit_outputs"]
+
+
+def _assert_clearml_infer_child_clone_replaces_hparams_and_sets_project() -> None:
+    originals = {
+        "clone": infer_children_module.clone_clearml_task,
+        "entry": infer_children_module.set_clearml_task_entry_point,
+        "project": infer_children_module.set_clearml_task_project,
+        "tags": infer_children_module.update_clearml_task_tags,
+        "replace": infer_children_module.replace_clearml_task_hyperparameters,
+        "enqueue": infer_children_module.enqueue_clearml_task,
+    }
+    calls: dict[str, object] = {}
+
+    try:
+        def _fake_clone(source_task_id: str, task_name: str) -> str:
+            calls["clone"] = (source_task_id, task_name)
+            return "child-task-123"
+
+        def _fake_entry(task_id: str, entry_point: str) -> bool:
+            calls["entry"] = (task_id, entry_point)
+            return True
+
+        def _fake_project(task_id: str, project_name: str) -> bool:
+            calls["project"] = (task_id, project_name)
+            return True
+
+        def _fake_tags(task_id: str, *, add=None, remove=None) -> bool:
+            calls["tags"] = (task_id, list(add or []), list(remove or []))
+            return True
+
+        def _fake_replace(task_id: str, *, args=None, sections=None) -> bool:
+            calls["replace"] = (task_id, list(args or []), sections)
+            return True
+
+        def _fake_enqueue(task_id: str, queue_name: str) -> bool:
+            calls["enqueue"] = (task_id, queue_name)
+            return True
+
+        infer_children_module.clone_clearml_task = _fake_clone
+        infer_children_module.set_clearml_task_entry_point = _fake_entry
+        infer_children_module.set_clearml_task_project = _fake_project
+        infer_children_module.update_clearml_task_tags = _fake_tags
+        infer_children_module.replace_clearml_task_hyperparameters = _fake_replace
+        infer_children_module.enqueue_clearml_task = _fake_enqueue
+
+        child_task_id = infer_children_module.clone_and_enqueue_clearml_infer_child(
+            source_task_id="source-task-1",
+            child_name="infer__single__case=1",
+            queue_name="infer-worker",
+            overrides={"task": "infer", "infer.train_task_id": "train-123", "infer.batch.child_task": True},
+            child_project_name="LOCAL/Infer/Child",
+            tags=["parent:source-task-1", "batch-child"],
+        )
+        if child_task_id != "child-task-123":
+            raise AssertionError(f"unexpected child task id: {child_task_id}")
+        if calls.get("project") != ("child-task-123", "LOCAL/Infer/Child"):
+            raise AssertionError(f"child clone should move project via API instead of override: {calls}")
+        replace_call = calls.get("replace")
+        if not isinstance(replace_call, tuple) or len(replace_call) != 3:
+            raise AssertionError(f"child clone should replace hyperparameters: {calls}")
+        (_, args_payload, sections_payload) = replace_call
+        if sections_payload is not None:
+            raise AssertionError(f"child clone should replace Args only for infer children: {calls}")
+        expected_args = [
+            "task=infer",
+            "infer.train_task_id=train-123",
+            "infer.batch.child_task=True",
+        ]
+        if args_payload != expected_args:
+            raise AssertionError(f"unexpected replaced Args payload: {args_payload}")
+    finally:
+        infer_children_module.clone_clearml_task = originals["clone"]
+        infer_children_module.set_clearml_task_entry_point = originals["entry"]
+        infer_children_module.set_clearml_task_project = originals["project"]
+        infer_children_module.update_clearml_task_tags = originals["tags"]
+        infer_children_module.replace_clearml_task_hyperparameters = originals["replace"]
+        infer_children_module.enqueue_clearml_task = originals["enqueue"]
+
+
+def _assert_optimize_settings_expose_backend_contract() -> None:
+    cfg = OmegaConf.create(
+        {
+            "infer": {
+                "optimize": {
+                    "backend": "optuna",
+                    "n_trials": 3,
+                    "direction": "maximize",
+                    "sampler": {"name": "tpe", "seed": 7},
+                    "search_space": [{"name": "alpha", "type": "float", "low": 0.1, "high": 1.0}],
+                    "top_k": 2,
+                }
+            }
+        }
+    )
+    settings = infer_support_module.resolve_optimize_settings(cfg)
+    if settings.get("backend") != "optuna":
+        raise AssertionError(f"optimize backend should default into the resolved contract: {settings}")
+    hparams = infer_support_module.build_optimize_hparams(settings)
+    if not isinstance(hparams, dict) or hparams.get("infer.optimize.backend") != "optuna":
+        raise AssertionError(f"optimize backend should be visible in connected hparams: {hparams}")
+
+
+def _assert_optimize_settings_reject_legacy_sampler_name_alias() -> None:
+    cfg = OmegaConf.create(
+        {
+            "infer": {
+                "optimize": {
+                    "backend": "optuna",
+                    "sampler_name": "tpe",
+                    "search_space": [{"name": "alpha", "type": "float", "low": 0.1, "high": 1.0}],
+                }
+            }
+        }
+    )
+    try:
+        infer_support_module.resolve_optimize_settings(cfg)
+    except ValueError as exc:
+        if "infer.optimize.sampler_name" not in str(exc):
+            raise AssertionError(f"legacy sampler alias should fail with a clear message: {exc}")
+        return
+    raise AssertionError("infer.optimize.sampler_name should no longer be accepted")
+
+
+def _assert_model_reference_payload_drops_model_path_fallback() -> None:
+    payload = infer_support_module.build_model_reference_payload({}, model_bundle_path=Path("model_bundle.joblib"))
+    if payload.get("model_id") is not None:
+        raise AssertionError(f"model bundle path should not appear as a synthetic model_id: {payload}")
+    if payload.get("infer_model_id") is not None or payload.get("infer_train_task_id") is not None:
+        raise AssertionError(f"empty meta should not synthesize infer references from local paths: {payload}")
 
 
 def _assert_rehearsal_sync_cfg_keeps_clearml_enabled() -> None:
@@ -3645,6 +3915,12 @@ def _assert_uv_lock_exposes_split_model_extras() -> None:
 def main() -> int:
     _assert_clearml_hocon_reader()
     _assert_batch_execution_mode()
+    _assert_connect_infer_tracks_train_task_id_separately()
+    _assert_standard_infer_mode_uses_explicit_batch_payload()
+    _assert_clearml_infer_child_clone_replaces_hparams_and_sets_project()
+    _assert_optimize_settings_expose_backend_contract()
+    _assert_optimize_settings_reject_legacy_sampler_name_alias()
+    _assert_model_reference_payload_drops_model_path_fallback()
     _assert_rehearsal_sync_cfg_keeps_clearml_enabled()
     _assert_strict_template_lookup()
     _assert_template_lookup_falls_back_to_lock_task_id()

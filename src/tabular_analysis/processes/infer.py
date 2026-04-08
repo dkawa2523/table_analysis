@@ -11,7 +11,6 @@ import json
 import math
 import numbers
 import re
-import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 import warnings
@@ -22,7 +21,7 @@ from ..io.bundle_io import load_bundle
 from ..io.schema import extract_schema_dtypes
 from ..monitoring.drift import build_drift_report, build_train_profile, render_drift_markdown
 from ..ops.alerting import emit_alert
-from ..ops.clearml_identity import apply_clearml_identity, build_project_name
+from ..ops.clearml_identity import apply_clearml_identity
 from ..ops.data_quality import raise_on_quality_fail, run_data_quality_gate
 from .drift_report import append_drift_summary, annotate_profile, resolve_drift_settings, sample_frame
 from ..platform_adapter_artifacts import get_task_artifact_local_copy, hash_recipe, resolve_clearml_task_url, upload_artifact
@@ -30,21 +29,20 @@ from ..platform_adapter_clearml_env import is_clearml_enabled
 from ..platform_adapter_common import PlatformAdapterError
 from ..platform_adapter_model import resolve_model_reference
 from ..platform_adapter_task_context import update_task_properties
-from ..platform_adapter_task_ops import (
-    clone_clearml_task,
-    enqueue_clearml_task,
-    get_clearml_task_status,
-    reset_clearml_task_args,
-    set_clearml_task_entry_point,
-    set_clearml_task_parameters,
-    update_clearml_task_tags,
-)
 from ..uncertainty.conformal import apply_split_conformal_interval
+from .infer_clearml_children import (
+    build_clearml_child_context,
+    clone_and_enqueue_clearml_infer_child,
+    wait_for_clearml_child_tasks,
+)
+from .infer_optimize_backend import (
+    build_optimize_plots,
+    create_optimize_study,
+    suggest_optimize_params,
+)
 from .infer_support import build_model_reference_payload, build_optimize_hparams as _build_optimize_hparams, ensure_drift_frame as _ensure_drift_frame, frame_from_payload as _frame_from_payload, handle_infer_dry_run as _handle_infer_dry_run, iter_tabular_chunks as _iter_tabular_chunks, load_batch_inputs as _load_batch_inputs, load_train_profile as _load_train_profile, parse_bool as _parse_bool, resolve_batch_children_settings as _resolve_batch_children_settings, resolve_batch_execution_mode, resolve_batch_settings as _resolve_batch_settings, resolve_calibration_info as _resolve_calibration_info, resolve_class_labels as _resolve_class_labels, resolve_optimize_settings as _resolve_optimize_settings, resolve_preprocess_columns as _resolve_preprocess_columns, resolve_threshold_used as _resolve_threshold_used, to_int_or_none as _to_int_or_none
 from .lifecycle import emit_outputs_and_manifest, start_runtime
-from .pipeline_support import DEFAULT_PIPELINE_CHILD_QUEUE as _DEFAULT_PIPELINE_CHILD_QUEUE
 from ..viz.infer_plots import build_input_output_table, build_label_distribution, build_prediction_histogram
-from ..viz.optuna_plots import build_contour, build_optimization_history, build_parallel_coordinate, build_param_importance
 from ..viz.plots import plot_interval_width_histogram
 _COERCE_FAILURE_SAMPLE_LIMIT = 200
 _INTERVAL_WIDTH_SAMPLE_LIMIT = 10000
@@ -149,76 +147,6 @@ def _emit_drift_alert(cfg: Any, ctx: Any, summary: Mapping[str, Any], drift_sett
     if sample_rows is not None:
         context['sample_rows'] = sample_rows
     emit_alert('drift', severity, title, message, context)
-def _build_optuna_sampler(name: str, seed: int | None) -> Any:
-    try:
-        import optuna
-    except ImportError as exc:
-        raise RuntimeError('Optuna is required for infer.mode=optimize. Install with: uv sync --extra optuna (or pip install optuna)') from exc
-    key = (name or '').strip().lower()
-    if key in ('tpe', 'tp'):
-        return optuna.samplers.TPESampler(seed=seed)
-    if key in ('random', 'rand'):
-        return optuna.samplers.RandomSampler(seed=seed)
-    if key in ('cmaes', 'cma'):
-        try:
-            return optuna.samplers.CmaEsSampler(seed=seed)
-        except (RuntimeError, TypeError, ValueError, AttributeError) as exc:
-            raise ValueError('infer.optimize.sampler=cmaes requires cmaes dependency.') from exc
-    raise ValueError('infer.optimize.sampler must be tpe, random, or cmaes.')
-def _suggest_optuna_params(trial: Any, search_space: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    params: dict[str, Any] = {}
-    for entry in search_space:
-        name = entry.get('name')
-        if not name:
-            continue
-        type_name = entry.get('type')
-        if not type_name:
-            if 'choices' in entry or 'values' in entry:
-                type_name = 'categorical'
-            else:
-                type_name = 'float'
-        type_name = _normalize_optimize_type(type_name)
-        if type_name == 'categorical':
-            choices = entry.get('choices') or entry.get('values')
-            if not isinstance(choices, Sequence) or isinstance(choices, (str, bytes)):
-                raise ValueError(f'infer.optimize.search_space {name} missing choices.')
-            params[str(name)] = trial.suggest_categorical(str(name), list(choices))
-            continue
-        low = entry.get('low')
-        high = entry.get('high')
-        if low is None or high is None:
-            raise ValueError(f'infer.optimize.search_space {name} requires low/high.')
-        step = entry.get('step')
-        log_scale = _parse_bool(entry.get('log')) if 'log' in entry else False
-        if step is not None and log_scale:
-            raise ValueError(f'infer.optimize.search_space {name} cannot set log and step together.')
-        if type_name == 'int':
-            try:
-                low_int = int(low)
-                high_int = int(high)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise ValueError(f'infer.optimize.search_space {name} requires int low/high.') from exc
-            step_int = None
-            if step is not None:
-                try:
-                    step_int = int(step)
-                except (TypeError, ValueError, OverflowError) as exc:
-                    raise ValueError(f'infer.optimize.search_space {name} step must be int.') from exc
-            params[str(name)] = trial.suggest_int(str(name), low_int, high_int, step=step_int, log=log_scale)
-            continue
-        try:
-            low_float = float(low)
-            high_float = float(high)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(f'infer.optimize.search_space {name} requires float low/high.') from exc
-        step_float = None
-        if step is not None:
-            try:
-                step_float = float(step)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise ValueError(f'infer.optimize.search_space {name} step must be float.') from exc
-        params[str(name)] = trial.suggest_float(str(name), low_float, high_float, step=step_float, log=log_scale)
-    return params
 def _coerce_objective_value(value: Any) -> float | None:
     if value is None:
         return None
@@ -245,69 +173,6 @@ def _resolve_objective_value(payload: Mapping[str, Any], keys: Sequence[str]) ->
             if numeric is not None:
                 return numeric
     return None
-def _resolve_child_queue(cfg: Any) -> str | None:
-    queue = _normalize_str(_cfg_value(cfg, 'exec_policy.queues.infer'))
-    if not queue:
-        queue = _normalize_str(_cfg_value(cfg, 'exec_policy.queues.default'))
-    if not queue:
-        queue = _DEFAULT_PIPELINE_CHILD_QUEUE
-    return queue
-def _wait_for_child_tasks(task_ids: Sequence[str], *, timeout_sec: float, poll_interval_sec: float) -> dict[str, str]:
-    statuses: dict[str, str] = {}
-    remaining = set(task_ids)
-    deadline = time.monotonic() + timeout_sec
-    terminal = {'completed', 'failed', 'stopped', 'closed', 'aborted'}
-    while remaining and time.monotonic() < deadline:
-        for task_id in list(remaining):
-            status = get_clearml_task_status(task_id)
-            if status:
-                status_value = str(status).lower()
-                if status_value in terminal:
-                    statuses[task_id] = status_value
-                    remaining.remove(task_id)
-        if remaining:
-            time.sleep(poll_interval_sec)
-    for task_id in remaining:
-        statuses[task_id] = 'timeout'
-    return statuses
-def _resolve_child_task_context(cfg: Any, ctx: Any, *, infer_cfg: Any, meta: Mapping[str, Any], context_name: str) -> dict[str, str | None]:
-    queue_name = _resolve_child_queue(cfg)
-    if not queue_name:
-        raise ValueError(
-            f'exec_policy.queues.infer or exec_policy.queues.default is required to enqueue {context_name} child tasks.'
-        )
-    child_project_name = None
-    project_root = _normalize_str(_cfg_value(cfg, 'run.clearml.project_root'))
-    usecase_id = _normalize_str(_cfg_value(cfg, 'run.usecase_id'))
-    if project_root and usecase_id:
-        child_project_name = build_project_name(project_root, usecase_id, stage='infer', process='infer_child', cfg=cfg)
-    source_task_id = _normalize_str(_cfg_value(cfg, 'run.clearml.clone_from_task_id')) or str(getattr(ctx.task, 'id', ''))
-    if not source_task_id:
-        raise PlatformAdapterError(f'ClearML task id is required to clone {context_name} child tasks.')
-    explicit_model_id = _normalize_str(getattr(infer_cfg, 'model_id', None))
-    child_reference = build_infer_reference(
-        model_id=explicit_model_id or _normalize_str(meta.get('model_id')),
-        registry_model_id=None if explicit_model_id else _normalize_str(meta.get('registry_model_id')),
-        train_task_id=_normalize_str(getattr(infer_cfg, 'train_task_id', None)) or _normalize_str(meta.get('train_task_id')),
-    )
-    child_model_id = child_reference.get('infer_model_id')
-    child_train_task_id = child_reference.get('infer_train_task_id')
-    if not child_model_id and (not child_train_task_id):
-        raise ValueError(f'infer.model_id or infer.train_task_id is required for {context_name} child tasks.')
-    return {'queue_name': queue_name, 'child_project_name': child_project_name, 'source_task_id': source_task_id, 'child_model_id': child_model_id, 'child_train_task_id': child_train_task_id}
-def _clone_and_enqueue_infer_child(*, source_task_id: str, child_name: str, queue_name: str, overrides: Mapping[str, Any], tags: Sequence[str] | None=None, reset_args_first: bool=False) -> str:
-    child_task_id = clone_clearml_task(source_task_id=source_task_id, task_name=child_name)
-    try:
-        set_clearml_task_entry_point(child_task_id, 'tools/clearml_entrypoint.py')
-    except _RECOVERABLE_ERRORS:
-        pass
-    if reset_args_first:
-        reset_clearml_task_args(child_task_id, [])
-    if tags:
-        update_clearml_task_tags(child_task_id, add=[str(tag) for tag in tags if str(tag).strip()])
-    set_clearml_task_parameters(child_task_id, dict(overrides))
-    enqueue_clearml_task(child_task_id, queue_name)
-    return child_task_id
 def _load_child_prediction_payload(cfg: Any, task_id: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         pred_path = get_task_artifact_local_copy(cfg, task_id, 'prediction.json')
@@ -1033,12 +898,10 @@ def _build_proba_payload(values: Sequence[Any], labels: Sequence[Any] | None) ->
     if labels:
         return {str(label): _sanitize_json_value(value) for (label, value) in zip(labels, values)}
     return [_sanitize_json_value(value) for value in values]
-def _prepare_inputs(cfg: Any, preprocess_bundle: dict[str, Any], mode: str):
-    infer_cfg = getattr(cfg, 'infer', None)
-    dataset_path = _normalize_str(getattr(infer_cfg, 'input_path', None))
-    if not dataset_path:
-        dataset_path = _normalize_str(getattr(getattr(cfg, 'data', None), 'dataset_path', None))
-    input_payload = _parse_json_payload(getattr(infer_cfg, 'input_json', None), key_name='infer.input_json')
+
+
+def _prepare_inputs(*, preprocess_bundle: dict[str, Any], mode: str, input_payload: Any | None, input_path: str | None):
+    dataset_path = _normalize_str(input_path)
     df = None
     resolved_path = None
     if input_payload is not None:
@@ -1561,7 +1424,7 @@ def _emit_infer_outputs(cfg: Any, ctx: Any, *, clearml_enabled: bool, drift_aler
     (out, inputs, outputs) = _build_infer_manifest_payloads(mode=mode, meta=meta, model_bundle_path=model_bundle_path, task_type=task_type, calibration_info=calibration_info, calibrated_model=calibrated_model, validation_mode=validation_mode, validation=validation, predictions_path=predictions_path, input_preview_path=input_preview_path, errors_path=errors_path, drift_report_path=drift_report_path, drift_alert=drift_alert, input_path=input_path, processed_dataset_id=processed_dataset_id, chunked=chunked)
     inputs.update({'split_hash': split_hash, 'recipe_hash': recipe_hash})
     emit_outputs_and_manifest(ctx, cfg, process='infer', out=out, inputs=inputs, outputs=outputs, hash_payloads={'config_hash': ('config', cfg), 'split_hash': split_hash, 'recipe_hash': recipe_hash}, clearml_enabled=clearml_enabled)
-def _run_optimize_mode_impl(cfg: Any, ctx: Any, *, clearml_enabled: bool, optimize_settings: dict[str, Any] | None, preprocess_bundle: dict[str, Any], validation_mode: str, uncertainty_info: dict[str, Any], infer_cfg: Any, meta: dict[str, Any], model_bundle_path: Path, model_abbr: str | None, table_settings: dict[str, int], processed_dataset_id: str | None, split_hash: str, recipe_hash: str) -> None:
+def _run_optimize_mode_impl(cfg: Any, ctx: Any, *, clearml_enabled: bool, optimize_settings: dict[str, Any] | None, preprocess_bundle: dict[str, Any], validation_mode: str, uncertainty_info: dict[str, Any], infer_cfg: Any, meta: dict[str, Any], model_bundle_path: Path, model_abbr: str | None, table_settings: dict[str, int], processed_dataset_id: str | None, split_hash: str, recipe_hash: str, input_payload: Any | None, input_path_value: str | None) -> None:
     mode = 'optimize'
     if not clearml_enabled:
         raise ValueError('infer.mode=optimize requires ClearML; set run.clearml.enabled=true.')
@@ -1570,7 +1433,12 @@ def _run_optimize_mode_impl(cfg: Any, ctx: Any, *, clearml_enabled: bool, optimi
     search_space = optimize_settings.get('search_space') or []
     if not search_space:
         raise ValueError('infer.optimize.search_space is required for optimize mode.')
-    (base_df, base_input_path) = _prepare_inputs(cfg, preprocess_bundle, 'single')
+    (base_df, base_input_path) = _prepare_inputs(
+        preprocess_bundle=preprocess_bundle,
+        mode='single',
+        input_payload=input_payload,
+        input_path=input_path_value,
+    )
     (base_df, validation, summary_path, errors_json_path, _) = _validate_inputs_with_summary(ctx=ctx, clearml_enabled=clearml_enabled, mode=mode, validation_mode=validation_mode, preprocess_bundle=preprocess_bundle, inputs_df=base_df, uncertainty_info=uncertainty_info)
     input_preview_path = _write_input_preview(base_df, 'single', ctx.output_dir)
     if clearml_enabled:
@@ -1583,26 +1451,17 @@ def _run_optimize_mode_impl(cfg: Any, ctx: Any, *, clearml_enabled: bool, optimi
         missing = [name for name in search_names if name not in feature_columns]
         if missing:
             log_debug_text(ctx.task, 'infer', 'optimize_search_space_warning', f'search_space columns not in feature_columns: {missing}', step=0)
-    child_context = _resolve_child_task_context(cfg, ctx, infer_cfg=infer_cfg, meta=meta, context_name='optimize')
-    queue_name = str(child_context['queue_name'])
-    child_project_name = child_context['child_project_name']
-    source_task_id = str(child_context['source_task_id'])
-    child_model_id = child_context['child_model_id']
-    child_train_task_id = child_context['child_train_task_id']
-    try:
-        import optuna
-        from optuna.trial import TrialState
-    except _RECOVERABLE_ERRORS as exc:
-        raise RuntimeError('Optuna is required for infer.mode=optimize. Install with: uv sync --extra optuna (or pip install optuna)') from exc
-    sampler = _build_optuna_sampler(optimize_settings.get('sampler_name'), optimize_settings.get('sampler_seed'))
-    study = optuna.create_study(direction=optimize_settings.get('direction'), sampler=sampler)
+    child_context = build_clearml_child_context(cfg, ctx, infer_cfg=infer_cfg, meta=meta, context_name='optimize')
+    queue_name = child_context.queue_name
+    source_task_id = child_context.source_task_id
+    (backend_name, study, TrialState) = create_optimize_study(optimize_settings)
     completed = {'completed', 'closed'}
     trial_rows: list[dict[str, Any]] = []
     child_rows: list[dict[str, Any]] = []
     objective_keys = optimize_settings.get('objective_keys') or ['prediction']
     for _ in range(int(optimize_settings.get('n_trials') or 0)):
         trial = study.ask()
-        params = _suggest_optuna_params(trial, search_space)
+        params = suggest_optimize_params(backend_name, trial=trial, search_space=search_space)
         trial_number = int(trial.number) + 1
         record = dict(base_record)
         for (key, value) in params.items():
@@ -1611,15 +1470,36 @@ def _run_optimize_mode_impl(cfg: Any, ctx: Any, *, clearml_enabled: bool, optimi
         child_name = f'infer__single__trial={trial_number}'
         if model_abbr:
             child_name = f'infer__single__model={model_abbr}__trial={trial_number}'
-        overrides: dict[str, Any] = {'task': 'infer', 'infer.mode': 'single', 'infer.input_json': payload, 'infer.dry_run': False, 'infer.validation.mode': validation_mode, 'infer.optimize.child_task': True, 'infer.optimize.search_space': '', 'infer.optimize.sampler': '', 'infer.optimize.n_trials': '', 'infer.optimize.direction': '', 'infer.optimize.objective.key': '', 'infer.optimize.top_k': '', 'run.clearml.execution': 'logging', 'run.clearml.queue_name': queue_name, 'run.clearml.enabled': True, 'run.clearml.task_name': child_name, 'run.clearml.env.bootstrap': 'auto'}
-        if child_project_name:
-            overrides['task.project_name'] = child_project_name
-        if child_train_task_id:
-            overrides['infer.train_task_id'] = child_train_task_id
+        overrides: dict[str, Any] = {
+            'task': 'infer',
+            'infer.mode': 'single',
+            'infer.input_json': payload,
+            'infer.dry_run': False,
+            'infer.validation.mode': validation_mode,
+            'infer.optimize.child_task': True,
+            'run.clearml.execution': 'logging',
+            'run.clearml.queue_name': queue_name,
+            'run.clearml.enabled': True,
+            'run.clearml.task_name': child_name,
+            'run.clearml.env.bootstrap': 'auto',
+        }
+        if child_context.child_train_task_id:
+            overrides['infer.train_task_id'] = child_context.child_train_task_id
         else:
-            overrides['infer.model_id'] = child_model_id
-        child_task_id = _clone_and_enqueue_infer_child(source_task_id=source_task_id, child_name=child_name, queue_name=queue_name, overrides=overrides, tags=[f'parent:{source_task_id}', 'trial:optimize'], reset_args_first=True)
-        statuses = _wait_for_child_tasks([child_task_id], timeout_sec=optimize_settings.get('wait_timeout_sec'), poll_interval_sec=optimize_settings.get('poll_interval_sec'))
+            overrides['infer.model_id'] = child_context.child_model_id
+        child_task_id = clone_and_enqueue_clearml_infer_child(
+            source_task_id=source_task_id,
+            child_name=child_name,
+            queue_name=queue_name,
+            overrides=overrides,
+            child_project_name=child_context.child_project_name,
+            tags=[f'parent:{source_task_id}', 'trial:optimize'],
+        )
+        statuses = wait_for_clearml_child_tasks(
+            [child_task_id],
+            timeout_sec=optimize_settings.get('wait_timeout_sec'),
+            poll_interval_sec=optimize_settings.get('poll_interval_sec'),
+        )
         status = statuses.get(child_task_id, 'unknown')
         child_url = resolve_clearml_task_url(cfg, child_task_id)
         child_rows.append({'trial_number': trial_number, 'task_id': child_task_id, 'status': status, 'url': child_url})
@@ -1672,18 +1552,15 @@ def _run_optimize_mode_impl(cfg: Any, ctx: Any, *, clearml_enabled: bool, optimi
         best_value = ranked[0].get('objective')
         best_params = {key[3:]: ranked[0][key] for key in ranked[0] if isinstance(key, str) and key.startswith('in.')}
     if clearml_enabled:
-        history_fig = build_optimization_history(study, log_scale=bool(optimize_settings.get('history_log_scale')), output_path=ctx.output_dir / 'optuna_history.png')
-        log_plotly(ctx.task, 'infer', 'optuna_history', history_fig, step=0)
-        parallel_fig = build_parallel_coordinate(study, output_path=ctx.output_dir / 'optuna_parallel.png')
-        log_plotly(ctx.task, 'infer', 'optuna_parallel', parallel_fig, step=0)
-        importance_fig = build_param_importance(study, output_path=ctx.output_dir / 'optuna_importance.png')
-        log_plotly(ctx.task, 'infer', 'optuna_importance', importance_fig, step=0)
-        contour_params = optimize_settings.get('contour_params')
-        if not contour_params:
-            contour_params = [entry.get('name') for entry in search_space if entry.get('name')][:2]
-        if contour_params and len(contour_params) >= 2:
-            contour_fig = build_contour(study, params=contour_params, output_path=ctx.output_dir / 'optuna_contour.png')
-            log_plotly(ctx.task, 'infer', 'optuna_contour', contour_fig, step=0)
+        optimize_figures = build_optimize_plots(
+            backend_name,
+            study=study,
+            optimize_settings=optimize_settings,
+            search_space=search_space,
+            output_dir=ctx.output_dir,
+        )
+        for (name, figure) in optimize_figures.items():
+            log_plotly(ctx.task, 'infer', f'optimize_{name}', figure, step=0)
         report_input_output_table(ctx.task, 'infer', 'input_output_table', top_inputs, top_outputs, max_rows=table_settings['max_rows'], max_input_columns=table_settings['max_input_columns'], max_output_columns=table_settings['max_output_columns'], output_path=ctx.output_dir / 'optimize_input_output_table.png', step=0)
         log_debug_table(ctx.task, 'infer', 'optimize_trials', trial_rows, step=0)
         log_debug_table(ctx.task, 'infer', 'optimize_child_tasks', child_rows, step=0)
@@ -1709,28 +1586,45 @@ def _run_batch_children_mode_impl(cfg: Any, ctx: Any, *, clearml_enabled: bool, 
     completed = {'completed', 'closed'}
     statuses: dict[str, str] = {}
     if input_records:
-        child_context = _resolve_child_task_context(cfg, ctx, infer_cfg=infer_cfg, meta=meta, context_name='batch')
-        queue_name = str(child_context['queue_name'])
-        child_project_name = child_context['child_project_name']
-        source_task_id = str(child_context['source_task_id'])
-        child_model_id = child_context['child_model_id']
-        child_train_task_id = child_context['child_train_task_id']
+        child_context = build_clearml_child_context(cfg, ctx, infer_cfg=infer_cfg, meta=meta, context_name='batch')
+        queue_name = child_context.queue_name
+        source_task_id = child_context.source_task_id
         for (idx, record) in enumerate(input_records, start=1):
             payload = json.dumps(record, ensure_ascii=True, separators=(',', ':'))
             child_name = f'infer__single__case={idx}'
             if model_abbr:
                 child_name = f'infer__single__model={model_abbr}__case={idx}'
-            overrides: dict[str, Any] = {'task': 'infer', 'infer.mode': 'single', 'infer.input_json': payload, 'infer.dry_run': False, 'infer.validation.mode': validation_mode, 'infer.batch.child_task': True, 'run.clearml.execution': 'logging', 'run.clearml.queue_name': queue_name, 'run.clearml.enabled': True, 'run.clearml.task_name': child_name, 'run.clearml.env.bootstrap': 'auto'}
-            if child_project_name:
-                overrides['task.project_name'] = child_project_name
-            if child_train_task_id:
-                overrides['infer.train_task_id'] = child_train_task_id
+            overrides: dict[str, Any] = {
+                'task': 'infer',
+                'infer.mode': 'single',
+                'infer.input_json': payload,
+                'infer.dry_run': False,
+                'infer.validation.mode': validation_mode,
+                'infer.batch.child_task': True,
+                'run.clearml.execution': 'logging',
+                'run.clearml.queue_name': queue_name,
+                'run.clearml.enabled': True,
+                'run.clearml.task_name': child_name,
+                'run.clearml.env.bootstrap': 'auto',
+            }
+            if child_context.child_train_task_id:
+                overrides['infer.train_task_id'] = child_context.child_train_task_id
             else:
-                overrides['infer.model_id'] = child_model_id
-            child_task_id = _clone_and_enqueue_infer_child(source_task_id=source_task_id, child_name=child_name, queue_name=queue_name, overrides=overrides)
+                overrides['infer.model_id'] = child_context.child_model_id
+            child_task_id = clone_and_enqueue_clearml_infer_child(
+                source_task_id=source_task_id,
+                child_name=child_name,
+                queue_name=queue_name,
+                overrides=overrides,
+                child_project_name=child_context.child_project_name,
+            )
             child_task_ids.append(child_task_id)
             child_rows.append({'condition_id': idx, 'task_id': child_task_id, 'status': 'queued', 'url': resolve_clearml_task_url(cfg, child_task_id)})
-        statuses = _wait_for_child_tasks(child_task_ids, timeout_sec=batch_children_settings['wait_timeout_sec'], poll_interval_sec=batch_children_settings['poll_interval_sec'])
+        statuses = wait_for_clearml_child_tasks(
+            child_task_ids,
+            timeout_sec=batch_children_settings['wait_timeout_sec'],
+            poll_interval_sec=batch_children_settings['poll_interval_sec'],
+        )
     output_rows: list[dict[str, Any]] = []
     for row in child_rows:
         task_id = row['task_id']
@@ -1900,8 +1794,13 @@ def _run_chunked_batch_mode_impl(cfg: Any, ctx: Any, *, mode: str, input_payload
     _log_infer_artifacts(ctx, clearml_enabled=clearml_enabled, interval_plot_path=interval_plot_path, debug_input_sample=debug_input_sample, debug_output_sample=debug_output_sample, input_preview_path=input_preview_path, predictions_path=predictions_path, table_settings=table_settings)
     _emit_infer_outputs(cfg, ctx, clearml_enabled=clearml_enabled, drift_alert=drift_alert, mode=mode, meta=meta, model_bundle_path=model_bundle_path, task_type=task_type, calibration_info=calibration_info, calibrated_model=calibrated_model, validation_mode=validation_mode, validation=validation, predictions_path=predictions_path, input_preview_path=input_preview_path, errors_path=errors_log_path, drift_report_path=drift_report_path, input_path=str(chunked_input_path), processed_dataset_id=processed_dataset_id, split_hash=split_hash, recipe_hash=recipe_hash, chunked={'chunk_size': chunk_size, 'rows': total_rows, 'chunks': total_chunks, 'errors_count': int(validation_acc.get('total_issues') or 0), 'output_format': output_format, 'write_mode': write_mode, 'max_rows': max_rows})
     return True
-def _run_standard_infer_mode(*, cfg: Any, ctx: Any, mode: str, clearml_enabled: bool, preprocess_bundle: dict[str, Any], validation_mode: str, task_type: str, quality_target: str | None, quality_id_columns: Any, uncertainty_info: dict[str, Any], model_bundle_path: Path, meta: dict[str, Any], bundle: dict[str, Any], model: Any, predictor: Any, n_classes: int | None, table_settings: dict[str, Any], drift_settings: dict[str, Any], output_format: str, calibration_info: dict[str, Any], calibrated_model: Any | None, processed_dataset_id: str | None, split_hash: str | None, recipe_hash: str | None, debug_input_sample: Any | None, debug_output_sample: Any | None) -> None:
-    (inputs_df, input_path) = _prepare_inputs(cfg, preprocess_bundle, mode)
+def _run_standard_infer_mode(*, cfg: Any, ctx: Any, mode: str, clearml_enabled: bool, preprocess_bundle: dict[str, Any], validation_mode: str, task_type: str, quality_target: str | None, quality_id_columns: Any, uncertainty_info: dict[str, Any], model_bundle_path: Path, meta: dict[str, Any], bundle: dict[str, Any], model: Any, predictor: Any, n_classes: int | None, table_settings: dict[str, Any], drift_settings: dict[str, Any], output_format: str, calibration_info: dict[str, Any], calibrated_model: Any | None, processed_dataset_id: str | None, split_hash: str | None, recipe_hash: str | None, debug_input_sample: Any | None, debug_output_sample: Any | None, input_payload: Any | None, input_path_value: str | None) -> None:
+    (inputs_df, input_path) = _prepare_inputs(
+        preprocess_bundle=preprocess_bundle,
+        mode=mode,
+        input_payload=input_payload,
+        input_path=input_path_value,
+    )
     quality_result = run_data_quality_gate(cfg=cfg, ctx=ctx, df=inputs_df, target_column=quality_target, task_type=task_type, id_columns=quality_id_columns, output_dir=ctx.output_dir)
     raise_on_quality_fail(cfg=cfg, ctx=ctx, gate=quality_result['gate'], payload=quality_result['payload'], json_path=quality_result['paths']['json'])
     (inputs_df, validation, summary_path, errors_json_path, _) = _validate_inputs_with_summary(ctx=ctx, clearml_enabled=clearml_enabled, mode=mode, validation_mode=validation_mode, preprocess_bundle=preprocess_bundle, inputs_df=inputs_df, uncertainty_info=uncertainty_info)
@@ -1953,7 +1852,7 @@ def run(cfg: Any) -> None:
         return
     model_ctx = _resolve_infer_model_context(cfg, clearml_enabled=clearml_enabled, validation_mode=validation_mode)
     connect_reference = build_model_reference_payload(model_ctx.meta, model_bundle_path=model_ctx.model_bundle_path)
-    connect_infer(ctx, cfg, model_id=connect_reference.get('infer_model_id') or connect_reference.get('infer_train_task_id') or str(model_ctx.model_bundle_path), model_abbr=model_ctx.model_abbr, infer_mode=mode, schema_policy=validation_mode, input_source=settings.input_source, input_path=settings.input_path_value, input_json=settings.input_json_label, provenance=model_ctx.provenance, optimize_payload=settings.optimize_hparams, include_dataset=settings.include_dataset, include_execution=settings.include_execution)
+    connect_infer(ctx, cfg, model_id=connect_reference.get('infer_model_id'), train_task_id=connect_reference.get('infer_train_task_id'), model_abbr=model_ctx.model_abbr, infer_mode=mode, schema_policy=validation_mode, input_source=settings.input_source, input_path=settings.input_path_value, input_json=settings.input_json_label, provenance=model_ctx.provenance, optimize_payload=settings.optimize_hparams, include_dataset=settings.include_dataset, include_execution=settings.include_execution)
     columns_info = model_ctx.preprocess_bundle.get('columns') or {}
     quality_target = _normalize_str(columns_info.get('target_column') or _cfg_value(cfg, 'data.target_column'))
     quality_id_columns = columns_info.get('id_columns') or _cfg_value(cfg, 'data.id_columns') or []
@@ -1967,11 +1866,11 @@ def run(cfg: Any) -> None:
     if mode == 'batch' and (settings.batch_inputs_payload is not None or settings.batch_inputs_path_value):
         (batch_inputs_df, batch_inputs_path) = _load_batch_inputs(settings.batch_inputs_payload, settings.batch_inputs_path_value or settings.input_path_value, max_rows=batch_children_settings['max_children'])
     if mode == 'optimize':
-        _run_optimize_mode_impl(cfg, ctx, clearml_enabled=clearml_enabled, optimize_settings=settings.optimize_settings, preprocess_bundle=model_ctx.preprocess_bundle, validation_mode=validation_mode, uncertainty_info=uncertainty_info, infer_cfg=settings.infer_cfg, meta=model_ctx.meta, model_bundle_path=model_ctx.model_bundle_path, model_abbr=model_ctx.model_abbr, table_settings=settings.table_settings, processed_dataset_id=model_ctx.processed_dataset_id, split_hash=model_ctx.split_hash, recipe_hash=model_ctx.recipe_hash)
+        _run_optimize_mode_impl(cfg, ctx, clearml_enabled=clearml_enabled, optimize_settings=settings.optimize_settings, preprocess_bundle=model_ctx.preprocess_bundle, validation_mode=validation_mode, uncertainty_info=uncertainty_info, infer_cfg=settings.infer_cfg, meta=model_ctx.meta, model_bundle_path=model_ctx.model_bundle_path, model_abbr=model_ctx.model_abbr, table_settings=settings.table_settings, processed_dataset_id=model_ctx.processed_dataset_id, split_hash=model_ctx.split_hash, recipe_hash=model_ctx.recipe_hash, input_payload=settings.input_payload, input_path_value=settings.input_path_value)
         return
     if settings.use_batch_children and batch_inputs_df is not None:
         _run_batch_children_mode_impl(cfg, ctx, clearml_enabled=clearml_enabled, preprocess_bundle=model_ctx.preprocess_bundle, validation_mode=validation_mode, uncertainty_info=uncertainty_info, mode=mode, batch_inputs_df=batch_inputs_df, batch_inputs_path=batch_inputs_path, batch_children_settings=batch_children_settings, infer_cfg=settings.infer_cfg, meta=model_ctx.meta, model_bundle_path=model_ctx.model_bundle_path, model_abbr=model_ctx.model_abbr, table_settings=settings.table_settings, processed_dataset_id=model_ctx.processed_dataset_id, split_hash=model_ctx.split_hash, recipe_hash=model_ctx.recipe_hash)
         return
-    if _run_chunked_batch_mode_impl(cfg, ctx, mode=mode, input_payload=settings.input_payload, input_path_value=settings.input_path_value, chunk_size=batch_settings['chunk_size'], output_format=batch_settings['output_format'], write_mode=batch_settings['write_mode'], max_rows=batch_settings['max_rows'], preprocess_bundle=model_ctx.preprocess_bundle, uncertainty_info=uncertainty_info, drift_settings=drift_settings, task_type=model_ctx.task_type, n_classes=model_ctx.n_classes, bundle=model_ctx.bundle, model=model_ctx.model, predictor=predictor, quality_target=quality_target, quality_id_columns=quality_id_columns, validation_mode=validation_mode, table_settings=settings.table_settings, clearml_enabled=clearml_enabled, meta=model_ctx.meta, model_bundle_path=model_ctx.model_bundle_path, calibration_info=calibration_info, calibrated_model=model_ctx.calibrated_model, processed_dataset_id=model_ctx.processed_dataset_id, split_hash=model_ctx.split_hash, recipe_hash=model_ctx.recipe_hash, debug_input_sample=debug_input_sample, debug_output_sample=debug_output_sample):
+    if _run_chunked_batch_mode_impl(cfg, ctx, mode=mode, input_payload=settings.batch_inputs_payload if mode == 'batch' else settings.input_payload, input_path_value=settings.input_path_value, chunk_size=batch_settings['chunk_size'], output_format=batch_settings['output_format'], write_mode=batch_settings['write_mode'], max_rows=batch_settings['max_rows'], preprocess_bundle=model_ctx.preprocess_bundle, uncertainty_info=uncertainty_info, drift_settings=drift_settings, task_type=model_ctx.task_type, n_classes=model_ctx.n_classes, bundle=model_ctx.bundle, model=model_ctx.model, predictor=predictor, quality_target=quality_target, quality_id_columns=quality_id_columns, validation_mode=validation_mode, table_settings=settings.table_settings, clearml_enabled=clearml_enabled, meta=model_ctx.meta, model_bundle_path=model_ctx.model_bundle_path, calibration_info=calibration_info, calibrated_model=model_ctx.calibrated_model, processed_dataset_id=model_ctx.processed_dataset_id, split_hash=model_ctx.split_hash, recipe_hash=model_ctx.recipe_hash, debug_input_sample=debug_input_sample, debug_output_sample=debug_output_sample):
         return
-    _run_standard_infer_mode(cfg=cfg, ctx=ctx, mode=mode, clearml_enabled=clearml_enabled, preprocess_bundle=model_ctx.preprocess_bundle, validation_mode=validation_mode, task_type=model_ctx.task_type, quality_target=quality_target, quality_id_columns=quality_id_columns, uncertainty_info=uncertainty_info, model_bundle_path=model_ctx.model_bundle_path, meta=model_ctx.meta, bundle=model_ctx.bundle, model=model_ctx.model, predictor=predictor, n_classes=model_ctx.n_classes, table_settings=settings.table_settings, drift_settings=drift_settings, output_format=batch_settings['output_format'], calibration_info=calibration_info, calibrated_model=model_ctx.calibrated_model, processed_dataset_id=model_ctx.processed_dataset_id, split_hash=model_ctx.split_hash, recipe_hash=model_ctx.recipe_hash, debug_input_sample=debug_input_sample, debug_output_sample=debug_output_sample)
+    _run_standard_infer_mode(cfg=cfg, ctx=ctx, mode=mode, clearml_enabled=clearml_enabled, preprocess_bundle=model_ctx.preprocess_bundle, validation_mode=validation_mode, task_type=model_ctx.task_type, quality_target=quality_target, quality_id_columns=quality_id_columns, uncertainty_info=uncertainty_info, model_bundle_path=model_ctx.model_bundle_path, meta=model_ctx.meta, bundle=model_ctx.bundle, model=model_ctx.model, predictor=predictor, n_classes=model_ctx.n_classes, table_settings=settings.table_settings, drift_settings=drift_settings, output_format=batch_settings['output_format'], calibration_info=calibration_info, calibrated_model=model_ctx.calibrated_model, processed_dataset_id=model_ctx.processed_dataset_id, split_hash=model_ctx.split_hash, recipe_hash=model_ctx.recipe_hash, debug_input_sample=debug_input_sample, debug_output_sample=debug_output_sample, input_payload=settings.batch_inputs_payload if mode == 'batch' else settings.input_payload, input_path_value=settings.input_path_value)

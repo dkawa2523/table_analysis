@@ -28,7 +28,7 @@ def build_leaderboard_table(rows: Sequence[dict[str, Any]], *, metric_names: Seq
     if max_rows <= 0:
         max_rows = len(rows)
     view_rows = list(rows[:max_rows])
-    columns = [('rank', 'rank'), ('model_variant', 'model'), ('preprocess_variant', 'preprocess'), ('reference_kind', 'ref_kind'), ('infer_selector', 'infer_key'), ('infer_target', 'infer_value')]
+    columns = [('rank', 'rank'), ('model_variant', 'model'), ('preprocess_variant', 'preprocess'), ('infer_selector', 'infer_key'), ('infer_target', 'infer_value'), ('reference_kind', 'ref_kind')]
     for name in metric_names:
         columns.append((name, name))
     columns.append((score_key, score_label or score_key))

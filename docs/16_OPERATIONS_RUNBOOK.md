@@ -137,13 +137,17 @@ python -m tabular_analysis.cli task=pipeline \
 
 見る項目:
 
+主表示:
+
+- `recommended_infer_key`
+- `recommended_infer_value`
+- `recommended_ref_kind`
+
+補助表示:
+
+- `recommended_registry_model_id`
 - `recommended_train_task_id`
 - `recommended_model_id`
-- `infer_model_id`
-- `infer_train_task_id`
-- `reference_kind`
-- `infer_key`
-- `infer_value`
 - `primary_metric`
 - `best_score`
 
@@ -157,7 +161,14 @@ python -m tabular_analysis.cli task=pipeline \
 - `infer_value`
   - そのままコピーして使う id
 
-最短手順は、`rank=1` の行から `infer_key` と `infer_value` をそのまま infer task の `Hyperparameters` に入れること。
+最短手順は、`rank=1` の行か `recommendation.json` の `recommended_infer_key` / `recommended_infer_value` をそのまま infer task の `Hyperparameters` に入れること。
+
+迷ったときの判断基準:
+
+- `recommended_infer_key` / `recommended_infer_value`: 実際に入力する正本
+- `recommended_registry_model_id`: 昇格済みモデルとして使うか確認するときに見る
+- `recommended_train_task_id`: 実験 run を再現したいときに見る
+- `recommended_model_id`: 互換・診断用で、通常操作の主入力にはしない
 
 ## 7. 推論する
 

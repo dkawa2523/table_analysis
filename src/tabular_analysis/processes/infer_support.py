@@ -248,16 +248,18 @@ def resolve_optimize_settings(cfg: Any) -> dict[str, Any]:
     direction = (_normalize_str(_cfg_value(cfg, "infer.optimize.direction", None)) or "maximize").lower()
     if direction not in {"maximize", "minimize"}:
         raise ValueError("infer.optimize.direction must be maximize or minimize.")
+    backend = (_normalize_str(_cfg_value(cfg, "infer.optimize.backend", None)) or "optuna").lower()
+    legacy_sampler_name = _normalize_str(_cfg_value(cfg, "infer.optimize.sampler_name", None))
+    if legacy_sampler_name is not None:
+        raise ValueError("infer.optimize.sampler_name is no longer supported; use infer.optimize.sampler.")
     sampler_cfg = _to_container(_cfg_value(cfg, "infer.optimize.sampler", None))
-    sampler_name = None
+    sampler = None
     sampler_seed = None
     if isinstance(sampler_cfg, Mapping):
-        sampler_name = _normalize_str(sampler_cfg.get("name"))
+        sampler = _normalize_str(sampler_cfg.get("name"))
         sampler_seed = sampler_cfg.get("seed")
     else:
-        sampler_name = _normalize_str(sampler_cfg)
-    if sampler_name is None:
-        sampler_name = _normalize_str(_cfg_value(cfg, "infer.optimize.sampler_name", None))
+        sampler = _normalize_str(sampler_cfg)
     if sampler_seed is None:
         sampler_seed = _cfg_value(cfg, "infer.optimize.seed", None)
     wait_timeout_sec = _cfg_value(cfg, "infer.optimize.wait_timeout_sec", None)
@@ -274,9 +276,10 @@ def resolve_optimize_settings(cfg: Any) -> dict[str, Any]:
     else:
         contour_params = None
     return {
+        "backend": backend,
         "n_trials": n_trials,
         "direction": direction,
-        "sampler_name": sampler_name or "tpe",
+        "sampler": sampler or "tpe",
         "sampler_seed": to_int_or_none(sampler_seed),
         "search_space": _normalize_optimize_search_space(_cfg_value(cfg, "infer.optimize.search_space")),
         "objective_keys": _resolve_optimize_objective_keys(cfg),
@@ -297,9 +300,10 @@ def build_optimize_hparams(optimize_settings: Mapping[str, Any] | None) -> dict[
     else:
         objective_label = str(objective_keys) if objective_keys else None
     return {
+        "infer.optimize.backend": optimize_settings.get("backend"),
         "infer.optimize.n_trials": optimize_settings.get("n_trials"),
         "infer.optimize.direction": optimize_settings.get("direction"),
-        "infer.optimize.sampler": optimize_settings.get("sampler_name"),
+        "infer.optimize.sampler": optimize_settings.get("sampler"),
         "infer.optimize.objective": objective_label,
         "infer.optimize.search_space": _format_optimize_search_space(
             optimize_settings.get("search_space") or []
@@ -444,9 +448,8 @@ def resolve_preprocess_columns(
 
 
 def build_model_reference_payload(meta: Mapping[str, Any], *, model_bundle_path: Path) -> dict[str, str | None]:
-    legacy_model_id = _normalize_str(meta.get("model_id")) or str(model_bundle_path)
-    reference_kind = _normalize_str(meta.get("reference_kind"))
     explicit_model_id = _normalize_str(meta.get("model_id"))
+    reference_kind = _normalize_str(meta.get("reference_kind"))
     if reference_kind == "train_task_artifact" and _normalize_str(meta.get("train_task_id")):
         reference = build_infer_reference(
             model_id=explicit_model_id,
@@ -461,10 +464,8 @@ def build_model_reference_payload(meta: Mapping[str, Any], *, model_bundle_path:
             registry_model_id=meta.get("registry_model_id"),
             train_task_id=meta.get("train_task_id"),
         )
-        if reference.get("infer_model_id") is None and reference.get("infer_train_task_id") is None:
-            reference = build_infer_reference(model_id=legacy_model_id)
     return {
-        "model_id": legacy_model_id,
+        "model_id": explicit_model_id,
         "train_task_id": reference.get("train_task_id"),
         "registry_model_id": reference.get("registry_model_id"),
         "infer_model_id": reference.get("infer_model_id"),
@@ -498,7 +499,8 @@ def handle_infer_dry_run(
     connect_infer(
         ctx,
         cfg,
-        model_id=reference.get("infer_model_id") or reference.get("infer_train_task_id") or "dry_run",
+        model_id=reference.get("infer_model_id") or "dry_run",
+        train_task_id=reference.get("infer_train_task_id"),
         model_abbr=None,
         infer_mode=mode,
         schema_policy=validation_mode,

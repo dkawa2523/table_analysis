@@ -83,7 +83,7 @@ operator が主に見る階層:
 - preprocess: `processed_dataset_id`, `split_hash`, `recipe_hash`
 - train_model: `processed_dataset_id`, `split_hash`, `model_id`, `primary_metric`, `best_score`, `task_type`, `n_classes`
 - train_ensemble: `processed_dataset_id`, `split_hash`, `model_id`, `primary_metric`, `best_score`, `task_type`, `n_classes`
-- leaderboard: `recommended_train_task_id`, `recommended_model_id`, `excluded_count`
+- leaderboard: `recommended_ref_kind`, `recommended_infer_key`, `recommended_infer_value`, `recommended_train_task_id`, `recommended_registry_model_id`, `excluded_count`
 
 ## HyperParameters（汚染防止：重要）
 - **そのタスクの再現に必要な入力のみ**を記録する
@@ -166,11 +166,40 @@ seed pipeline について:
 - pipeline: `pipeline_run.json`, `plan.json`, `report.md`, `report.json`, `report_links.json`, `run_summary.json`
 - infer: `predictions.*`, `input_preview.*`, `drift_report.json`, `drift_report.md` (when drift enabled)
 
+## 推論参照の表示優先順位
+
+推論参照は、内部では複数の id を保持しても、operator が日常運用で見る順番は固定する。
+
+主表示:
+
+- `recommended_infer_key`
+- `recommended_infer_value`
+- `recommended_ref_kind`
+
+補助表示:
+
+- `recommended_registry_model_id`
+- `recommended_train_task_id`
+- `recommended_model_id`
+
+意味:
+
+- operator が `Infer` の `Hyperparameters` にそのまま入れるのは `recommended_infer_key` と `recommended_infer_value`
+- `recommended_registry_model_id` は昇格済みモデル管理の確認用
+- `recommended_train_task_id` は実験・比較・再現の確認用
+- `recommended_model_id` は互換・診断用の補助情報で、主表示の正本ではない
+
+ClearML UI での見せ方:
+
+- `99_Leaderboard` の `PLOTS -> leaderboard/table` は `infer_key`, `infer_value`, `ref_kind` を action 列として先に見る
+- `summary.md`, `decision_summary.md`, `report.md` の冒頭も同じ順で表示する
+- `user properties` でも `recommended_infer_key` / `recommended_infer_value` を最優先に確認する
+
 `99_Leaderboard` の `PLOTS -> leaderboard/table` には、推論 task を UI で起動するための列も表示する。
 
-- `ref_kind`
 - `infer_key`
 - `infer_value`
+- `ref_kind`
 
 意味:
 
@@ -178,6 +207,7 @@ seed pipeline について:
 - `ref_kind=train_task_id` の行は `infer.train_task_id=<infer_value>`
 
 推論 task を UI で clone したら、上記の `infer_key` と `infer_value` を `Hyperparameters` にそのまま入力すればよい。
+`recommended_model_id` は互換・補助情報として残るが、operator が日常運用で優先して見る値は `recommended_infer_key` / `recommended_infer_value` / `recommended_ref_kind` とする。
 - skip 時: `skip_reason.json`
 
 ## Lint ルール（doctor/CI）

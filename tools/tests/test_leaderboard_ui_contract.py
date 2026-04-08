@@ -121,6 +121,8 @@ def _assert_build_leaderboard_table_exposes_inference_columns() -> None:
         for required in ("ref_kind", "infer_key", "infer_value"):
             if required not in headers:
                 raise AssertionError(f"leaderboard plot table missing inference column {required}: {headers}")
+        if headers.index("infer_key") > headers.index("ref_kind"):
+            raise AssertionError(f"infer columns should appear before ref_kind for operator readability: {headers}")
         cells = fig.data[0].kwargs["cells"]["values"]
         header_to_values = dict(zip(headers, cells))
         if header_to_values.get("infer_key") != ["infer.model_id"]:
@@ -131,9 +133,52 @@ def _assert_build_leaderboard_table_exposes_inference_columns() -> None:
         leaderboard_plots.plotly_go = original_plotly_go
 
 
+def _assert_recommendation_exposes_operator_infer_fields() -> None:
+    entries = [
+        {
+            "train_task_ref": "train-a",
+            "train_task_id": "train-a",
+            "model_id": "local_bundle.joblib",
+            "registry_model_id": None,
+            "infer_model_id": None,
+            "infer_train_task_id": "train-a",
+            "reference_kind": "train_task_artifact",
+            "best_score": 0.1,
+            "primary_metric": "rmse",
+            "primary_metric_source": "valid",
+            "composite_score": 0.9,
+            "processed_dataset_id": "processed-a",
+            "split_hash": "split-a",
+            "recipe_hash": "recipe-a",
+            "model_family": "single",
+            "ensemble_method": None,
+        }
+    ]
+    (_, _, recommendation) = leaderboard_process._build_recommendation(
+        entries_sorted=entries,
+        scoring_metrics=["rmse"],
+        scoring_weights={"rmse": 1.0},
+        scoring_normalization="minmax",
+        ranking_score_key="composite_score",
+        ranking_direction="maximize",
+        metric_source_priority=["valid"],
+        allow_cross_metric_source=False,
+        allow_ensemble=False,
+        tie_breaker="prefer_simple",
+        recommend_top_k=1,
+    )
+    if recommendation.get("recommended_ref_kind") != "train_task_id":
+        raise AssertionError(f"recommendation must expose operator-facing ref_kind: {recommendation}")
+    if recommendation.get("recommended_infer_key") != "infer.train_task_id":
+        raise AssertionError(f"recommendation must expose operator-facing infer key: {recommendation}")
+    if recommendation.get("recommended_infer_value") != "train-a":
+        raise AssertionError(f"recommendation must expose operator-facing infer value: {recommendation}")
+
+
 def main() -> int:
     _assert_build_leaderboard_rows_includes_infer_targets()
     _assert_build_leaderboard_table_exposes_inference_columns()
+    _assert_recommendation_exposes_operator_infer_fields()
     print("OK: leaderboard ui contract")
     return 0
 

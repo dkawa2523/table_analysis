@@ -289,7 +289,7 @@ def connect_train_ensemble(ctx: Any, cfg: Any, *, processed_dataset_id: str | No
     _merge_section(sections, eval_key, {'eval.task_type': task_type, 'eval.primary_metric': primary_metric})
     _merge_section(sections, clearml_key, _execution_hparams(cfg))
     _connect_sections(ctx, sections, _section_order(sections_cfg))
-def connect_infer(ctx: Any, cfg: Any, *, model_id: str | None, model_abbr: str | None=None, infer_mode: str | None, schema_policy: str | None, input_source: str | None=None, input_path: str | None=None, input_json: str | None=None, provenance: Mapping[str, Any] | None=None, optimize_payload: Mapping[str, Any] | None=None, include_dataset: bool=True, include_execution: bool=True) -> None:
+def connect_infer(ctx: Any, cfg: Any, *, model_id: str | None, train_task_id: str | None=None, model_abbr: str | None=None, infer_mode: str | None, schema_policy: str | None, input_source: str | None=None, input_path: str | None=None, input_json: str | None=None, provenance: Mapping[str, Any] | None=None, optimize_payload: Mapping[str, Any] | None=None, include_dataset: bool=True, include_execution: bool=True) -> None:
     dataset_payload: dict[str, Any] = {}
     if provenance:
         dataset_payload = {'train_task_id': provenance.get('train_task_id'), 'data.raw_dataset_id': provenance.get('raw_dataset_id'), 'data.processed_dataset_id': provenance.get('processed_dataset_id'), 'preprocess.variant': provenance.get('preprocess_variant'), 'split_hash': provenance.get('split_hash'), 'recipe_hash': provenance.get('recipe_hash')}
@@ -301,7 +301,7 @@ def connect_infer(ctx: Any, cfg: Any, *, model_id: str | None, model_abbr: str |
     optimize_key = _section_key(sections_cfg, 'optimize')
     clearml_key = _section_key(sections_cfg, 'clearml')
     _merge_section(sections, inputs_key, {'infer.mode': infer_mode, 'infer.validation.mode': schema_policy, 'infer.input_source': input_source, 'infer.input_path': input_path, 'infer.input_json': input_json})
-    _merge_section(sections, model_key, {'infer.model_id': model_id, 'model_abbr': model_abbr})
+    _merge_section(sections, model_key, {'infer.model_id': model_id, 'infer.train_task_id': train_task_id, 'model_abbr': model_abbr})
     if optimize_payload:
         _merge_section(sections, optimize_key, dict(optimize_payload))
     if include_dataset:

@@ -17,7 +17,14 @@ for candidate in (_SRC, _PLATFORM_SRC):
 
 from tabular_analysis.common.drift_utils import collect_top_drift_features, normalize_drift_metric_names, select_primary_drift_metric
 from tabular_analysis.common.feature_types import infer_tabular_feature_types
-from tabular_analysis.common.model_reference import build_infer_reference, resolve_preferred_infer_reference
+from tabular_analysis.common.model_reference import (
+    build_infer_reference,
+    resolve_infer_selection_assignment,
+    resolve_infer_selection_key,
+    resolve_infer_selection_kind,
+    resolve_infer_selection_value,
+    resolve_preferred_infer_reference,
+)
 from tabular_analysis.common.probability_utils import extract_positive_class_proba
 from tabular_analysis.processes.artifact_writers import write_split_artifacts
 from tabular_analysis.processes.contracts import ArtifactBundle, ExecutionResult, ReferenceInfo, ResolvedInputs, RuntimeSettings
@@ -89,12 +96,31 @@ def _assert_model_reference_helpers() -> None:
         raise AssertionError(f"unexpected preferred infer_model_id: {ref}")
     if ref["infer_train_task_id"] is not None:
         raise AssertionError(f"registry reference should not keep infer_train_task_id: {ref}")
+    train_ref = build_infer_reference(
+        model_id="C:/runs/train/01/model_bundle.joblib",
+        train_task_id="task123",
+    )
+    if train_ref["infer_train_task_id"] != "task123":
+        raise AssertionError(f"train_task_id should beat local bundle paths for infer portability: {train_ref}")
+    if train_ref["infer_model_id"] is not None:
+        raise AssertionError(f"local bundle path should not leak as infer_model_id when train_task_id exists: {train_ref}")
     merged = resolve_preferred_infer_reference({"recommended_model_id": "local_bundle.joblib"}, {"registry_model_id": "reg123"})
     if merged["infer_model_id"] != "reg123":
         raise AssertionError(f"unexpected recommendation precedence: {merged}")
     payload = build_model_reference_payload({"model_id": "local_bundle.joblib", "registry_model_id": "reg123", "train_task_id": "task123"}, model_bundle_path=Path("model_bundle.joblib"))
     if payload["infer_model_id"] != "reg123":
         raise AssertionError(f"unexpected manifest model reference payload: {payload}")
+    path_fallback_payload = build_model_reference_payload({}, model_bundle_path=Path("model_bundle.joblib"))
+    if path_fallback_payload["model_id"] is not None:
+        raise AssertionError(f"model bundle path should not leak into infer reference payloads: {path_fallback_payload}")
+    if resolve_infer_selection_key({"infer_model_id": "reg123"}) != "infer.model_id":
+        raise AssertionError("infer selection key should prefer registry model ids")
+    if resolve_infer_selection_value({"infer_train_task_id": "task123"}) != "task123":
+        raise AssertionError("infer selection value should expose train task ids directly")
+    if resolve_infer_selection_kind({"infer_train_task_id": "task123"}) != "train_task_id":
+        raise AssertionError("infer selection kind should collapse to operator-facing train_task_id")
+    if resolve_infer_selection_assignment({"infer_model_id": "reg123"}) != "infer.model_id=reg123":
+        raise AssertionError("infer selection assignment should be copy-paste ready")
 
 
 def _assert_contract_dataclasses() -> None:
